@@ -172,6 +172,16 @@ BASE_URL=http://localhost:3000  # Base URL for the application
 npm start
 ```
 
+
+## Easypanel
+
+DumbTerm has a one-click deployment template on [Easypanel](https://easypanel.io), a self-hosted Docker deployment platform.
+
+[![Deploy on Easypanel][easypanel-btn]][easypanel-deploy]
+
+[easypanel-btn]: https://easypanel.io/img/deploy-on-easypanel-40.svg
+[easypanel-deploy]: https://easypanel.io/templates/dumbterm
+
 ## Configuration
 
 ### Environment Variables
