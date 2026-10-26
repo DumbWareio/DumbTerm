@@ -389,6 +389,22 @@ describe('terminal control sequences', () => {
         });
     });
 
+    // Restoring a screenful scrolls on the final newline, and xterm fills the new row with the background
+    // colour set at that point; the output's last colour must not end up across the new prompt's row
+    for (const [kind, output] of [['reset', 'Result: \x1b[41m FAIL \x1b[0m'], ['left on', 'Result: \x1b[41m FAIL']]) {
+        test(`a restored tab's new prompt row has the default background (output colour ${kind})`, async () => {
+            const saves = recordSavedSessions();
+            await receiveOutput(`${SCREENFULS}\x1b[?2004h$ npm test\r\n\x1b[?2004l`);
+            await receiveOutput(output);
+
+            await withRestoredPrompt(saves.at(-1), (restored) => {
+                for (const col of [8, 20, 40, 79]) {
+                    assert.ok(cellAt(restored, cursorRow(restored), col).isBgDefault(), `column ${col}`);
+                }
+            });
+        });
+    }
+
     test('output after an editor opens and closes within one message is still saved', async () => {
         const saves = recordSavedSessions();
         await receiveOutput('$ ls\r\nfile1\r\n');
