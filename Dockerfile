@@ -62,4 +62,6 @@ EXPOSE 3000
 
 # Start the application
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["npm", "start"]
+# Run node directly (copy-xterm already ran at build time) so it receives docker stop's SIGTERM and
+# shuts down cleanly; under `npm start` the signal stopped at an intermediate shell
+CMD ["node", "server.js"]
