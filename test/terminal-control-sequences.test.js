@@ -416,6 +416,20 @@ describe('terminal control sequences', () => {
         });
     }
 
+    test('a restored tab keeps a coloured bar the output erased to the end of the bottom row', async () => {
+        // With the cursor still on it, the serializer ends the save with the erase (ECH), not a cursor move
+        const saves = recordSavedSessions();
+        await receiveOutput(`${SCREENFULS}\x1b[?2004h$ make\r\n\x1b[?2004l`);
+        await receiveOutput('status: \x1b[44m building\x1b[K');
+        assert.match(saves.at(-1), /\x1b\[63X\n$/);
+
+        await withRestoredPrompt(saves.at(-1), (restored) => {
+            const bar = cursorRow(restored) - 1;
+            assert.equal(bufferLines(restored)[bar], 'status:  building');
+            assert.ok(!cellAt(restored, bar, 40).isBgDefault(), 'the erased cells keep the bar\'s colour');
+        });
+    });
+
     test('output after an editor opens and closes within one message is still saved', async () => {
         const saves = recordSavedSessions();
         await receiveOutput('$ ls\r\nfile1\r\n');
@@ -510,6 +524,8 @@ describe('terminal control sequences', () => {
         assert.equal(terminal.buffer.active.type, 'normal');
         await receiveOutput('make\r\n\x1b[?2004l');
         await receiveOutput('BUILD DONE');
+        assert.deepEqual(bufferLines(terminal).slice(0, 5), ['$ ls', 'file1', '$ vim notes.txt', '$ make', 'BUILD DONE'],
+            'the new shell carries on under the line that started the editor');
         assert.match(saves.at(-1), /\$ make\nBUILD DONE\n$/);
     });
 
