@@ -1,5 +1,8 @@
 // Core service worker configuration
-let CACHE_VERSION = "1.0.0"; // Default fallback version
+// The page registers this worker as service-worker.js?v=<app version>, so read the version from there:
+// a worker the browser restarts after idling would otherwise start at 1.0.0 and cache into a stray cache
+const REGISTERED_VERSION = new URL(self.location.href).searchParams.get('v');
+let CACHE_VERSION = /^\d+\.\d+\.\d+/.test(REGISTERED_VERSION || '') ? REGISTERED_VERSION : "1.0.0"; // Default fallback version
 let CACHE_NAME = `DUMBTERM_CACHE_V${CACHE_VERSION}`; // Default format, will be overridden
 const ASSETS_TO_CACHE = [];
 const BASE_PATH = self.registration.scope;
@@ -358,6 +361,17 @@ self.addEventListener("activate", event => {
                 // Take control of all clients
                 await self.clients.claim();
                 console.log("Service worker has claimed clients");
+
+                // Fetches are network-first, so pages already run this version and older caches are only
+                // dead weight; removing them also stops them being reported as the installed version
+                if (CACHE_VERSION !== "1.0.0") {
+                    const staleCaches = (await caches.keys())
+                        .filter(key => key.startsWith('DUMBTERM_') && key !== CACHE_NAME);
+                    await Promise.all(staleCaches.map(key => caches.delete(key)));
+                    if (staleCaches.length > 0) {
+                        console.log(`Deleted old caches: ${staleCaches}`);
+                    }
+                }
                 
                 // Check cache status
                 const { isFirstInstall, existingVersion } = await checkCacheVersion();
@@ -411,11 +425,15 @@ self.addEventListener("fetch", event => {
     event.respondWith(
         fetch(event.request)
             .then(response => {
-                // Keep a copy of valid responses for offline use
-                if (response && response.status === 200 && response.type === 'basic') {
+                // Keep a copy of valid responses for offline use; a redirected response (e.g. to /login
+                // when signed out) would be stored under the wrong URL
+                if (response && response.status === 200 && response.type === 'basic' && !response.redirected) {
                     const responseToCache = response.clone();
-                    caches.open(CACHE_NAME)
-                        .then(cache => cache.put(event.request, responseToCache));
+                    event.waitUntil(
+                        caches.open(CACHE_NAME)
+                            .then(cache => cache.put(event.request, responseToCache))
+                            .catch(error => console.warn('Could not cache response:', error))
+                    );
                 }
                 return response;
             })

@@ -367,7 +367,10 @@ export default class ServiceWorkerManager {
             // Versions must be different
             currentVersion !== newVersion &&
             // New version shouldn't be default
-            newVersion !== "1.0.0"
+            newVersion !== "1.0.0" &&
+            // The service worker fetches network-first, so a page already running the new version
+            // (config.js is always fresh) has nothing left to update
+            newVersion !== window.appConfig?.version
         );
         
         console.log(`Client shouldShowUpdateNotification check: current=${currentVersion}, new=${newVersion}, result=${result}`);
