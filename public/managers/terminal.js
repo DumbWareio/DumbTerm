@@ -697,8 +697,9 @@ export default class TerminalManager {
         if (savedContent) {
             try {
                 // Saves from before 1.3.0 can hold an open editor's screen after the switch to it; the new
-                // shell has no editor open, so restore only what came before
-                terminal.write(savedContent.split('\x1b[?1049h')[0]);
+                // shell has no editor open, so restore only what came before. Then reset the text attributes,
+                // so the colours the old program left set don't carry into the new shell's prompt
+                terminal.write(savedContent.split('\x1b[?1049h')[0] + '\x1b[0m');
             } catch (e) {
                 console.warn('Failed to restore terminal content:', e);
             }

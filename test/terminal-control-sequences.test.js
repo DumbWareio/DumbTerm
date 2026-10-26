@@ -182,6 +182,21 @@ describe('terminal control sequences', () => {
         return Array.from({ length: buffer.length }, (_, row) => buffer.getLine(row).translateToString(true));
     }
 
+    // Restore saved content, then the new shell prints its prompt; returns the prompt's first cell
+    async function restoredPromptCell(content) {
+        const restored = await restoreSession(content);
+        try {
+            await new Promise((resolve) => {
+                restored.write('\x1b[?2004h$ ', resolve);
+                mock.timers.runAll();
+            });
+            const buffer = restored.buffer.active;
+            return buffer.getLine(buffer.baseY + buffer.cursorY).getCell(0);
+        } finally {
+            restored.dispose();
+        }
+    }
+
     // The shell runs `vim notes.txt`; vim switches to the alternate screen and turns bracketed paste on
     async function openVim() {
         await receiveOutput('$ ls\r\nfile1\r\n\x1b[?2004h$ ');
@@ -321,6 +336,31 @@ describe('terminal control sequences', () => {
         } finally {
             restored.dispose();
         }
+    });
+
+    test('a restored tab\'s new shell does not inherit an open editor\'s text attributes', async () => {
+        const saves = recordSavedSessions();
+        await openVim();
+        await receiveOutput('\x1b[31;7m-- INSERT --');
+        terminal.input('i');
+
+        const cell = await restoredPromptCell(saves.at(-1));
+        assert.equal(cell.getChars(), '$');
+        assert.equal(cell.isInverse(), 0);
+        assert.equal(cell.getFgColorMode(), 0, 'default foreground');
+    });
+
+    test('a restored tab\'s new shell does not inherit the colour a running command left on', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput('\x1b[?2004h$ make\r\n\x1b[?2004l');
+        // (colour from the line's start would make the line look like a coloured prompt, which is left out)
+        await receiveOutput('ERROR: \x1b[31;7mbuild failed');
+        assert.match(saves.at(-1), /build failed/);
+
+        const cell = await restoredPromptCell(saves.at(-1));
+        assert.equal(cell.getChars(), '$');
+        assert.equal(cell.isInverse(), 0);
+        assert.equal(cell.getFgColorMode(), 0, 'default foreground');
     });
 
     test('output after an editor opens and closes within one message is still saved', async () => {
