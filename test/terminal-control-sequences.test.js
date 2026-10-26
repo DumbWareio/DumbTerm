@@ -305,6 +305,24 @@ describe('terminal control sequences', () => {
         }
     });
 
+    test('a session saved while an editor is open restores with no blank line before the new prompt', async () => {
+        // The serializer ends the screen by moving the cursor back to where it was, here the row below
+        const saves = recordSavedSessions();
+        await openVim();
+        terminal.input('i');
+
+        const restored = await restoreSession(saves.at(-1));
+        try {
+            await new Promise((resolve) => {
+                restored.write('\x1b[?2004h$ ', resolve);
+                mock.timers.runAll();
+            });
+            assert.deepEqual(bufferLines(restored).slice(0, 4), ['$ ls', 'file1', '$ vim notes.txt', '$ ']);
+        } finally {
+            restored.dispose();
+        }
+    });
+
     test('output after an editor opens and closes within one message is still saved', async () => {
         const saves = recordSavedSessions();
         await receiveOutput('$ ls\r\nfile1\r\n');

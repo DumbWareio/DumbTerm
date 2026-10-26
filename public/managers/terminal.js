@@ -978,6 +978,9 @@ export default class TerminalManager {
                             }
                             
                             if (seenNonPrompt) {
+                                // The serializer ends by moving the cursor back to where it was (and setting its
+                                // colours); after the newline added below that would leave a blank line
+                                lines[lastContentLineIndex] = lines[lastContentLineIndex].replace(/(?:\u001b\[[\d;]*[ABCDm])+$/, '');
                                 serializedContent = lines.slice(0, lastContentLineIndex + 1).join('\n');
                                 if (serializedContent.length > 0) {
                                     serializedContent += '\n';
