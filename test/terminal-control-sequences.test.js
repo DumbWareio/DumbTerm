@@ -128,13 +128,15 @@ describe('terminal control sequences', () => {
         mock.restoreAll();
     });
 
-    // Deliver shell output the way the server does, then wait for xterm to parse it
-    function receiveOutput(data) {
+    // Deliver shell output the way the server does, wait for xterm to parse it, then run the timers the
+    // page armed once it had (the session save)
+    async function receiveOutput(data) {
         FakeWebSocket.last.onmessage({ data: JSON.stringify({ type: 'output', data }) });
-        return new Promise((resolve) => {
+        await new Promise((resolve) => {
             terminal.write('', resolve);
             mock.timers.runAll();
         });
+        mock.timers.runAll();
     }
 
     // Deliver shell output and let xterm parse it, leaving the page's own timers to mock.timers.tick
@@ -334,5 +336,46 @@ describe('terminal control sequences', () => {
 
         assert.equal(terminal.buffer.active.type, 'normal');
         assert.equal(saves.at(-1), '$ ls\nfile1\n$ vim notes.txt\n');
+    });
+
+    test('the session is saved 500ms after the shell\'s output stops', async () => {
+        const saves = recordSavedSessions();
+        deliverOutput('$ make\r\nbuilding\r\n');
+        mock.timers.tick(499);
+        assert.equal(saves.length, 0);
+        mock.timers.tick(1);
+        assert.equal(saves.length, 1);
+
+        // More output before the 500ms are up postpones the save
+        deliverOutput('step 2\r\n');
+        mock.timers.tick(200);
+        deliverOutput('BUILD DONE');
+        mock.timers.tick(499);
+        assert.equal(saves.length, 1);
+        mock.timers.tick(1);
+        assert.equal(saves.length, 2);
+        assert.match(saves[1], /BUILD DONE\n$/);
+    });
+
+    test('an editor\'s redraws neither postpone nor repeat the save', async () => {
+        // A full-screen program redrawing more often than every 500ms (htop, a progress view) must not
+        // keep the debounced save, shared by every tab, from running
+        const saves = recordSavedSessions();
+        deliverOutput('$ make\r\nBUILD DONE\r\n');
+        mock.timers.tick(200);
+        deliverOutput('$ htop\r\n\x1b[?1049h\x1b[H\x1b[2JFRAME 0');
+        mock.timers.tick(200);
+        deliverOutput('\x1b[HFRAME 1');
+        mock.timers.tick(99);
+        assert.equal(saves.length, 0);
+        mock.timers.tick(1);
+        assert.equal(saves.length, 1, 'saved 500ms after the shell\'s output');
+        assert.match(saves[0], /BUILD DONE\n\$ htop/);
+
+        for (let frame = 2; frame < 10; frame++) {
+            deliverOutput(`\x1b[HFRAME ${frame}`);
+            mock.timers.tick(200);
+        }
+        assert.equal(saves.length, 1, 'the redraws arm no save of their own');
     });
 });

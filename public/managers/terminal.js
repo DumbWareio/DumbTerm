@@ -756,13 +756,17 @@ export default class TerminalManager {
                 try {
                     const message = JSON.parse(event.data);
                     if (message.type === 'output') {
-                        terminal.write(message.data);
-
-                        // Saving is safe with an editor open (it saves the shell's screen underneath)
-                        clearTimeout(self.saveTimeout);
-                        self.saveTimeout = setTimeout(() => {
-                            self.saveSessionState();
-                        }, 500);
+                        terminal.write(message.data, () => {
+                            // Save once the shell's output settles. An editor's redraws neither arm nor postpone
+                            // it: the save leaves the editor's screen out, and the timer is shared by every tab
+                            if (terminal.buffer.active.type !== 'normal') {
+                                return;
+                            }
+                            clearTimeout(self.saveTimeout);
+                            self.saveTimeout = setTimeout(() => {
+                                self.saveSessionState();
+                            }, 500);
+                        });
                     }
                 } catch (e) {
                     console.error('Error processing message:', e);
