@@ -188,7 +188,9 @@ const authMiddleware = (req, res, next) => {
 if (BASE_PATH) {
     app.use((req, res, next) => {
         if (req.path !== BASE_PATH) return next();
-        const query = req.originalUrl.slice(req.path.length);
+        // originalUrl can be absolute-form (http://host/dumbterm?x) when sent through a proxy, so cut at '?'
+        const queryStart = req.originalUrl.indexOf('?');
+        const query = queryStart === -1 ? '' : req.originalUrl.slice(queryStart);
         res.redirect(`${BASE_PATH}/${query}`);
     });
 }

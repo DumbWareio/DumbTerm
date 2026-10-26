@@ -7,6 +7,7 @@ const { describe, test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { execFileSync, spawn } = require('node:child_process');
 const fs = require('node:fs');
+const http = require('node:http');
 const net = require('node:net');
 const path = require('node:path');
 const WebSocket = require('ws');
@@ -317,6 +318,20 @@ describe('DumbTerm server under a BASE_URL sub-path', () => {
         const res = await fetch(`${server.baseUrl}/dumbterm?tab=1`, { headers: { Cookie: PIN_COOKIE }, redirect: 'manual' });
         assert.equal(res.status, 302);
         assert.equal(res.headers.get('location'), '/dumbterm/?tab=1');
+    });
+
+    test('redirects an absolute-form request target (as sent through an HTTP proxy) correctly', async () => {
+        const location = await new Promise((resolve, reject) => {
+            const req = http.request({
+                host: 'localhost',
+                port: server.port,
+                path: `${server.baseUrl}/dumbterm?tab=1`,
+                headers: { Cookie: PIN_COOKIE },
+            }, (res) => { res.resume(); resolve(res.headers.location); });
+            req.on('error', reject);
+            req.end();
+        });
+        assert.equal(location, '/dumbterm/?tab=1');
     });
 });
 
