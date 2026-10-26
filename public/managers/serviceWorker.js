@@ -29,7 +29,10 @@ export default class ServiceWorkerManager {
             return;
         }
         
-        this.updateVersionDisplayCallback = updateVersionDisplayCallback;
+        // Pages are fetched network-first, so the page's own config.js is the version it runs. The cache and
+        // the worker can report another release during an upgrade, so every display prefers the page's version.
+        this.updateVersionDisplayCallback = (version, loading) => updateVersionDisplayCallback(
+            loading ? version : (window.appConfig?.version || version), loading);
         
         // Set up the service worker
         this.registerServiceWorker();
@@ -143,10 +146,9 @@ export default class ServiceWorkerManager {
                         console.log(`Received cacheName in version info: ${event.data.cacheName}`);
                         this._receivedCacheName = event.data.cacheName;
                     }
-                    // Update the version display. Pages are fetched network-first, so the page's own config
-                    // is the version it runs; the worker may already be a newer release than an open tab
+                    // Update the version display
                     if (this.updateVersionDisplayCallback) {
-                        this.updateVersionDisplayCallback(window.appConfig?.version || event.data.currentVersion);
+                        this.updateVersionDisplayCallback(event.data.currentVersion);
                     }
                     break;
             }
