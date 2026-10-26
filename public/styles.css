@@ -207,8 +207,8 @@ main {
     padding: 0.5rem;
     font-family: var(--terminal-font) !important;
     font-feature-settings: "liga" 1, "calt" 1; /* Enable ligatures */
-    padding-right: 15px; /* Match scrollbar width */
-    padding-bottom: 5px;
+    padding-right: 0; /* xterm.js 6 draws its scrollbar inside the terminal and fit reserves room for it */
+    padding-bottom: 0; /* The -5px offsets on .xterm and .xterm-screen already leave room at the bottom */
     position: relative;
     top: -5px; /* Move terminal content up */
 }
@@ -219,23 +219,10 @@ main {
     -moz-osx-font-smoothing: grayscale;
 }
 
-.xterm-viewport::-webkit-scrollbar {
-    width: 10px;
-    display: block;
-}
-
-.xterm-viewport::-webkit-scrollbar-track {
-    background: var(--terminal-bg);
-}
-
-.xterm-viewport::-webkit-scrollbar-thumb {
-    background: var(--terminal-border);
-    border-radius: 5px;
-    border: 2px solid var(--terminal-bg);
-}
-
-.xterm-viewport::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.3);
+/* xterm.js 6 scrolls inside .xterm-scrollable-element, so the viewport is only a backdrop
+   behind the terminal's padding; its stock background is black, so match the theme instead */
+.terminals-container .xterm .xterm-viewport {
+    background-color: var(--terminal-bg);
 }
 
 /* Form styling */
@@ -743,6 +730,9 @@ h2 {
     pointer-events: none;
     transition: opacity var(--transition);
     padding: 0.75rem;
+    /* The fit addon sizes the terminal from this element's computed width/height; content-box keeps
+       this padding and border out of that size, so the last columns don't run under the scrollbar */
+    box-sizing: content-box;
     display: flex;
     flex-direction: column;
     /* overflow: hidden; */

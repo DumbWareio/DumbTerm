@@ -1,5 +1,7 @@
 import StorageManager from './storage.js';
 
+const IS_MAC = /mac/i.test(navigator.userAgentData?.platform || navigator.platform || '');
+
 // Helper function to join paths with base path
 function joinPath(path) {
     const basePath = window.appConfig?.basePath || '';
@@ -611,7 +613,10 @@ export default class TerminalManager {
             termProgram: 'xterm-256color',
             // Add these new options for better control sequence handling
             smoothScrollDuration: 0,
-            fastScrollModifier: 'alt',
+            // xterm.js 6 scrolls 50px per wheel tick. Browsers off macOS report a mouse-wheel notch as one
+            // tick, where native scrolling (xterm.js 5) moved ~100px, so double it there; on macOS a tick is
+            // 40px of movement, so 50px is already close to native
+            scrollSensitivity: IS_MAC ? 1 : 2,
             fastScrollSensitivity: 5,
             // Better handling of alternative screen buffer
             altClickMovesCursor: true,
@@ -622,15 +627,13 @@ export default class TerminalManager {
         const fitAddon = new FitAddon.FitAddon();
         const webLinksAddon = new WebLinksAddon.WebLinksAddon();
         const webglAddon = new WebglAddon.WebglAddon();
-        const canvasAddon = new CanvasAddon.CanvasAddon();
         const imageAddon = new ImageAddon.ImageAddon();
-        const ligaturesAddon = new LigaturesAddon.LigaturesAddon();
         const searchAddon = new SearchAddon.SearchAddon();
         const serializeAddon = new SerializeAddon.SerializeAddon();
         const unicode11Addon = new Unicode11Addon.Unicode11Addon();
         
         // Store addons for this terminal
-        const addons = { fitAddon, webLinksAddon, webglAddon, canvasAddon, imageAddon, ligaturesAddon, searchAddon, serializeAddon, unicode11Addon };
+        const addons = { fitAddon, webLinksAddon, webglAddon, imageAddon, searchAddon, serializeAddon, unicode11Addon };
         this.terminalAddons.set(terminal, addons);
 
         // Open terminal in the container first
@@ -651,24 +654,40 @@ export default class TerminalManager {
         terminal.loadAddon(searchAddon);
         terminal.loadAddon(serializeAddon);
 
-        // Try to load WebGL first, fallback to Canvas if it fails
+        // Try to load WebGL first. xterm.js 6 removed the canvas renderer, so if WebGL is
+        // unavailable or its context is lost, disposing the addon falls back to the built-in DOM renderer.
+        // The ligatures addon is only for WebGL: the DOM renderer already draws ligatures from the font
+        // (font-feature-settings in styles.css), and the addon's joined runs overflow its cells.
+        let webglActive = false;
+        let ligaturesAddon = null;
         try {
             terminal.loadAddon(webglAddon);
-            webglAddon.onContextLoss(e => {
-                console.warn('WebGL context lost, falling back to canvas renderer');
-                terminal.loadAddon(canvasAddon);
+            webglActive = true;
+            webglAddon.onContextLoss(() => {
+                console.warn('WebGL context lost, falling back to DOM renderer');
+                webglActive = false;
+                ligaturesAddon?.dispose();
+                webglAddon.dispose();
             });
         } catch (e) {
-            console.warn('WebGL addon could not be loaded, using canvas renderer:', e);
-            terminal.loadAddon(canvasAddon);
+            console.warn('WebGL addon could not be loaded, using DOM renderer:', e);
+            webglAddon.dispose();
         }
 
         // Load remaining addons
         terminal.loadAddon(imageAddon);
-        try {
-            terminal.loadAddon(ligaturesAddon);
-        } catch (e) {
-            console.warn('Ligatures addon could not be loaded:', e);
+
+        // addon-ligatures only ships an ES module build, so it is imported on demand.
+        // Ligatures are cosmetic: a failure here must never stop the terminal from working.
+        if (webglActive) {
+            import('../node_modules/@xterm/addon-ligatures/lib/addon-ligatures.mjs')
+                .then(({ LigaturesAddon }) => {
+                    // WebGL may have been lost, or the tab closed, while the module was loading
+                    if (!webglActive || !terminal.element?.isConnected) return;
+                    ligaturesAddon = new LigaturesAddon();
+                    terminal.loadAddon(ligaturesAddon);
+                })
+                .catch(e => console.warn('Ligatures addon could not be loaded:', e));
         }
 
         // Initial fit

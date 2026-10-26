@@ -29,7 +29,10 @@ export default class ServiceWorkerManager {
             return;
         }
         
-        this.updateVersionDisplayCallback = updateVersionDisplayCallback;
+        // Pages are fetched network-first, so the page's own config.js is the version it runs. The cache and
+        // the worker can report another release during an upgrade, so every display prefers the page's version.
+        this.updateVersionDisplayCallback = (version, loading) => updateVersionDisplayCallback(
+            loading ? version : (window.appConfig?.version || version), loading);
         
         // Set up the service worker
         this.registerServiceWorker();
@@ -367,7 +370,10 @@ export default class ServiceWorkerManager {
             // Versions must be different
             currentVersion !== newVersion &&
             // New version shouldn't be default
-            newVersion !== "1.0.0"
+            newVersion !== "1.0.0" &&
+            // The service worker fetches network-first, so a page already running the new version
+            // (config.js is always fresh) has nothing left to update
+            newVersion !== window.appConfig?.version
         );
         
         console.log(`Client shouldShowUpdateNotification check: current=${currentVersion}, new=${newVersion}, result=${result}`);
