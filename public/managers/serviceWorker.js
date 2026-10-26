@@ -143,9 +143,10 @@ export default class ServiceWorkerManager {
                         console.log(`Received cacheName in version info: ${event.data.cacheName}`);
                         this._receivedCacheName = event.data.cacheName;
                     }
-                    // Update the version display
+                    // Update the version display. Pages are fetched network-first, so the page's own config
+                    // is the version it runs; the worker may already be a newer release than an open tab
                     if (this.updateVersionDisplayCallback) {
-                        this.updateVersionDisplayCallback(event.data.currentVersion);
+                        this.updateVersionDisplayCallback(window.appConfig?.version || event.data.currentVersion);
                     }
                     break;
             }
