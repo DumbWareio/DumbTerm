@@ -275,6 +275,7 @@ describe('DumbTerm server without NODE_ENV', () => {
         const requests = [
             { name: 'no body', init: {} },
             { name: 'invalid JSON', init: { headers: { 'Content-Type': 'application/json' }, body: '{"pin":' } },
+            { name: 'numeric PIN', init: { headers: { 'Content-Type': 'application/json' }, body: '{"pin":1234}' } },
         ];
         for (const { name, init } of requests) {
             const res = await fetch(`${server.baseUrl}/verify-pin`, { method: 'POST', ...init });
