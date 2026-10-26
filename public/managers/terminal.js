@@ -942,7 +942,9 @@ export default class TerminalManager {
                 
                 if (addons && addons.serializeAddon) {
                     try {
-                        serializedContent = addons.serializeAddon.serialize();
+                        // A restored tab runs a fresh shell, so leave out the modes the old program set
+                        // (e.g. insert mode), which would otherwise switch on again in the new session
+                        serializedContent = addons.serializeAddon.serialize({ excludeModes: true });
                         if (serializedContent) {
                             const lines = serializedContent.split(/\r?\n/);
                             let lastContentLineIndex = -1;

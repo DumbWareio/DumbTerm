@@ -5,13 +5,14 @@
  * terminal is never opened into a DOM, so only the DOM, the addons and the WebSocket are stand-ins.
  * Output is fed through the app's own WebSocket message handler and read back from xterm's buffer.
  */
-const { describe, test, before, beforeEach, afterEach, mock } = require('node:test');
+const { describe, test, before, after, beforeEach, afterEach, mock } = require('node:test');
 const assert = require('node:assert/strict');
 const { registerHooks } = require('node:module');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { Terminal: XtermTerminal } = require('@xterm/xterm');
 const { Unicode11Addon } = require('@xterm/addon-unicode11');
+const { SerializeAddon: RealSerializeAddon } = require('@xterm/addon-serialize');
 
 const MANAGERS_URL = pathToFileURL(path.join(__dirname, '..', 'public', 'managers') + path.sep).href;
 const TERMINAL_MANAGER_URL = new URL('terminal.js', MANAGERS_URL).href;
@@ -61,6 +62,9 @@ class FakeWebSocket {
     addEventListener() {}
 }
 
+const BROWSER_GLOBALS = ['window', 'document', 'getComputedStyle', 'MutationObserver', 'WebSocket', 'Terminal',
+    'FitAddon', 'WebLinksAddon', 'WebglAddon', 'ImageAddon', 'SearchAddon', 'SerializeAddon', 'Unicode11Addon'];
+
 function installBrowserGlobals() {
     const noop = () => {};
     globalThis.window = {
@@ -89,6 +93,10 @@ describe('terminal control sequences', () => {
     before(async () => {
         installBrowserGlobals();
         ({ default: TerminalManager } = await import(TERMINAL_MANAGER_URL));
+    });
+
+    after(() => {
+        for (const name of BROWSER_GLOBALS) delete globalThis[name];
     });
 
     beforeEach(() => {
@@ -125,6 +133,41 @@ describe('terminal control sequences', () => {
         await receiveOutput('abc\x1b[4h\rX\x1b[4l\n');
 
         assert.equal(screenLine(0), 'Xabc');
+        assert.equal(terminal.modes.insertMode, false, 'RM 4 turns insert mode back off');
+        await receiveOutput('\x1b[A\x1b[2GY');
+        assert.equal(screenLine(0), 'XYbc');
+    });
+
+    test('a saved session does not carry the shell\'s terminal modes into the restored tab', async () => {
+        // A restored tab runs a fresh shell, so a mode the old program left on (here insert mode) must not return
+        const serializeAddon = new RealSerializeAddon();
+        terminal.loadAddon(serializeAddon);
+        await receiveOutput('x\r\n$ \x1b[4h');
+        assert.equal(terminal.modes.insertMode, true);
+
+        let saved;
+        const manager = {
+            activeTabId: 1,
+            tabCounter: 2,
+            terminals: new Map([[1, { tab: { querySelector: () => ({ textContent: 'Term1' }) }, terminal }]]),
+            terminalAddons: new Map([[terminal, { serializeAddon }]]),
+            storageManager: { set: (key, value) => { saved = value; } },
+        };
+        TerminalManager.prototype.saveSessionState.call(manager);
+        const content = saved.terminals[0].content;
+        assert.match(content, /x/, 'the session content itself is saved');
+
+        const restored = TerminalManager.prototype.initTerminal.call(
+            { terminalAddons: new Map(), saveSessionState() {} }, {}, content);
+        try {
+            await new Promise((resolve) => {
+                restored.write('', resolve);
+                mock.timers.runAll();
+            });
+            assert.equal(restored.modes.insertMode, false);
+        } finally {
+            restored.dispose();
+        }
     });
 
     test('alternate screen (DECSET/DECRST 1049) still switches buffers for editors', async () => {
