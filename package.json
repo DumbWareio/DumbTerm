@@ -8,7 +8,7 @@
     "dev": "npm run copy-xterm && nodemon server.js",
     "copy-xterm": "node scripts/copy-xterm.js",
     "postinstall": "node -e \"process.platform === 'darwin' && require('./scripts/fix-node-pty-permissions.js')\"",
-    "test": "node --test \"test/**/*.test.js\""
+    "test": "node --test --test-timeout=30000 \"test/**/*.test.js\""
   },
   "dependencies": {
     "@xterm/addon-attach": "^0.12.0",

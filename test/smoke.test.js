@@ -105,6 +105,21 @@ function openTerminal(server, headers) {
     return { ws, state, closed };
 }
 
+// Resolve with the server's close code, failing fast if the server leaves the socket open
+async function closeCodeWithin(terminal, timeoutMs = 5000) {
+    let timer;
+    const timeout = new Promise((resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(
+            `WebSocket still open after ${timeoutMs}ms, output: ${JSON.stringify(terminal.state.output)}`)), timeoutMs);
+    });
+    try {
+        return await Promise.race([terminal.closed, timeout]);
+    } finally {
+        clearTimeout(timer);
+        terminal.ws.terminate();
+    }
+}
+
 async function waitFor(predicate, timeoutMs, describeFailure) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -194,7 +209,12 @@ describe('DumbTerm server', () => {
 
     test('closes the terminal WebSocket with 1008 when the PIN cookie is missing', async () => {
         const terminal = openTerminal(server, { Origin: server.baseUrl });
-        assert.equal(await terminal.closed, 1008);
+        assert.equal(await closeCodeWithin(terminal), 1008);
+    });
+
+    test('closes the terminal WebSocket with 1008 when the PIN cookie is wrong', async () => {
+        const terminal = openTerminal(server, { Cookie: 'DUMBTERM_PIN=0000', Origin: server.baseUrl });
+        assert.equal(await closeCodeWithin(terminal), 1008);
     });
 
     test('keeps source maps and TypeScript sources out of the service worker precache', async () => {
@@ -275,7 +295,7 @@ describe('DumbTerm server when the pty cannot be spawned', () => {
 
     test('closes the terminal WebSocket with 1011 and keeps running', async () => {
         const terminal = openTerminal(server, { Cookie: PIN_COOKIE, Origin: server.baseUrl });
-        assert.equal(await terminal.closed, 1011);
+        assert.equal(await closeCodeWithin(terminal), 1011);
         await new Promise((resolve) => setTimeout(resolve, 300));
         assert.ok(server.isRunning(), `server crashed:\n${server.output()}`);
         const res = await fetch(`${server.baseUrl}/login`);
@@ -291,7 +311,7 @@ describe('DumbTerm server with ALLOWED_ORIGINS', () => {
 
     test('rejects a WebSocket from a disallowed origin with 403 and keeps running', async () => {
         const terminal = openTerminal(server, { Cookie: PIN_COOKIE, Origin: 'http://evil.example' });
-        await terminal.closed;
+        await closeCodeWithin(terminal);
         await new Promise((resolve) => setTimeout(resolve, 300));
         assert.ok(server.isRunning(), `server crashed:\n${server.output()}`);
         assert.equal(terminal.state.rejectedStatus, 403);
