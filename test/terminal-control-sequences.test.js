@@ -109,6 +109,10 @@ describe('terminal control sequences', () => {
     beforeEach(() => {
         // initTerminal arms reconnect, heartbeat and session-save timers; keep them from outliving the test
         mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+        // xterm schedules its parsing with setTimeout(fn) and no delay, which the mock runs out of order (after
+        // the page's 500ms session save) once other timers are pending; give it the 0 a browser would
+        const mockedSetTimeout = globalThis.setTimeout;
+        globalThis.setTimeout = (callback, delay = 0, ...args) => mockedSetTimeout(callback, delay, ...args);
         // The WebGL fallback warning is expected here
         mock.method(console, 'warn', () => {});
 
