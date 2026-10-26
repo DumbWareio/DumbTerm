@@ -106,6 +106,8 @@ function recordAttempt(ip) {
 }
 
 // Security middleware
+// Express reads NODE_ENV itself and defaults to development, which puts stack traces in error pages
+app.set('env', NODE_ENV);
 app.set('trust proxy', 1);
 app.use(cors(getCorsOptions(BASE_URL)));
 app.use(express.json());
@@ -296,7 +298,7 @@ app.post(BASE_PATH + '/verify-pin', (req, res) => {
         });
     }
 
-    const { pin } = req.body;
+    const { pin } = req.body || {};
     
     if (!pin || typeof pin !== 'string') {
         debugLog('PIN verification failed - Invalid PIN format');

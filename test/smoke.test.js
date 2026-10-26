@@ -38,20 +38,20 @@ function getFreePort() {
 async function startServer(extraEnv = () => ({}), nodeArgs = []) {
     const port = await getFreePort();
     const baseUrl = `http://localhost:${port}`;
-    const proc = spawn(process.execPath, [...nodeArgs, 'server.js'], {
-        cwd: ROOT,
-        env: {
-            ...process.env,
-            PORT: String(port),
-            BASE_URL: baseUrl,
-            DUMBTERM_PIN: PIN,
-            NODE_ENV: 'production',
-            DEBUG: 'FALSE',
-            // A plain POSIX shell keeps the pty test independent of the developer's rc files
-            SHELL: '/bin/sh',
-            ...extraEnv(baseUrl),
-        },
-    });
+    const env = {
+        ...process.env,
+        PORT: String(port),
+        BASE_URL: baseUrl,
+        DUMBTERM_PIN: PIN,
+        NODE_ENV: 'production',
+        DEBUG: 'FALSE',
+        // A plain POSIX shell keeps the pty test independent of the developer's rc files
+        SHELL: '/bin/sh',
+        ...extraEnv(baseUrl),
+    };
+    // A variable set to undefined by extraEnv is removed, e.g. to start without NODE_ENV like the Docker image
+    Object.keys(env).forEach((key) => env[key] === undefined && delete env[key]);
+    const proc = spawn(process.execPath, [...nodeArgs, 'server.js'], { cwd: ROOT, env });
 
     let output = '';
     proc.stdout.on('data', (chunk) => { output += chunk; });
@@ -264,6 +264,27 @@ describe('DumbTerm server', () => {
 });
 
 // A crash here would take the shared server down with it, so this test gets its own instance.
+// The Docker image does not set NODE_ENV, which leaves Express in development mode unless the app overrides it
+describe('DumbTerm server without NODE_ENV', () => {
+    let server;
+
+    before(async () => { server = await startServer(() => ({ NODE_ENV: undefined })); });
+    after(async () => { await server.stop(); });
+
+    test('answers a malformed /verify-pin request with 400 and no stack trace', async () => {
+        const requests = [
+            { name: 'no body', init: {} },
+            { name: 'invalid JSON', init: { headers: { 'Content-Type': 'application/json' }, body: '{"pin":' } },
+        ];
+        for (const { name, init } of requests) {
+            const res = await fetch(`${server.baseUrl}/verify-pin`, { method: 'POST', ...init });
+            const text = await res.text();
+            assert.equal(res.status, 400, `${name}: expected 400, got ${res.status}`);
+            assert.doesNotMatch(text, /server\.js|node_modules/, `${name}: response leaks a stack trace`);
+        }
+    });
+});
+
 describe('DumbTerm server with a nameless cookie', () => {
     let server;
 
