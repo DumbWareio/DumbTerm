@@ -3,6 +3,9 @@
   "version": "1.3.0",
   "description": "A stupidly simple web-based terminal emulator, with common tools and Starship enabled (via Docker)! 🚀",
   "main": "server.js",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "start": "npm run copy-xterm && node server.js",
     "dev": "npm run copy-xterm && nodemon server.js",
