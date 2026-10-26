@@ -398,7 +398,7 @@ const wss = new WebSocketServer({
         const isOriginValid = validateOrigin(info.req.headers.origin);
         if (isOriginValid) callback(true); // allow the connection
         else {
-            console.warn("Blocked connection from origin:", {origin});
+            console.warn("Blocked connection from origin:", info.req.headers.origin);
             callback(false, 403, 'Forbidden'); // reject the connection
         }
     }
@@ -439,8 +439,10 @@ wss.on('connection', (ws, req) => {
     // Parse the cookies
     const parsedCookies = {};
     req.headers.cookie.split(';').forEach(cookie => {
-        const parts = cookie.split('=');
-        parsedCookies[parts[0].trim()] = parts[1].trim();
+        // Split on the first '=' only; skip nameless cookies (no '=') instead of crashing the server
+        const separatorIndex = cookie.indexOf('=');
+        if (separatorIndex === -1) return;
+        parsedCookies[cookie.slice(0, separatorIndex).trim()] = cookie.slice(separatorIndex + 1).trim();
     });
 
     // Check if the user has the correct PIN cookie

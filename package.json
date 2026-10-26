@@ -6,7 +6,8 @@
   "scripts": {
     "start": "npm run copy-xterm && node server.js",
     "dev": "npm run copy-xterm && nodemon server.js",
-    "copy-xterm": "node scripts/copy-xterm.js"
+    "copy-xterm": "node scripts/copy-xterm.js",
+    "test": "node --test"
   },
   "dependencies": {
     "@xterm/addon-attach": "^0.11.0",
