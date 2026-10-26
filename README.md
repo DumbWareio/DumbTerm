@@ -71,8 +71,8 @@ A stupidly simple web-based terminal emulator, with common tools and Starship en
 ### Prerequisites
 
 - Docker (recommended)
-- Node.js >=20.0.0 (for local development)
-  - _Windows-specific_: [WSL or Node.js v16 - Option 3: Running Locally](#option-3-running-locally-for-developers)
+- Node.js >=24 (for local development)
+  - _Windows-specific_: see [Option 3: Running Locally](#option-3-running-locally-for-developers)
 
 ### Option 1: Docker (For Dummies)
 
@@ -150,10 +150,8 @@ npm install
 >
 > #### Windows specific:
 >
-> - If you encounter issues with `node-pty` you can try using [Windows Subsystem for Linux (WSL)](https://learn.microsoft.com/en-us/windows/wsl/install) or may need to install:
-> - `Node.js v16` (Look into [nvm for windows](https://github.com/coreybutler/nvm-windows) for multi node version support):
->   - `winget install CoreyButler.NVMforWindows`
->   - with nvm installed use: `nvm install 16 && nvm use 16`
+> - `node-pty` ships prebuilt Windows binaries (x64 and arm64), so build tools are normally not needed.
+> - If you still encounter issues with `node-pty` you can try using [Windows Subsystem for Linux (WSL)](https://learn.microsoft.com/en-us/windows/wsl/install) or install:
 > - `windows-build-tools` through Visual Studio Installer `MSVC v142 - VS 2019 C++ {arch} Build Tools`
 >   - Contact us or View the [official Microsoft documentation](https://github.com/microsoft/node-pty?tab=readme-ov-file#windows) for more details
 
@@ -170,6 +168,12 @@ BASE_URL=http://localhost:3000  # Base URL for the application
 
 ```bash
 npm start
+```
+
+4. (Optional) Run the test suite:
+
+```bash
+npm test
 ```
 
 ## Configuration
@@ -310,7 +314,7 @@ We're dumb, but not stupid. Use a full-featured auth provider for production use
 
 ### Stack
 
-- **Backend**: Node.js (>=20.0.0) with Express
+- **Backend**: Node.js (>=24) with Express
 - **Frontend**: XTerm.js for terminal emulation
 - **Container**: Docker with Debian Trixie (as of v1.2.1+) base (v1.1.1 for Bullseye)
 - **Terminal**: node-pty for process spawning
