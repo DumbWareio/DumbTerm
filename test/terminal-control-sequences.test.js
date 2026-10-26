@@ -198,6 +198,25 @@ describe('terminal control sequences', () => {
         assert.equal(saved.terminals[0].content, 'chris@mbp DumbTerm % ls\nfile1\n');
     });
 
+    test('a saved session keeps the last output line while a command is still running', async () => {
+        // The shell turns bracketed paste off before running a command, so its latest output is not a prompt
+        const serializeAddon = new RealSerializeAddon();
+        terminal.loadAddon(serializeAddon);
+        await receiveOutput('\x1b[?2004hchris@mbp DumbTerm % make\r\n\x1b[?2004lbuilding\r\nstep 2 of 9');
+
+        let saved;
+        const manager = {
+            activeTabId: 1,
+            tabCounter: 2,
+            terminals: new Map([[1, { tab: { querySelector: () => ({ textContent: 'Term1' }) }, terminal }]]),
+            terminalAddons: new Map([[terminal, { serializeAddon }]]),
+            storageManager: { set: (key, value) => { saved = value; } },
+        };
+        TerminalManager.prototype.saveSessionState.call(manager);
+
+        assert.equal(saved.terminals[0].content, 'chris@mbp DumbTerm % make\nbuilding\nstep 2 of 9\n');
+    });
+
     test('alternate screen (DECSET/DECRST 1049) still switches buffers for editors', async () => {
         await receiveOutput('\x1b[?1049h');
         assert.equal(terminal.buffer.active.type, 'alternate');
