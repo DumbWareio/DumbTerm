@@ -137,6 +137,12 @@ describe('terminal control sequences', () => {
         });
     }
 
+    // Deliver shell output and let xterm parse it, leaving the page's own timers to mock.timers.tick
+    function deliverOutput(data) {
+        FakeWebSocket.last.onmessage({ data: JSON.stringify({ type: 'output', data }) });
+        mock.timers.tick(0);
+    }
+
     function screenLine(row) {
         return terminal.buffer.active.getLine(row).translateToString(true);
     }
@@ -159,10 +165,10 @@ describe('terminal control sequences', () => {
     }
 
     // The shell runs `vim notes.txt`; vim switches to the alternate screen and turns bracketed paste on
-    async function openVim(vimStart = '\x1b[?1049h') {
+    async function openVim() {
         await receiveOutput('$ ls\r\nfile1\r\n\x1b[?2004h$ ');
         await receiveOutput('vim notes.txt\r\n\x1b[?2004l');
-        await receiveOutput(`${vimStart}\x1b[?2004h\x1b[H\x1b[2JVIM SCREEN\r\n~\r\n~`);
+        await receiveOutput('\x1b[?1049h\x1b[?2004h\x1b[H\x1b[2JVIM SCREEN\r\n~\r\n~');
     }
 
     test('insert mode (SM/RM 4, terminfo smir/rmir) inserts text instead of overwriting it', async () => {
@@ -258,7 +264,9 @@ describe('terminal control sequences', () => {
         const saves = recordSavedSessions();
         await openVim();
 
+        const savesBefore = saves.length;
         terminal.input('i');
+        assert.equal(saves.length, savesBefore + 1, 'the keystroke saved the session');
         const content = saves.at(-1);
         assert.doesNotMatch(content, /VIM SCREEN/);
         assert.ok(!content.includes('\x1b[?1049h'), 'the switch to the alternate screen is not saved');
@@ -294,20 +302,28 @@ describe('terminal control sequences', () => {
     });
 
     test('the save after output leaves out an editor whose screen switch arrives split across messages', async () => {
+        // The shell's output arms the save, which fires once vim is open
         const saves = recordSavedSessions();
-        await receiveOutput('$ ls\r\nfile1\r\n$ vim notes.txt\r\n\x1b[?10');
-        await receiveOutput('49h\x1b[H\x1b[2JVIM SCREEN\r\n~\r\n~');
+        deliverOutput('$ ls\r\nfile1\r\n$ vim notes.txt\r\n\x1b[?10');
+        deliverOutput('49h\x1b[H\x1b[2JVIM SCREEN\r\n~\r\n~');
         assert.equal(terminal.buffer.active.type, 'alternate');
+        assert.equal(saves.length, 0);
 
-        assert.doesNotMatch(saves.at(-1), /VIM SCREEN/);
+        mock.timers.tick(500);
+        assert.equal(saves.length, 1, 'the save ran with the editor open');
+        assert.doesNotMatch(saves[0], /VIM SCREEN/);
     });
 
     test('the save after output leaves out an editor on the 1047 alternate screen', async () => {
         const saves = recordSavedSessions();
-        await openVim('\x1b[?1047h');
+        deliverOutput('$ ls\r\nfile1\r\n$ vim notes.txt\r\n');
+        deliverOutput('\x1b[?1047h\x1b[H\x1b[2JVIM SCREEN\r\n~\r\n~');
         assert.equal(terminal.buffer.active.type, 'alternate');
+        assert.equal(saves.length, 0);
 
-        assert.doesNotMatch(saves.at(-1), /VIM SCREEN/);
+        mock.timers.tick(500);
+        assert.equal(saves.length, 1, 'the save ran with the editor open');
+        assert.doesNotMatch(saves[0], /VIM SCREEN/);
     });
 
     test('the save after an editor exits stores the shell screen', async () => {
