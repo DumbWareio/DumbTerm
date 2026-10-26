@@ -130,4 +130,22 @@ describe('service worker activation', () => {
         const names = [...worker.store.keys()].sort();
         assert.deepEqual(names, ['DUMBTERM_CACHE_V1.3.0', 'unrelated-cache']);
     });
+
+    test('keeps the current version\'s cache and its entries', async () => {
+        const worker = loadWorker({ version: '1.3.0', cacheNames: ['DUMBTERM_CACHE_V1.3.0', 'DUMBTERM_CACHE_V1.2.0'] });
+        worker.store.get('DUMBTERM_CACHE_V1.3.0').set(ORIGIN + 'index.js', fakeResponse('kept'));
+        const pending = [];
+        worker.listeners.activate({ waitUntil(promise) { pending.push(promise); } });
+        await Promise.all(pending);
+        assert.equal(worker.store.get('DUMBTERM_CACHE_V1.3.0')?.get(ORIGIN + 'index.js')?.body, 'kept');
+    });
+
+    test('deletes nothing when registered without a release version', async () => {
+        // The page falls back to ?v=<timestamp> when config.js could not be read
+        const worker = loadWorker({ version: '1730000000000', cacheNames: ['DUMBTERM_CACHE_V1.2.0'] });
+        const pending = [];
+        worker.listeners.activate({ waitUntil(promise) { pending.push(promise); } });
+        await Promise.all(pending);
+        assert.ok(worker.store.has('DUMBTERM_CACHE_V1.2.0'));
+    });
 });
