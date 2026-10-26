@@ -1,7 +1,7 @@
-/* NerdFont Integration */
+/* NerdFont Integration (font URLs are relative so they also resolve under a BASE_URL sub-path) */
 @font-face {
     font-family: 'FiraCode Nerd Font';
-    src: url('/assets/fonts/FiraCodeNerdFontMono-Regular.ttf') format('truetype');
+    src: url('assets/fonts/FiraCodeNerdFontMono-Regular.ttf') format('truetype');
     font-weight: 400;
     font-style: normal;
     font-display: block; /* Block render text until font loads */
@@ -9,7 +9,7 @@
 
 @font-face {
     font-family: 'FiraCode Nerd Font';
-    src: url('/assets/fonts/FiraCodeNerdFontMono-Medium.ttf') format('truetype');
+    src: url('assets/fonts/FiraCodeNerdFontMono-Medium.ttf') format('truetype');
     font-weight: 500;
     font-style: normal;
     font-display: block;
@@ -17,7 +17,7 @@
 
 @font-face {
     font-family: 'FiraCode Nerd Font';
-    src: url('/assets/fonts/FiraCodeNerdFontMono-Bold.ttf') format('truetype');
+    src: url('assets/fonts/FiraCodeNerdFontMono-Bold.ttf') format('truetype');
     font-weight: 700;
     font-style: normal;
     font-display: block;
@@ -26,7 +26,7 @@
 /* Other weights can use swap strategy since they're less critical */
 @font-face {
     font-family: 'FiraCode Nerd Font';
-    src: url('/assets/fonts/FiraCodeNerdFontMono-Light.ttf') format('truetype');
+    src: url('assets/fonts/FiraCodeNerdFontMono-Light.ttf') format('truetype');
     font-weight: 300;
     font-style: normal;
     font-display: swap;
@@ -34,7 +34,7 @@
 
 @font-face {
     font-family: 'FiraCode Nerd Font';
-    src: url('/assets/fonts/FiraCodeNerdFontMono-SemiBold.ttf') format('truetype');
+    src: url('assets/fonts/FiraCodeNerdFontMono-SemiBold.ttf') format('truetype');
     font-weight: 600;
     font-style: normal;
     font-display: swap;
@@ -42,17 +42,9 @@
 
 @font-face {
     font-family: 'FiraCode Nerd Font';
-    src: url('/assets/fonts/FiraCodeNerdFontMono-Retina.ttf') format('truetype');
+    src: url('assets/fonts/FiraCodeNerdFontMono-Retina.ttf') format('truetype');
     font-weight: 450;
     font-style: normal;
-    font-display: swap;
-}
-
-@font-face {
-    font-family: 'FiraCode Nerd Font';
-    src: url('/assets/fonts/FiraCodeNerdFont-Regular.ttf') format('truetype');
-    font-weight: normal;
-    font-style: italic;
     font-display: swap;
 }
 
