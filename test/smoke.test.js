@@ -205,6 +205,21 @@ describe('DumbTerm server', () => {
         }
     });
 
+    test('loads a script for every xterm addon global the terminal manager constructs', async () => {
+        // UMD bundles register themselves as a global (e.g. `e.FitAddon=t()`); a missing script tag
+        // means `new FitAddon.FitAddon()` throws a ReferenceError and no terminal ever opens.
+        const pageUrl = `${server.baseUrl}/`;
+        const loadedSource = (await Promise.all(pageAssetUrls('index.html', pageUrl)
+            .filter((url) => url.endsWith('.js'))
+            .map(async (url) => (await fetch(url, { headers: { Cookie: PIN_COOKIE } })).text()))).join('\n');
+        const terminalSource = fs.readFileSync(path.join(PUBLIC_DIR, 'managers', 'terminal.js'), 'utf8');
+        const globals = [...new Set([...terminalSource.matchAll(/new (\w+Addon)\.\1\(/g)].map((match) => match[1]))];
+        assert.ok(globals.length > 0, 'expected terminal.js to construct at least one addon');
+        for (const name of globals) {
+            assert.match(loadedSource, new RegExp(`[a-z]\\.${name}=[a-z]\\(\\)`), `no script in index.html defines ${name}`);
+        }
+    });
+
     test('serves every module the front-end imports, as JavaScript', async () => {
         const imports = moduleImportUrls(server.baseUrl);
         assert.ok(imports.length > 0, 'expected the front-end to import at least one module');

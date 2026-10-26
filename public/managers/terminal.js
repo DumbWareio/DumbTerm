@@ -611,7 +611,6 @@ export default class TerminalManager {
             termProgram: 'xterm-256color',
             // Add these new options for better control sequence handling
             smoothScrollDuration: 0,
-            fastScrollModifier: 'alt',
             fastScrollSensitivity: 5,
             // Better handling of alternative screen buffer
             altClickMovesCursor: true,
@@ -622,15 +621,13 @@ export default class TerminalManager {
         const fitAddon = new FitAddon.FitAddon();
         const webLinksAddon = new WebLinksAddon.WebLinksAddon();
         const webglAddon = new WebglAddon.WebglAddon();
-        const canvasAddon = new CanvasAddon.CanvasAddon();
         const imageAddon = new ImageAddon.ImageAddon();
-        const ligaturesAddon = new LigaturesAddon.LigaturesAddon();
         const searchAddon = new SearchAddon.SearchAddon();
         const serializeAddon = new SerializeAddon.SerializeAddon();
         const unicode11Addon = new Unicode11Addon.Unicode11Addon();
         
         // Store addons for this terminal
-        const addons = { fitAddon, webLinksAddon, webglAddon, canvasAddon, imageAddon, ligaturesAddon, searchAddon, serializeAddon, unicode11Addon };
+        const addons = { fitAddon, webLinksAddon, webglAddon, imageAddon, searchAddon, serializeAddon, unicode11Addon };
         this.terminalAddons.set(terminal, addons);
 
         // Open terminal in the container first
@@ -651,25 +648,27 @@ export default class TerminalManager {
         terminal.loadAddon(searchAddon);
         terminal.loadAddon(serializeAddon);
 
-        // Try to load WebGL first, fallback to Canvas if it fails
+        // Try to load WebGL first. xterm.js 6 removed the canvas renderer, so if WebGL is
+        // unavailable or its context is lost, disposing the addon falls back to the built-in DOM renderer
         try {
             terminal.loadAddon(webglAddon);
-            webglAddon.onContextLoss(e => {
-                console.warn('WebGL context lost, falling back to canvas renderer');
-                terminal.loadAddon(canvasAddon);
+            webglAddon.onContextLoss(() => {
+                console.warn('WebGL context lost, falling back to DOM renderer');
+                webglAddon.dispose();
             });
         } catch (e) {
-            console.warn('WebGL addon could not be loaded, using canvas renderer:', e);
-            terminal.loadAddon(canvasAddon);
+            console.warn('WebGL addon could not be loaded, using DOM renderer:', e);
+            webglAddon.dispose();
         }
 
         // Load remaining addons
         terminal.loadAddon(imageAddon);
-        try {
-            terminal.loadAddon(ligaturesAddon);
-        } catch (e) {
-            console.warn('Ligatures addon could not be loaded:', e);
-        }
+
+        // addon-ligatures only ships an ES module build, so it is imported on demand.
+        // Ligatures are cosmetic: a failure here must never stop the terminal from working.
+        import('../node_modules/@xterm/addon-ligatures/lib/addon-ligatures.mjs')
+            .then(({ LigaturesAddon }) => terminal.loadAddon(new LigaturesAddon()))
+            .catch(e => console.warn('Ligatures addon could not be loaded:', e));
 
         // Initial fit
         fitAddon.fit();
