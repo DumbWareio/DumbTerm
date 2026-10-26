@@ -732,9 +732,11 @@ export default class TerminalManager {
                 clearTimeout(connectionTimeout);
                 reconnectAttempts = 0;
 
-                // Each connection gets a new shell, so an editor open on the old one is gone with it
+                // Each connection gets a new shell, so an editor open on the old one is gone with it, and so are
+                // the modes it set: DECSTR shows the cursor and resets the cursor keys and keypad, and the mouse
+                // and focus reports are turned off on their own
                 if (terminal.buffer.active.type === 'alternate') {
-                    terminal.write('\x1b[?1049l');
+                    terminal.write('\x1b[?1049l\x1b[!p\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l');
                 }
 
                 if (ws.readyState === WebSocket.OPEN) {                 

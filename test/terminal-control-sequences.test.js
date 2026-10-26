@@ -206,6 +206,17 @@ describe('terminal control sequences', () => {
         return restored.buffer.active.getLine(row).getCell(col);
     }
 
+    // The socket drops and the page reconnects; the server kills a socket's shell when it closes, so the
+    // new connection talks to a new shell
+    function reconnect() {
+        const oldSocket = FakeWebSocket.last;
+        oldSocket.readyState = FakeWebSocket.CLOSED;
+        oldSocket.onclose({ code: 1006, wasClean: false });
+        mock.timers.tick(1000);
+        assert.notEqual(FakeWebSocket.last, oldSocket, 'the page reconnected');
+        FakeWebSocket.last.onopen();
+    }
+
     // More output than the screen holds, so the rest is in the scrollback
     const SCREENFULS = Array.from({ length: 40 }, (_, i) => `line ${i}\r\n`).join('');
 
@@ -491,21 +502,30 @@ describe('terminal control sequences', () => {
     });
 
     test('reconnecting while an editor is open leaves its screen for the new shell\'s', async () => {
-        // The server kills the shell when its socket closes, so a reconnect talks to a new shell
         const saves = recordSavedSessions();
         await openVim();
-        const oldSocket = FakeWebSocket.last;
-        oldSocket.readyState = FakeWebSocket.CLOSED;
-        oldSocket.onclose({ code: 1006, wasClean: false });
-        mock.timers.tick(1000);
-        assert.notEqual(FakeWebSocket.last, oldSocket, 'the page reconnected');
-        FakeWebSocket.last.onopen();
+        reconnect();
 
         await receiveOutput('\x1b[?2004h$ ');
         assert.equal(terminal.buffer.active.type, 'normal');
         await receiveOutput('make\r\n\x1b[?2004l');
         await receiveOutput('BUILD DONE');
         assert.match(saves.at(-1), /\$ make\nBUILD DONE\n$/);
+    });
+
+    test('reconnecting while an editor is open turns off the modes the editor set', async () => {
+        await receiveOutput('$ ls\r\nfile1\r\n$ vim notes.txt\r\n');
+        await receiveOutput('\x1b[?1049h\x1b[?25l\x1b[?1h\x1b=\x1b[?1000h\x1b[?1006h\x1b[?1004h\x1b[H\x1b[2JVIM SCREEN');
+        reconnect();
+        await receiveOutput('\x1b[?2004h$ ');
+
+        // xterm.js has no public read of cursor visibility or the mouse report encoding
+        assert.equal(terminal._core.coreService.isCursorHidden, false, 'cursor shown');
+        assert.equal(terminal.modes.applicationCursorKeysMode, false);
+        assert.equal(terminal.modes.applicationKeypadMode, false);
+        assert.equal(terminal.modes.mouseTrackingMode, 'none');
+        assert.equal(terminal._core.coreMouseService.activeEncoding, 'DEFAULT', 'SGR mouse encoding off');
+        assert.equal(terminal.modes.sendFocusMode, false);
     });
 
     test('a session saved with an editor open by an earlier version restores without the editor', async () => {
