@@ -643,11 +643,11 @@ export default class TerminalManager {
         terminal.loadAddon(unicode11Addon);
         terminal.unicode.activeVersion = '11';
 
-        // Register custom handlers for problematic control sequences
-        terminal.parser.registerOscHandler(133, () => true); // Ignore OSC 133 (shell integration)
-        terminal.parser.registerCsiHandler({final: 'h'}, () => true); // Better handling of DECSET
-        terminal.parser.registerCsiHandler({final: 'l'}, () => true); // Better handling of DECRST
-        
+        // Ignore OSC 133 (shell integration marks). Mode sets and resets (CSI h/l) are left to xterm.js:
+        // swallowing them broke insert mode (terminfo smir/rmir), and editors' alternate screen
+        // (CSI ? 1049 h/l) is a separate private-mode sequence that xterm.js already handles
+        terminal.parser.registerOscHandler(133, () => true);
+
         // Then load other addons
         terminal.loadAddon(fitAddon);
         terminal.loadAddon(webLinksAddon);
@@ -942,7 +942,9 @@ export default class TerminalManager {
                 
                 if (addons && addons.serializeAddon) {
                     try {
-                        serializedContent = addons.serializeAddon.serialize();
+                        // A restored tab runs a fresh shell, so leave out the modes the old program set
+                        // (e.g. insert mode), which would otherwise switch on again in the new session
+                        serializedContent = addons.serializeAddon.serialize({ excludeModes: true });
                         if (serializedContent) {
                             const lines = serializedContent.split(/\r?\n/);
                             let lastContentLineIndex = -1;
@@ -960,9 +962,14 @@ export default class TerminalManager {
                                 /^\w+:\s*[\w/~]+[$#>]\s*$/,
                                 // Starship or other ANSI-colored prompts
                                 /^\s*\u001b\[\d+(?:;\d+)*m/,
-                                // ANSI input mode sequences
+                                // The alternate-screen switch SerializeAddon writes while an editor is open
                                 /\u001b\[\?\d+[hl]/
                             ];
+
+                            // Bracketed paste is on while the shell sits in its line editor, so the last line
+                            // is its prompt (with any half-typed command), whatever the prompt looks like; the
+                            // restored tab's new shell prints its own
+                            let dropCursorLine = terminal.modes.bracketedPasteMode;
                             
                             for (let i = lines.length - 1; i >= 0; i--) {
                                 const line = lines[i].trimEnd();
@@ -971,7 +978,8 @@ export default class TerminalManager {
                                     continue;
                                 }
                                 
-                                const isPrompt = promptPatterns.some(pattern => pattern.test(line));
+                                const isPrompt = dropCursorLine || promptPatterns.some(pattern => pattern.test(line));
+                                dropCursorLine = false;
                                 
                                 if (!isPrompt) {
                                     lastContentLineIndex = i;
