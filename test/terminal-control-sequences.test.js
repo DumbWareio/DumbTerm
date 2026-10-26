@@ -62,6 +62,7 @@ class FakeWebSocket {
     addEventListener() {}
 }
 
+// Some of these exist in Node already (e.g. WebSocket); put those back afterwards rather than delete them
 const BROWSER_GLOBALS = ['window', 'document', 'getComputedStyle', 'MutationObserver', 'WebSocket', 'Terminal',
     'FitAddon', 'WebLinksAddon', 'WebglAddon', 'ImageAddon', 'SearchAddon', 'SerializeAddon', 'Unicode11Addon'];
 
@@ -90,13 +91,19 @@ describe('terminal control sequences', () => {
     let TerminalManager;
     let terminal;
 
+    let originalGlobals;
+
     before(async () => {
+        originalGlobals = new Map(BROWSER_GLOBALS.map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]));
         installBrowserGlobals();
         ({ default: TerminalManager } = await import(TERMINAL_MANAGER_URL));
     });
 
     after(() => {
-        for (const name of BROWSER_GLOBALS) delete globalThis[name];
+        for (const [name, descriptor] of originalGlobals) {
+            if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+            else delete globalThis[name];
+        }
     });
 
     beforeEach(() => {
@@ -164,10 +171,31 @@ describe('terminal control sequences', () => {
                 restored.write('', resolve);
                 mock.timers.runAll();
             });
+            assert.equal(restored.buffer.active.getLine(0).translateToString(true), 'x', 'the saved content is restored');
             assert.equal(restored.modes.insertMode, false);
         } finally {
             restored.dispose();
         }
+    });
+
+    test('a saved session leaves out the prompt the shell is idle at, whatever it looks like', async () => {
+        // macOS zsh's default prompt matches none of the prompt patterns; the shell sitting in its line
+        // editor (bracketed paste on) is what marks the last line as a prompt the new shell will redraw
+        const serializeAddon = new RealSerializeAddon();
+        terminal.loadAddon(serializeAddon);
+        await receiveOutput('chris@mbp DumbTerm % ls\r\nfile1\r\nchris@mbp DumbTerm % \x1b[?2004h');
+
+        let saved;
+        const manager = {
+            activeTabId: 1,
+            tabCounter: 2,
+            terminals: new Map([[1, { tab: { querySelector: () => ({ textContent: 'Term1' }) }, terminal }]]),
+            terminalAddons: new Map([[terminal, { serializeAddon }]]),
+            storageManager: { set: (key, value) => { saved = value; } },
+        };
+        TerminalManager.prototype.saveSessionState.call(manager);
+
+        assert.equal(saved.terminals[0].content, 'chris@mbp DumbTerm % ls\nfile1\n');
     });
 
     test('alternate screen (DECSET/DECRST 1049) still switches buffers for editors', async () => {

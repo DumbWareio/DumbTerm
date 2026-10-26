@@ -962,9 +962,14 @@ export default class TerminalManager {
                                 /^\w+:\s*[\w/~]+[$#>]\s*$/,
                                 // Starship or other ANSI-colored prompts
                                 /^\s*\u001b\[\d+(?:;\d+)*m/,
-                                // ANSI input mode sequences
+                                // The alternate-screen switch SerializeAddon writes while an editor is open
                                 /\u001b\[\?\d+[hl]/
                             ];
+
+                            // Bracketed paste is on while the shell sits in its line editor, so the last line
+                            // is its prompt (with any half-typed command), whatever the prompt looks like; the
+                            // restored tab's new shell prints its own
+                            let dropCursorLine = terminal.modes.bracketedPasteMode;
                             
                             for (let i = lines.length - 1; i >= 0; i--) {
                                 const line = lines[i].trimEnd();
@@ -973,7 +978,8 @@ export default class TerminalManager {
                                     continue;
                                 }
                                 
-                                const isPrompt = promptPatterns.some(pattern => pattern.test(line));
+                                const isPrompt = dropCursorLine || promptPatterns.some(pattern => pattern.test(line));
+                                dropCursorLine = false;
                                 
                                 if (!isPrompt) {
                                     lastContentLineIndex = i;
