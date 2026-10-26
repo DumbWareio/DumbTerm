@@ -378,4 +378,22 @@ describe('terminal control sequences', () => {
         }
         assert.equal(saves.length, 1, 'the redraws arm no save of their own');
     });
+
+    test('reconnecting while an editor is open leaves its screen for the new shell\'s', async () => {
+        // The server kills the shell when its socket closes, so a reconnect talks to a new shell
+        const saves = recordSavedSessions();
+        await openVim();
+        const oldSocket = FakeWebSocket.last;
+        oldSocket.readyState = FakeWebSocket.CLOSED;
+        oldSocket.onclose({ code: 1006, wasClean: false });
+        mock.timers.tick(1000);
+        assert.notEqual(FakeWebSocket.last, oldSocket, 'the page reconnected');
+        FakeWebSocket.last.onopen();
+
+        await receiveOutput('\x1b[?2004h$ ');
+        assert.equal(terminal.buffer.active.type, 'normal');
+        await receiveOutput('make\r\n\x1b[?2004l');
+        await receiveOutput('BUILD DONE');
+        assert.match(saves.at(-1), /\$ make\nBUILD DONE\n$/);
+    });
 });

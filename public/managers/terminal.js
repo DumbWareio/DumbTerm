@@ -728,6 +728,11 @@ export default class TerminalManager {
                 clearTimeout(connectionTimeout);
                 reconnectAttempts = 0;
 
+                // Each connection gets a new shell, so an editor open on the old one is gone with it
+                if (terminal.buffer.active.type === 'alternate') {
+                    terminal.write('\x1b[?1049l');
+                }
+
                 if (ws.readyState === WebSocket.OPEN) {                 
                     // Force an initial resize to ensure proper dimensions
                     setTimeout(() => {
