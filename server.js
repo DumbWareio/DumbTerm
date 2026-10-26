@@ -183,6 +183,16 @@ const authMiddleware = (req, res, next) => {
     return res.redirect(BASE_PATH + '/login');
 };
 
+// The pages load their assets with relative URLs, which only resolve under the base path with its
+// trailing slash (/dumbterm/), so send /dumbterm there instead of serving the page from it
+if (BASE_PATH) {
+    app.use((req, res, next) => {
+        if (req.path !== BASE_PATH) return next();
+        const query = req.originalUrl.slice(req.path.length);
+        res.redirect(`${BASE_PATH}/${query}`);
+    });
+}
+
 // Global middleware for origin validation and authentication
 app.use(BASE_PATH, (req, res, next) => {
     // List of paths that should be publicly accessible

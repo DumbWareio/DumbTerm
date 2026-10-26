@@ -129,15 +129,37 @@ async function waitFor(predicate, timeoutMs, describeFailure) {
     assert.fail(describeFailure());
 }
 
-// Collect the local script and stylesheet URLs a page loads, resolved against the page URL.
+// Collect the local scripts, stylesheets and preloads a page loads, resolved against the page URL.
 function pageAssetUrls(htmlFile, pageUrl) {
     const html = fs.readFileSync(path.join(PUBLIC_DIR, htmlFile), 'utf8');
     const tags = html.match(/<(script|link)\b[^>]*>/g) || [];
     return tags
-        .filter((tag) => tag.startsWith('<script') || /rel="stylesheet"/.test(tag))
+        .filter((tag) => tag.startsWith('<script') || /rel="(stylesheet|preload)"/.test(tag))
         .map((tag) => (tag.match(/\b(?:src|href)="([^"]+)"/) || [])[1])
         .filter((ref) => ref && !/^https?:/.test(ref))
         .map((ref) => new URL(ref, pageUrl).href);
+}
+
+// Fetch every asset the pages load, and every url() inside their stylesheets, and expect each to be served.
+async function assertPageAssetsServed(pages) {
+    for (const [htmlFile, pageUrl] of pages) {
+        for (const url of pageAssetUrls(htmlFile, pageUrl)) {
+            const res = await fetch(url, { headers: { Cookie: PIN_COOKIE } });
+            assert.equal(res.status, 200, `${htmlFile} references ${url}, which returned ${res.status}`);
+            if (url.endsWith('.js')) {
+                assert.match(res.headers.get('content-type'), /javascript/, `${url} is not served as JavaScript`);
+            }
+            if (url.endsWith('.css')) {
+                const css = await res.text();
+                for (const [, ref] of css.matchAll(/url\(\s*['"]?([^'")]+)['"]?\s*\)/g)) {
+                    if (/^(data:|https?:)/.test(ref)) continue;
+                    const assetUrl = new URL(ref, url).href;
+                    const asset = await fetch(assetUrl, { headers: { Cookie: PIN_COOKIE } });
+                    assert.equal(asset.status, 200, `${url} references ${assetUrl}, which returned ${asset.status}`);
+                }
+            }
+        }
+    }
 }
 
 // Collect every static and dynamic import specifier in the front-end modules, resolved to URLs.
@@ -224,17 +246,8 @@ describe('DumbTerm server', () => {
         assert.deepEqual(assets.filter((asset) => /\.(map|ts)$/.test(asset)), []);
     });
 
-    test('serves every script and stylesheet the pages reference', async () => {
-        const pages = [['index.html', `${server.baseUrl}/`], ['login.html', `${server.baseUrl}/login`]];
-        for (const [htmlFile, pageUrl] of pages) {
-            for (const url of pageAssetUrls(htmlFile, pageUrl)) {
-                const res = await fetch(url, { headers: { Cookie: PIN_COOKIE } });
-                assert.equal(res.status, 200, `${htmlFile} references ${url}, which returned ${res.status}`);
-                if (url.endsWith('.js')) {
-                    assert.match(res.headers.get('content-type'), /javascript/, `${url} is not served as JavaScript`);
-                }
-            }
-        }
+    test('serves every script, stylesheet, preload and font the pages reference', async () => {
+        await assertPageAssetsServed([['index.html', `${server.baseUrl}/`], ['login.html', `${server.baseUrl}/login`]]);
     });
 
     test('loads a script for every xterm addon global the terminal manager constructs', async () => {
@@ -283,6 +296,27 @@ describe('DumbTerm server without NODE_ENV', () => {
             assert.equal(res.status, 400, `${name}: expected 400, got ${res.status}`);
             assert.doesNotMatch(text, /server\.js|node_modules/, `${name}: response leaks a stack trace`);
         }
+    });
+});
+
+describe('DumbTerm server under a BASE_URL sub-path', () => {
+    let server;
+
+    before(async () => { server = await startServer((baseUrl) => ({ BASE_URL: `${baseUrl}/dumbterm` })); });
+    after(async () => { await server.stop(); });
+
+    test('serves every script, stylesheet, preload and font the pages reference', async () => {
+        await assertPageAssetsServed([
+            ['index.html', `${server.baseUrl}/dumbterm/`],
+            ['login.html', `${server.baseUrl}/dumbterm/login`],
+        ]);
+    });
+
+    test('redirects the sub-path without a trailing slash, so relative asset URLs resolve', async () => {
+        // Served at /dumbterm, "styles.css" would resolve to /styles.css instead of /dumbterm/styles.css
+        const res = await fetch(`${server.baseUrl}/dumbterm?tab=1`, { headers: { Cookie: PIN_COOKIE }, redirect: 'manual' });
+        assert.equal(res.status, 302);
+        assert.equal(res.headers.get('location'), '/dumbterm/?tab=1');
     });
 });
 
