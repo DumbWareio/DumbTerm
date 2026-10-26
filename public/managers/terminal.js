@@ -1,5 +1,7 @@
 import StorageManager from './storage.js';
 
+const IS_MAC = /mac/i.test(navigator.userAgentData?.platform || navigator.platform || '');
+
 // Helper function to join paths with base path
 function joinPath(path) {
     const basePath = window.appConfig?.basePath || '';
@@ -611,8 +613,10 @@ export default class TerminalManager {
             termProgram: 'xterm-256color',
             // Add these new options for better control sequence handling
             smoothScrollDuration: 0,
-            // xterm.js 6 scrolls ~50px per wheel notch (the browser's native scroll was ~100px), so double it
-            scrollSensitivity: 2,
+            // xterm.js 6 scrolls 50px per wheel tick. Browsers off macOS report a mouse-wheel notch as one
+            // tick, where native scrolling (xterm.js 5) moved ~100px, so double it there; on macOS a tick is
+            // 40px of movement, so 50px is already close to native
+            scrollSensitivity: IS_MAC ? 1 : 2,
             fastScrollSensitivity: 5,
             // Better handling of alternative screen buffer
             altClickMovesCursor: true,
@@ -678,8 +682,8 @@ export default class TerminalManager {
         if (webglActive) {
             import('../node_modules/@xterm/addon-ligatures/lib/addon-ligatures.mjs')
                 .then(({ LigaturesAddon }) => {
-                    // WebGL may have been lost while the module was loading
-                    if (!webglActive) return;
+                    // WebGL may have been lost, or the tab closed, while the module was loading
+                    if (!webglActive || !terminal.element?.isConnected) return;
                     ligaturesAddon = new LigaturesAddon();
                     terminal.loadAddon(ligaturesAddon);
                 })
