@@ -489,11 +489,6 @@ const heartbeatInterval = setInterval(() => {
 }, 15000); // Check every 15 seconds
 
 // Clean up interval on server shutdown
-process.on('SIGTERM', () => {
-    clearInterval(heartbeatInterval);
-    wss.close();
-});
-
 // Terminal creation helper function
 function createTerminal(ws) {
     // Create terminal process
@@ -570,7 +565,7 @@ function createTerminal(ws) {
 }
 
 // Cleanup old lockouts periodically
-setInterval(() => {
+const lockoutCleanupInterval = setInterval(() => {
     const now = Date.now();
     for (const [ip, attempts] of loginAttempts.entries()) {
         if (now - attempts.lastAttempt >= LOCKOUT_TIME) {
@@ -593,3 +588,25 @@ server.listen(PORT, () => {
     });
     console.log(`Server running on: ${BASE_URL}`);
 });
+
+// Graceful shutdown (docker stop sends SIGTERM, Ctrl+C sends SIGINT): close every terminal with 1001
+// so browsers see a shutdown rather than a crash (the close handler kills each pty), stop accepting
+// connections, then exit
+let shuttingDown = false;
+function shutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`${signal} received, shutting down`);
+    clearInterval(heartbeatInterval);
+    clearInterval(lockoutCleanupInterval);
+    wss.clients.forEach(ws => ws.close(1001, 'Server shutting down'));
+    wss.close();
+    server.close(() => process.exit(0));
+    // Don't wait forever for a client that never completes the close handshake
+    setTimeout(() => {
+        server.closeAllConnections();
+        process.exit(0);
+    }, 2000).unref();
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
