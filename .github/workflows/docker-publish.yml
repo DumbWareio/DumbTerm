@@ -71,6 +71,8 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           push: true
           pull: true
+          # A manual run exists to pick up OS and Node.js patches, so don't reuse cached apt-get layers
+          no-cache: ${{ github.event_name == 'workflow_dispatch' }}
           tags: |
             ${{ steps.docker_meta.outputs.VERSION_TAG}}
             ${{ steps.docker_meta.outputs.ADDITIONAL_TAG }}

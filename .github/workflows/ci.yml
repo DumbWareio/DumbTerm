@@ -51,8 +51,17 @@ jobs:
           cache-from: type=gha,scope=ci
           cache-to: type=gha,scope=ci,mode=max
 
-      - name: Show runtime versions
-        run: docker run --rm --entrypoint node dumbterm:ci -p "process.version + ' (openssl ' + process.versions.openssl + ')'"
+      # 24.22.1 is the October 2026 Node.js security release (issue #31); never ship anything older
+      - name: Check the image runs Node.js 24.22.1 or newer
+        run: |
+          docker run --rm --entrypoint node dumbterm:ci -e '
+            const [major, minor, patch] = process.versions.node.split(".").map(Number);
+            const ok = major !== 24 ? major > 24 : minor !== 22 ? minor > 22 : patch >= 1;
+            console.log(`Node.js ${process.version} (OpenSSL ${process.versions.openssl})`);
+            if (!ok) {
+              console.error("Expected Node.js 24.22.1 or newer");
+              process.exit(1);
+            }'
 
       # Runs the test suite inside the image, so node-pty, Node.js and the shell are the shipped ones
       - name: Run tests inside the image
