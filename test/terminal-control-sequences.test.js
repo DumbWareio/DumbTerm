@@ -89,6 +89,7 @@ function installBrowserGlobals() {
 
 describe('terminal control sequences', () => {
     let TerminalManager;
+    let manager;
     let terminal;
 
     let originalGlobals;
@@ -117,7 +118,7 @@ describe('terminal control sequences', () => {
         mock.method(console, 'warn', () => {});
 
         // initTerminal only needs these from its manager; the constructor builds the whole tab UI
-        const manager = { terminalAddons: new Map(), saveSessionState() {} };
+        manager = { terminalAddons: new Map(), saveSessionState() {} };
         terminal = TerminalManager.prototype.initTerminal.call(manager, {});
     });
 
@@ -138,6 +139,30 @@ describe('terminal control sequences', () => {
 
     function screenLine(row) {
         return terminal.buffer.active.getLine(row).translateToString(true);
+    }
+
+    // Let the terminal's own saves (on a keystroke, and the debounced one after output) run the real
+    // saveSessionState with the real SerializeAddon; returns the saved content of each save, in order
+    function recordSavedSessions() {
+        const serializeAddon = new RealSerializeAddon();
+        terminal.loadAddon(serializeAddon);
+        const saves = [];
+        Object.assign(manager, {
+            activeTabId: 1,
+            tabCounter: 2,
+            terminals: new Map([[1, { tab: { querySelector: () => ({ textContent: 'Term1' }) }, terminal }]]),
+            storageManager: { set: (key, value) => { saves.push(value.terminals[0].content); } },
+            saveSessionState: TerminalManager.prototype.saveSessionState,
+        });
+        manager.terminalAddons.set(terminal, { serializeAddon });
+        return saves;
+    }
+
+    // The shell runs `vim notes.txt`; vim switches to the alternate screen and turns bracketed paste on
+    async function openVim(vimStart = '\x1b[?1049h') {
+        await receiveOutput('$ ls\r\nfile1\r\n\x1b[?2004h$ ');
+        await receiveOutput('vim notes.txt\r\n\x1b[?2004l');
+        await receiveOutput(`${vimStart}\x1b[?2004h\x1b[H\x1b[2JVIM SCREEN\r\n~\r\n~`);
     }
 
     test('insert mode (SM/RM 4, terminfo smir/rmir) inserts text instead of overwriting it', async () => {
@@ -229,5 +254,62 @@ describe('terminal control sequences', () => {
         await receiveOutput('\x1b[?1049l');
         assert.equal(terminal.buffer.active.type, 'normal');
         assert.equal(terminal.altBuffer, false);
+    });
+
+    test('a session saved while an editor is open keeps the shell screen, not the editor\'s', async () => {
+        const saves = recordSavedSessions();
+        await openVim();
+
+        terminal.input('i');
+        const content = saves.at(-1);
+        assert.doesNotMatch(content, /VIM SCREEN/);
+        assert.ok(!content.includes('\x1b[?1049h'), 'the switch to the alternate screen is not saved');
+        assert.match(content, /^\$ ls\nfile1\n\$ vim notes\.txt/, 'the shell output, including the editor command, is kept');
+    });
+
+    test('a session saved while an editor is open restores into the normal screen', async () => {
+        const saves = recordSavedSessions();
+        await openVim();
+        terminal.input('i');
+
+        const restored = TerminalManager.prototype.initTerminal.call(
+            { terminalAddons: new Map(), saveSessionState() {} }, {}, saves.at(-1));
+        try {
+            await new Promise((resolve) => {
+                restored.write('', resolve);
+                mock.timers.runAll();
+            });
+            assert.equal(restored.buffer.active.type, 'normal');
+            assert.equal(restored.buffer.active.getLine(2).translateToString(true), '$ vim notes.txt');
+        } finally {
+            restored.dispose();
+        }
+    });
+
+    test('the save after output leaves out an editor whose screen switch arrives split across messages', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput('$ ls\r\nfile1\r\n$ vim notes.txt\r\n\x1b[?10');
+        await receiveOutput('49h\x1b[H\x1b[2JVIM SCREEN\r\n~\r\n~');
+        assert.equal(terminal.buffer.active.type, 'alternate');
+
+        assert.doesNotMatch(saves.at(-1), /VIM SCREEN/);
+    });
+
+    test('the save after output leaves out an editor on the 1047 alternate screen', async () => {
+        const saves = recordSavedSessions();
+        await openVim('\x1b[?1047h');
+        assert.equal(terminal.buffer.active.type, 'alternate');
+
+        assert.doesNotMatch(saves.at(-1), /VIM SCREEN/);
+    });
+
+    test('the save after an editor exits stores the shell screen', async () => {
+        const saves = recordSavedSessions();
+        await openVim();
+        await receiveOutput('\x1b[?2004l\x1b[?1049l');
+        await receiveOutput('\x1b[?2004h$ ');
+
+        assert.equal(terminal.buffer.active.type, 'normal');
+        assert.equal(saves.at(-1), '$ ls\nfile1\n$ vim notes.txt\n');
     });
 });

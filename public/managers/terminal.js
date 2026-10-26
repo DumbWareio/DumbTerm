@@ -943,8 +943,9 @@ export default class TerminalManager {
                 if (addons && addons.serializeAddon) {
                     try {
                         // A restored tab runs a fresh shell, so leave out the modes the old program set
-                        // (e.g. insert mode), which would otherwise switch on again in the new session
-                        serializedContent = addons.serializeAddon.serialize({ excludeModes: true });
+                        // (e.g. insert mode), which would otherwise switch on again in the new session. An open
+                        // editor's screen goes too: what is saved is the shell's screen underneath it
+                        serializedContent = addons.serializeAddon.serialize({ excludeModes: true, excludeAltBuffer: true });
                         if (serializedContent) {
                             const lines = serializedContent.split(/\r?\n/);
                             let lastContentLineIndex = -1;
@@ -961,15 +962,14 @@ export default class TerminalManager {
                                 // PS1 with directory
                                 /^\w+:\s*[\w/~]+[$#>]\s*$/,
                                 // Starship or other ANSI-colored prompts
-                                /^\s*\u001b\[\d+(?:;\d+)*m/,
-                                // The alternate-screen switch SerializeAddon writes while an editor is open
-                                /\u001b\[\?\d+[hl]/
+                                /^\s*\u001b\[\d+(?:;\d+)*m/
                             ];
 
                             // Bracketed paste is on while the shell sits in its line editor, so the last line
                             // is its prompt (with any half-typed command), whatever the prompt looks like; the
-                            // restored tab's new shell prints its own
-                            let dropCursorLine = terminal.modes.bracketedPasteMode;
+                            // restored tab's new shell prints its own. In the alternate buffer it is the
+                            // editor's (vim turns it on), and the last line is the command that started it
+                            let dropCursorLine = terminal.modes.bracketedPasteMode && terminal.buffer.active.type === 'normal';
                             
                             for (let i = lines.length - 1; i >= 0; i--) {
                                 const line = lines[i].trimEnd();
