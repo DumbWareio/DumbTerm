@@ -5,7 +5,7 @@
  */
 const { describe, test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
-const { spawn } = require('node:child_process');
+const { execFileSync, spawn } = require('node:child_process');
 const fs = require('node:fs');
 const net = require('node:net');
 const path = require('node:path');
@@ -15,6 +15,11 @@ const ROOT = path.join(__dirname, '..');
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const PIN = '1234';
 const PIN_COOKIE = `DUMBTERM_PIN=${PIN}`;
+
+// `npm start` copies the xterm packages into public/ before starting the server; do the same
+before(() => {
+    execFileSync(process.execPath, ['scripts/copy-xterm.js'], { cwd: ROOT, stdio: 'ignore' });
+});
 
 function getFreePort() {
     return new Promise((resolve, reject) => {
@@ -190,6 +195,13 @@ describe('DumbTerm server', () => {
     test('closes the terminal WebSocket with 1008 when the PIN cookie is missing', async () => {
         const terminal = openTerminal(server, { Origin: server.baseUrl });
         assert.equal(await terminal.closed, 1008);
+    });
+
+    test('keeps source maps and TypeScript sources out of the service worker precache', async () => {
+        const res = await fetch(`${server.baseUrl}/asset-manifest.json`);
+        const assets = await res.json();
+        assert.ok(assets.includes('/node_modules/@xterm/xterm/lib/xterm.js'), 'expected the copied xterm bundle in the manifest');
+        assert.deepEqual(assets.filter((asset) => /\.(map|ts)$/.test(asset)), []);
     });
 
     test('serves every script and stylesheet the pages reference', async () => {
