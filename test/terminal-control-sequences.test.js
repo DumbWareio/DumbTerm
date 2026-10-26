@@ -197,9 +197,17 @@ describe('terminal control sequences', () => {
         }
     }
 
+    // The row the cursor is on, counted from the top of the scrollback
+    function cursorRow(restored) {
+        return restored.buffer.active.baseY + restored.buffer.active.cursorY;
+    }
+
     function cellAt(restored, row, col) {
         return restored.buffer.active.getLine(row).getCell(col);
     }
+
+    // More output than the screen holds, so the rest is in the scrollback
+    const SCREENFULS = Array.from({ length: 40 }, (_, i) => `line ${i}\r\n`).join('');
 
     // The shell runs `vim notes.txt`; vim switches to the alternate screen and turns bracketed paste on
     async function openVim() {
@@ -361,6 +369,23 @@ describe('terminal control sequences', () => {
             const prompt = cellAt(restored, 2, 0);
             assert.equal(prompt.isInverse(), 0);
             assert.equal(prompt.getFgColorMode(), 0, 'default foreground');
+        });
+    });
+
+    test('a session saved after the screen was cleared restores without a screen of blank rows', async () => {
+        // Ctrl-L clears the screen and keeps the scrollback, leaving the cursor near the top; the serializer
+        // then ends the save by moving the cursor back up, on a row of its own below the blank rows
+        const saves = recordSavedSessions();
+        await receiveOutput(`${SCREENFULS}\x1b[?2004h$ `);
+        await receiveOutput('\x1b[H\x1b[2J$ ');
+        await receiveOutput('vim notes.txt\r\n\x1b[?2004l');
+        await receiveOutput('\x1b[?1049h\x1b[?2004h\x1b[H\x1b[2JVIM SCREEN\r\n~\r\n~');
+        terminal.input('i');
+
+        await withRestoredPrompt(saves.at(-1), (restored) => {
+            const lines = bufferLines(restored);
+            const prompt = cursorRow(restored);
+            assert.deepEqual(lines.slice(prompt - 1, prompt + 1), ['$ vim notes.txt', '$ ']);
         });
     });
 

@@ -938,6 +938,10 @@ export default class TerminalManager {
                         serializedContent = addons.serializeAddon.serialize({ excludeModes: true, excludeAltBuffer: true });
                         if (serializedContent) {
                             const lines = serializedContent.split(/\r?\n/);
+                            // The serializer ends by moving the cursor back to where it was (and setting its
+                            // colours), on a row of its own when the cursor is above the bottom; restored, that
+                            // would leave blank rows, or a blank line after the newline added below
+                            lines[lines.length - 1] = lines[lines.length - 1].replace(/(?:\u001b\[[\d;]*[ABCDm])+$/, '');
                             let lastContentLineIndex = -1;
                             let seenNonPrompt = false;
                             
@@ -979,9 +983,6 @@ export default class TerminalManager {
                             }
                             
                             if (seenNonPrompt) {
-                                // The serializer ends by moving the cursor back to where it was (and setting its
-                                // colours); after the newline added below that would leave a blank line
-                                lines[lastContentLineIndex] = lines[lastContentLineIndex].replace(/(?:\u001b\[[\d;]*[ABCDm])+$/, '');
                                 serializedContent = lines.slice(0, lastContentLineIndex + 1).join('\n');
                                 if (serializedContent.length > 0) {
                                     serializedContent += '\n';
