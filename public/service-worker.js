@@ -403,33 +403,27 @@ self.addEventListener("activate", event => {
 });
 
 self.addEventListener("fetch", event => {
+    // Only GET responses can be cached; let the browser send everything else as normal
+    if (event.request.method !== 'GET') return;
+
+    // Network first, cache as the offline fallback. Serving from the cache first meant a returning
+    // browser kept getting the previous release's config.js and scripts, so it never noticed an update.
     event.respondWith(
-        caches.match(event.request)
-            .then(cachedResponse => {
-                // Return cached response if found
+        fetch(event.request)
+            .then(response => {
+                // Keep a copy of valid responses for offline use
+                if (response && response.status === 200 && response.type === 'basic') {
+                    const responseToCache = response.clone();
+                    caches.open(CACHE_NAME)
+                        .then(cache => cache.put(event.request, responseToCache));
+                }
+                return response;
+            })
+            .catch(async () => {
+                const cachedResponse = await caches.match(event.request);
                 if (cachedResponse) {
                     return cachedResponse;
                 }
-
-                // Otherwise fetch from network
-                return fetch(event.request.clone())
-                    .then(response => {
-                        // Don't cache if not a valid response
-                        if (!response || response.status !== 200 || response.type !== 'basic') {
-                            return response;
-                        }
-
-                        // Clone the response and cache it
-                        const responseToCache = response.clone();
-                        caches.open(CACHE_NAME)
-                            .then(cache => {
-                                cache.put(event.request, responseToCache);
-                            });
-
-                        return response;
-                    });
-            })
-            .catch(() => {
                 // Return fallback for navigation requests
                 if (event.request.mode === 'navigate') {
                     return caches.match(getAssetPath('index.html'));
