@@ -752,34 +752,17 @@ export default class TerminalManager {
                 ws.close();
             };
 
-            let isInAlternateBuffer = false;
-            
             ws.onmessage = (event) => {
                 try {
                     const message = JSON.parse(event.data);
                     if (message.type === 'output') {
-                        if (message.data.includes('\x1b[?1049h')) {
-                            // Entering alternate buffer (editor mode)
-                            terminal.altBuffer = true;
-                        } else if (message.data.includes('\x1b[?1049l')) {
-                            // Exiting alternate buffer (editor mode)
-                            terminal.altBuffer = false;
-                            // Force a save after exiting editor mode
-                            setTimeout(() => {
-                                self.saveSessionState();
-                            }, 100);
-                        }
-                        
-                        // Always write the data
                         terminal.write(message.data);
-                        
-                        // Only save state if not in alternate buffer
-                        if (!terminal.altBuffer) {
-                            clearTimeout(self.saveTimeout);
-                            self.saveTimeout = setTimeout(() => {
-                                self.saveSessionState();
-                            }, 500);
-                        }
+
+                        // Saving is safe with an editor open (it saves the shell's screen underneath)
+                        clearTimeout(self.saveTimeout);
+                        self.saveTimeout = setTimeout(() => {
+                            self.saveSessionState();
+                        }, 500);
                     }
                 } catch (e) {
                     console.error('Error processing message:', e);
@@ -928,11 +911,6 @@ export default class TerminalManager {
     }
 
     saveSessionState() {
-        // Skip saving if terminal is in alternate buffer mode
-        if (this.isInAlternateBuffer) {
-            return;
-        }
-
         const sessionState = {
             activeTabId: this.activeTabId,
             tabCounter: this.tabCounter,

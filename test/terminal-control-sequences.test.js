@@ -249,11 +249,9 @@ describe('terminal control sequences', () => {
     test('alternate screen (DECSET/DECRST 1049) still switches buffers for editors', async () => {
         await receiveOutput('\x1b[?1049h');
         assert.equal(terminal.buffer.active.type, 'alternate');
-        assert.equal(terminal.altBuffer, true, 'editor output is kept out of the saved session');
 
         await receiveOutput('\x1b[?1049l');
         assert.equal(terminal.buffer.active.type, 'normal');
-        assert.equal(terminal.altBuffer, false);
     });
 
     test('a session saved while an editor is open keeps the shell screen, not the editor\'s', async () => {
@@ -284,6 +282,15 @@ describe('terminal control sequences', () => {
         } finally {
             restored.dispose();
         }
+    });
+
+    test('output after an editor opens and closes within one message is still saved', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput('$ ls\r\nfile1\r\n');
+        await receiveOutput('\x1b[?1049h\x1b[HVIM SCREEN\x1b[?1049l');
+        await receiveOutput('$ make\r\nbuilding');
+
+        assert.equal(saves.at(-1), '$ ls\nfile1\n$ make\nbuilding\n');
     });
 
     test('the save after output leaves out an editor whose screen switch arrives split across messages', async () => {
