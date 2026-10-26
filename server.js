@@ -601,7 +601,9 @@ function shutdown(signal) {
     clearInterval(lockoutCleanupInterval);
     wss.clients.forEach(ws => ws.close(1001, 'Server shutting down'));
     wss.close();
-    server.close(() => process.exit(0));
+    // No explicit exit here: the process ends once every socket has closed and each terminal's close
+    // handler has killed its pty (exiting from server.close's callback could run before those handlers)
+    server.close();
     // Don't wait forever for a client that never completes the close handshake
     setTimeout(() => {
         server.closeAllConnections();

@@ -381,7 +381,7 @@ describe('DumbTerm server when the pty cannot be spawned', () => {
 describe('DumbTerm server shutdown', () => {
     for (const signal of ['SIGTERM', 'SIGINT']) {
         test(`closes open terminals and exits cleanly on ${signal}`, async () => {
-            const server = await startServer();
+            const server = await startServer(() => ({}), ['--require', path.join(__dirname, 'fixtures', 'recording-pty.js')]);
             try {
                 const terminal = openTerminal(server, { Cookie: PIN_COOKIE, Origin: server.baseUrl });
                 await new Promise((resolve) => terminal.ws.once('open', resolve));
@@ -389,15 +389,16 @@ describe('DumbTerm server shutdown', () => {
                 await waitFor(() => /SHELLPID=\d+/.test(terminal.state.output), 5000,
                     () => `no shell pid, got: ${JSON.stringify(terminal.state.output)}`);
                 const shellPid = Number(terminal.state.output.match(/SHELLPID=(\d+)/)[1]);
+                // Both deadlines run from the signal, well under shutdown()'s 2s backstop, so this only
+                // passes on the graceful path
+                const exitDeadline = new Promise((resolve) => setTimeout(() => resolve('still running'), 1500));
                 server.signal(signal);
                 // 1001 = going away: the browser can tell a shutdown from a crash (1006)
-                assert.equal(await closeCodeWithin(terminal, 3000), 1001);
-                const result = await Promise.race([
-                    server.exited,
-                    // Well under shutdown()'s 2s backstop, so this only passes on the graceful path
-                    new Promise((resolve) => setTimeout(() => resolve('still running'), 1500)),
-                ]);
+                assert.equal(await closeCodeWithin(terminal, 1500), 1001);
+                const result = await Promise.race([server.exited, exitDeadline]);
                 assert.deepEqual(result, { code: 0, signal: null }, `server did not exit cleanly:\n${server.output()}`);
+                // The terminal's own close handler must kill its pty, not just the OS hanging it up at exit
+                assert.match(server.output(), /PTY_KILLED/, 'shutdown exited before killing the terminal');
                 await waitFor(() => {
                     try { process.kill(shellPid, 0); return false; } catch { return true; }
                 }, 2000, () => `shell ${shellPid} is still running after shutdown`);
@@ -419,7 +420,7 @@ describe('DumbTerm server shutdown with an unresponsive client', () => {
             server.signal('SIGTERM');
             const result = await Promise.race([
                 server.exited,
-                new Promise((resolve) => setTimeout(() => resolve('still running'), 4000)),
+                new Promise((resolve) => setTimeout(() => resolve('still running'), 3000)),
             ]);
             assert.deepEqual(result, { code: 0, signal: null }, `server did not exit:\n${server.output()}`);
             terminal.ws.terminate();
