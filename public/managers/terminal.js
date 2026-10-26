@@ -643,11 +643,11 @@ export default class TerminalManager {
         terminal.loadAddon(unicode11Addon);
         terminal.unicode.activeVersion = '11';
 
-        // Register custom handlers for problematic control sequences
-        terminal.parser.registerOscHandler(133, () => true); // Ignore OSC 133 (shell integration)
-        terminal.parser.registerCsiHandler({final: 'h'}, () => true); // Better handling of DECSET
-        terminal.parser.registerCsiHandler({final: 'l'}, () => true); // Better handling of DECRST
-        
+        // Ignore OSC 133 (shell integration marks). Mode sets and resets (CSI h/l) are left to xterm.js:
+        // swallowing them broke insert mode (terminfo smir/rmir), and editors' alternate screen
+        // (CSI ? 1049 h/l) is a separate private-mode sequence that xterm.js already handles
+        terminal.parser.registerOscHandler(133, () => true);
+
         // Then load other addons
         terminal.loadAddon(fitAddon);
         terminal.loadAddon(webLinksAddon);
