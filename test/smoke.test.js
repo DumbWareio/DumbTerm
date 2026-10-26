@@ -30,10 +30,10 @@ function getFreePort() {
 
 // Start server.js on a free port and resolve once it is listening.
 // extraEnv receives the server's base URL so callers can build origin-dependent settings.
-async function startServer(extraEnv = () => ({})) {
+async function startServer(extraEnv = () => ({}), nodeArgs = []) {
     const port = await getFreePort();
     const baseUrl = `http://localhost:${port}`;
-    const proc = spawn(process.execPath, ['server.js'], {
+    const proc = spawn(process.execPath, [...nodeArgs, 'server.js'], {
         cwd: ROOT,
         env: {
             ...process.env,
@@ -235,6 +235,24 @@ describe('DumbTerm server with a nameless cookie', () => {
         assert.equal(terminal.state.closeCode, null, 'valid PIN cookie next to a nameless cookie should be accepted');
         terminal.ws.close();
         await terminal.closed;
+    });
+});
+
+describe('DumbTerm server when the pty cannot be spawned', () => {
+    let server;
+
+    before(async () => {
+        server = await startServer(() => ({}), ['--require', path.join(__dirname, 'fixtures', 'failing-pty.js')]);
+    });
+    after(async () => { await server.stop(); });
+
+    test('closes the terminal WebSocket with 1011 and keeps running', async () => {
+        const terminal = openTerminal(server, { Cookie: PIN_COOKIE, Origin: server.baseUrl });
+        assert.equal(await terminal.closed, 1011);
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        assert.ok(server.isRunning(), `server crashed:\n${server.output()}`);
+        const res = await fetch(`${server.baseUrl}/login`);
+        assert.equal(res.status, 200);
     });
 });
 

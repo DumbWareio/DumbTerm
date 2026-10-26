@@ -485,22 +485,30 @@ function createTerminal(ws) {
     // Create terminal process
     const shell = process.env.SHELL || (os.platform() === 'win32' ? 'powershell.exe' : 'bash');
     
-    const term = ptyModule.spawn(shell, [], {
-        name: 'xterm-256color',
-        cols: 80,
-        rows: 24,
-        cwd: DEMO_MODE ? '/home/demo' : (process.env.HOME || '/root'),
-        env: {
-            ...process.env,
-            TERM: 'xterm-256color',
-            COLORTERM: 'truecolor',
-            LANG: 'en_US.UTF-8',
-            // Force buffer flushing for better alternate buffer handling
-            STDBUF: 'L',
-            // Ensure proper handling of alternate buffer in applications
-            TERM_PROGRAM: 'xterm-256color'
-        }
-    });
+    let term;
+    try {
+        term = ptyModule.spawn(shell, [], {
+            name: 'xterm-256color',
+            cols: 80,
+            rows: 24,
+            cwd: DEMO_MODE ? '/home/demo' : (process.env.HOME || '/root'),
+            env: {
+                ...process.env,
+                TERM: 'xterm-256color',
+                COLORTERM: 'truecolor',
+                LANG: 'en_US.UTF-8',
+                // Force buffer flushing for better alternate buffer handling
+                STDBUF: 'L',
+                // Ensure proper handling of alternate buffer in applications
+                TERM_PROGRAM: 'xterm-256color'
+            }
+        });
+    } catch (error) {
+        // A failed spawn (bad SHELL, broken node-pty install) must not take down every other session
+        console.error(`Failed to start terminal shell "${shell}":`, error.message);
+        ws.close(1011, 'Failed to start terminal');
+        return;
+    }
 
     debugLog(`Terminal created with PID: ${term.pid}${DEMO_MODE ? ' (Demo Mode)' : ''}`);
 
