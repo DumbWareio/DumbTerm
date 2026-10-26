@@ -166,6 +166,22 @@ describe('terminal control sequences', () => {
         return saves;
     }
 
+    // Open a tab restored from saved content, as loadSessionState does, once xterm has parsed it
+    async function restoreSession(content) {
+        const restored = TerminalManager.prototype.initTerminal.call(
+            { terminalAddons: new Map(), saveSessionState() {} }, {}, content);
+        await new Promise((resolve) => {
+            restored.write('', resolve);
+            mock.timers.runAll();
+        });
+        return restored;
+    }
+
+    function bufferLines(restored) {
+        const buffer = restored.buffer.active;
+        return Array.from({ length: buffer.length }, (_, row) => buffer.getLine(row).translateToString(true));
+    }
+
     // The shell runs `vim notes.txt`; vim switches to the alternate screen and turns bracketed paste on
     async function openVim() {
         await receiveOutput('$ ls\r\nfile1\r\n\x1b[?2004h$ ');
@@ -280,13 +296,8 @@ describe('terminal control sequences', () => {
         await openVim();
         terminal.input('i');
 
-        const restored = TerminalManager.prototype.initTerminal.call(
-            { terminalAddons: new Map(), saveSessionState() {} }, {}, saves.at(-1));
+        const restored = await restoreSession(saves.at(-1));
         try {
-            await new Promise((resolve) => {
-                restored.write('', resolve);
-                mock.timers.runAll();
-            });
             assert.equal(restored.buffer.active.type, 'normal');
             assert.equal(restored.buffer.active.getLine(2).translateToString(true), '$ vim notes.txt');
         } finally {
@@ -395,5 +406,18 @@ describe('terminal control sequences', () => {
         await receiveOutput('make\r\n\x1b[?2004l');
         await receiveOutput('BUILD DONE');
         assert.match(saves.at(-1), /\$ make\nBUILD DONE\n$/);
+    });
+
+    test('a session saved with an editor open by an earlier version restores without the editor', async () => {
+        // Before 1.3.0 such a save held the switch to the alternate screen, followed by the editor's screen
+        const restored = await restoreSession(
+            '$ ls\nfile1\n$ vim notes.txt\x1b[1B\x1b[15D\x1b[?1049h\x1b[HVIM SCREEN\n~\n');
+        try {
+            assert.equal(restored.buffer.active.type, 'normal');
+            assert.deepEqual(bufferLines(restored).slice(0, 3), ['$ ls', 'file1', '$ vim notes.txt']);
+            assert.ok(!bufferLines(restored).some((line) => line.includes('VIM SCREEN')));
+        } finally {
+            restored.dispose();
+        }
     });
 });
