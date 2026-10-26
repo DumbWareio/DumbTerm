@@ -136,6 +136,8 @@ Then run:
 docker compose up -d
 ```
 
+To update to the latest version later, run `docker compose pull && docker compose up -d`.
+
 ### Option 3: Running Locally (For Developers)
 
 - Local method will use your local terminal environment (Windows: Powershell, Mac / Linux: bash).
