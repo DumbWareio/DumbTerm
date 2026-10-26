@@ -611,6 +611,8 @@ export default class TerminalManager {
             termProgram: 'xterm-256color',
             // Add these new options for better control sequence handling
             smoothScrollDuration: 0,
+            // xterm.js 6 scrolls ~50px per wheel notch (the browser's native scroll was ~100px), so double it
+            scrollSensitivity: 2,
             fastScrollSensitivity: 5,
             // Better handling of alternative screen buffer
             altClickMovesCursor: true,
@@ -649,11 +651,18 @@ export default class TerminalManager {
         terminal.loadAddon(serializeAddon);
 
         // Try to load WebGL first. xterm.js 6 removed the canvas renderer, so if WebGL is
-        // unavailable or its context is lost, disposing the addon falls back to the built-in DOM renderer
+        // unavailable or its context is lost, disposing the addon falls back to the built-in DOM renderer.
+        // The ligatures addon is only for WebGL: the DOM renderer already draws ligatures from the font
+        // (font-feature-settings in styles.css), and the addon's joined runs overflow its cells.
+        let webglActive = false;
+        let ligaturesAddon = null;
         try {
             terminal.loadAddon(webglAddon);
+            webglActive = true;
             webglAddon.onContextLoss(() => {
                 console.warn('WebGL context lost, falling back to DOM renderer');
+                webglActive = false;
+                ligaturesAddon?.dispose();
                 webglAddon.dispose();
             });
         } catch (e) {
@@ -666,9 +675,16 @@ export default class TerminalManager {
 
         // addon-ligatures only ships an ES module build, so it is imported on demand.
         // Ligatures are cosmetic: a failure here must never stop the terminal from working.
-        import('../node_modules/@xterm/addon-ligatures/lib/addon-ligatures.mjs')
-            .then(({ LigaturesAddon }) => terminal.loadAddon(new LigaturesAddon()))
-            .catch(e => console.warn('Ligatures addon could not be loaded:', e));
+        if (webglActive) {
+            import('../node_modules/@xterm/addon-ligatures/lib/addon-ligatures.mjs')
+                .then(({ LigaturesAddon }) => {
+                    // WebGL may have been lost while the module was loading
+                    if (!webglActive) return;
+                    ligaturesAddon = new LigaturesAddon();
+                    terminal.loadAddon(ligaturesAddon);
+                })
+                .catch(e => console.warn('Ligatures addon could not be loaded:', e));
+        }
 
         // Initial fit
         fitAddon.fit();
