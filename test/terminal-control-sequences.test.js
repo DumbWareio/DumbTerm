@@ -385,6 +385,26 @@ describe('terminal control sequences', () => {
             ['top line', '% print -P "%F{green}# pass 12%f"', '# pass 12', 'top line', '']);
     });
 
+    test('a saved session keeps a REPL\'s coloured result and leaves out its prompt', async () => {
+        // The node REPL does not turn bracketed paste on, so its prompt is found by its look
+        const saves = recordSavedSessions();
+        await receiveOutput('Welcome to Node.js v24.15.0.\r\nType ".help" for more information.\r\n\x1b[1G\x1b[0J> \x1b[3G6*7\r\r\n');
+        await receiveOutput('\x1b[33m42\x1b[39m\r\n\x1b[1G\x1b[0J> ');
+
+        assert.deepEqual(savedLines(saves.at(-1)),
+            ['Welcome to Node.js v24.15.0.', 'Type ".help" for more information.', '> 6*7', '42', '']);
+        assert.match(saves.at(-1), /\x1b\[33m42/, 'the result keeps its colour');
+    });
+
+    test('a saved session leaves out a coloured user@host prompt from a shell without bracketed paste', async () => {
+        // e.g. bash before 5.1 with Debian's coloured prompt
+        const saves = recordSavedSessions();
+        const prompt = '\x1b[01;32muser@host\x1b[00m:\x1b[01;34m~\x1b[00m$ ';
+        await receiveOutput(`${prompt}ls\r\nfile1\r\n${prompt}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['user@host:~$ ls', 'file1', '']);
+    });
+
     test('a saved session leaves out the prompt the shell is idle at after a long output', async () => {
         // More output than the scrollback holds: lines leave the top of the buffer as the prompt is printed
         const saves = recordSavedSessions();
@@ -488,7 +508,6 @@ describe('terminal control sequences', () => {
     test('a restored tab\'s new shell does not inherit the colour a running command left on', async () => {
         const saves = recordSavedSessions();
         await receiveOutput('\x1b[?2004h$ make\r\n\x1b[?2004l');
-        // (colour from the line's start would make the line look like a coloured prompt, which is left out)
         await receiveOutput('ERROR: \x1b[31;7mbuild failed');
 
         await withRestoredPrompt(saves.at(-1), (restored) => {

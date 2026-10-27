@@ -982,7 +982,8 @@ export default class TerminalManager {
                             let lastContentLineIndex = -1;
                             let seenNonPrompt = false;
                             
-                            // Common prompt patterns
+                            // Common prompt patterns, matched against the line's text without its colours (a
+                            // line is not a prompt for starting with a colour: output often does)
                             const promptPatterns = [
                                 // Standard prompt patterns (user@host:path$, root@host:dir#, etc.)
                                 /^.*@.*[:~][#$>]\s*$/,
@@ -991,9 +992,7 @@ export default class TerminalManager {
                                 // Simple $ or # or > prompts
                                 /^[$#>]\s*$/,
                                 // PS1 with directory
-                                /^\w+:\s*[\w/~]+[$#>]\s*$/,
-                                // Starship or other ANSI-colored prompts
-                                /^\s*\u001b\[\d+(?:;\d+)*m/
+                                /^\w+:\s*[\w/~]+[$#>]\s*$/
                             ];
 
                             for (let i = lines.length - 1; i >= 0; i--) {
@@ -1005,7 +1004,8 @@ export default class TerminalManager {
                                 
                                 // At a prompt, the rows kept all come before it; otherwise (a command is
                                 // running, or the shell has no bracketed paste) a prompt is found by its look
-                                const isPrompt = !idleAtPrompt && promptPatterns.some(pattern => pattern.test(line));
+                                const text = line.replace(/\u001b\[[\d;]*m/g, '');
+                                const isPrompt = !idleAtPrompt && promptPatterns.some(pattern => pattern.test(text));
                                 
                                 if (!isPrompt) {
                                     lastContentLineIndex = i;
