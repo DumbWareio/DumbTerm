@@ -469,6 +469,38 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)).slice(-3), ['line 5098', 'line 5099', '']);
     });
 
+    // An app in the normal screen that turns bracketed paste on once and keeps printing below, as Claude Code
+    // starts (captured from 2.1.311)
+    const APP_START = '\x1b[?2004h$ claude\r\n\x1b[?2004l\r\x1b7\x1b[r\x1b8\x1b[?25h\x1b[?25l\x1b[?2004h\x1b[?2031h\x1b[?1004h'
+        + 'Welcome to Claude Code\r\r\n';
+    const appLines = (count) => Array.from({ length: count }, (_, i) => ` transcript line ${i}\r\n`).join('');
+
+    test('a saved session keeps the output of an app that left bracketed paste on', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput(`${APP_START}${appLines(40)}> type here`);
+
+        const lines = savedLines(saves.at(-1));
+        assert.ok(lines.includes('Welcome to Claude Code'));
+        assert.deepEqual(lines.slice(-3), [' transcript line 38', ' transcript line 39', '']);
+    });
+
+    test('a saved session keeps an app\'s output from five rows below where it turned bracketed paste on', async () => {
+        // Five rows down is further than a prompt and its typed input reach
+        const saves = recordSavedSessions();
+        await receiveOutput(`${APP_START}${appLines(4)}> type here`);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(-3), [' transcript line 2', ' transcript line 3', '']);
+    });
+
+    test('a saved session leaves out a Starship prompt with a half-typed command three rows long', async () => {
+        // The cursor is four rows below the marked row: the prompt's blank and top lines, then three rows of input
+        const saves = recordSavedSessions();
+        await receiveOutput(`${STARSHIP_PROMPT}ls\r\n\x1b[?2004l\rfile1\r\n`);
+        await receiveOutput(`${STARSHIP_PROMPT}echo ${'x'.repeat(170)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['', plain(STARSHIP_TOP_LINE), '❯ ls', 'file1', '']);
+    });
+
     test('a saved session leaves out the prompt redrawn at the top of a cleared screen', async () => {
         // Ctrl-L clears the screen, and with it the row the shell marked, and redraws the prompt without
         // turning bracketed paste on again

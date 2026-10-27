@@ -4,6 +4,9 @@ const IS_MAC = /mac/i.test(navigator.userAgentData?.platform || navigator.platfo
 
 // Each terminal's marker on the row where its shell last turned bracketed paste on (see initTerminal)
 const promptMarkers = new WeakMap();
+// The furthest the cursor gets below that row at a prompt: the tallest prompt plus a little typed input.
+// Further down, the row is an app's that left bracketed paste on and kept printing (Claude Code)
+const PROMPT_MAX_ROWS_BELOW_MARK = 4;
 
 // Helper function to join paths with base path
 function joinPath(path) {
@@ -963,13 +966,17 @@ export default class TerminalManager {
                         const idleAtPrompt = terminal.modes.bracketedPasteMode && buffer.type === 'normal';
                         if (idleAtPrompt) {
                             // The prompt starts on the row marked when the shell turned bracketed paste on, or on
-                            // the cursor's row if that is higher (zsh marks after its prompt) or the marked row is
-                            // gone (erased by a screen clear, or out of the scrollback). Rows above it are all
-                            // kept, so no prompt patterns here. Known limit: zsh turns it on after the prompt, so
-                            // the upper lines of a multi-line zsh prompt stay in the save
+                            // the cursor's row if that is higher (zsh marks after its prompt), the marked row is
+                            // gone (erased by a screen clear, or out of the scrollback) or it is too far up to be
+                            // the prompt's. Rows above it are all kept, so no prompt patterns here. Known limit:
+                            // zsh turns it on after the prompt, so the upper lines of a multi-line zsh prompt stay
+                            // in the save
                             const cursorRow = buffer.baseY + buffer.cursorY;
                             const marker = promptMarkers.get(terminal);
-                            const promptStart = Math.min(marker && !marker.isDisposed ? marker.line : cursorRow, cursorRow);
+                            const markedRow = marker && !marker.isDisposed ? marker.line : cursorRow;
+                            const promptStart = cursorRow - markedRow <= PROMPT_MAX_ROWS_BELOW_MARK
+                                ? Math.min(markedRow, cursorRow)
+                                : cursorRow;
                             serializedContent = promptStart > 0
                                 ? addons.serializeAddon.serialize({ ...serializeOptions, range: { start: 0, end: promptStart - 1 } })
                                 : '';
