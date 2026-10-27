@@ -1,8 +1,8 @@
 /**
  * Behavioural tests for how a browser terminal tab (public/managers/terminal.js) keeps its connection to the
- * server: how many sockets it opens while the server is away, and what it says meanwhile. Runs the real
- * TerminalManager.initTerminal against the real @xterm/xterm build, on a fake clock, with a stand-in WebSocket
- * whose server the test starts, stops and makes hang.
+ * server: which closes it reconnects after, how many sockets it opens while the server is away, and what it
+ * says meanwhile. Runs the real TerminalManager.initTerminal against the real @xterm/xterm build, on a fake
+ * clock, with a stand-in WebSocket whose server the test starts, stops and makes hang.
  */
 const { describe, test, before, after, beforeEach, afterEach, mock } = require('node:test');
 const assert = require('node:assert/strict');
@@ -237,6 +237,48 @@ describe('terminal connection', () => {
     function socketsSince(socket) {
         return FakeWebSocket.all.slice(FakeWebSocket.all.indexOf(socket) + 1);
     }
+
+    for (const [code, reason] of [[1001, 'shutting down'], [1012, 'restarting']]) {
+        test(`a server ${reason} (${code}) gets the tab a new shell once it is back, without a key typed`, () => {
+            const first = FakeWebSocket.last;
+            server.up = false;
+            first.closes({ code, wasClean: true });
+            wait(3000);
+            server.up = true;
+            wait(10000);
+
+            const reconnected = FakeWebSocket.last;
+            assert.notEqual(reconnected, first, 'the tab reconnected');
+            assert.equal(reconnected.readyState, FakeWebSocket.OPEN);
+            assert.equal(reconnected.count('resize'), 1, 'and told the new shell its size');
+            assert.equal(linesSaying(CLOSED_NORMALLY), 0);
+            assert.equal(linesSaying(LOST), 1, 'said so once');
+        });
+    }
+
+    // Guards: these closes were final before, and stay final
+    for (const [code, what] of [[1005, 'the shell exits'], [1000, 'the server closes normally'],
+        [1011, 'the shell fails to start']]) {
+        test(`when ${what} (${code}) the tab stays closed until a key is typed`, () => {
+            const first = FakeWebSocket.last;
+            first.closes({ code, wasClean: true });
+            wait(60000);
+
+            assert.equal(FakeWebSocket.last, first, 'no new socket');
+            assert.equal(linesSaying(CLOSED_NORMALLY), 1);
+            assert.equal(linesSaying(LOST), 0);
+        });
+    }
+
+    // Guard
+    test('a refused login (1008) sends the page to the login page and does not reconnect', () => {
+        const first = FakeWebSocket.last;
+        first.closes({ code: 1008, wasClean: true });
+        wait(60000);
+
+        assert.equal(window.location.href, 'login');
+        assert.equal(FakeWebSocket.last, first, 'no new socket');
+    });
 
     test('an outage of hung and refused attempts ends with one connection, and never more than one connecting', () => {
         const first = FakeWebSocket.last;
