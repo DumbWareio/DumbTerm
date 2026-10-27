@@ -696,7 +696,11 @@ export default class TerminalManager {
         // Restore saved content if available
         if (savedContent) {
             try {
-                terminal.write(savedContent);
+                // Saves from before 1.3.0 can hold an open editor's screen after the switch to it; the new
+                // shell has no editor open, so restore only what came before. Reset the text attributes before
+                // the final newline, so the colours the old program left set neither carry into the new shell's
+                // prompt nor fill the row that newline scrolls in
+                terminal.write(savedContent.split('\x1b[?1049h')[0].replace(/\n?$/, '\x1b[0m$&'));
             } catch (e) {
                 console.warn('Failed to restore terminal content:', e);
             }
@@ -728,6 +732,13 @@ export default class TerminalManager {
                 clearTimeout(connectionTimeout);
                 reconnectAttempts = 0;
 
+                // Each connection gets a new shell, so an editor open on the old one is gone with it, and so are
+                // the modes it set: DECSTR shows the cursor and resets the cursor keys and keypad, and the mouse
+                // and focus reports are turned off on their own
+                if (terminal.buffer.active.type === 'alternate') {
+                    terminal.write('\x1b[?1049l\x1b[!p\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l');
+                }
+
                 if (ws.readyState === WebSocket.OPEN) {                 
                     // Force an initial resize to ensure proper dimensions
                     setTimeout(() => {
@@ -752,34 +763,21 @@ export default class TerminalManager {
                 ws.close();
             };
 
-            let isInAlternateBuffer = false;
-            
             ws.onmessage = (event) => {
                 try {
                     const message = JSON.parse(event.data);
                     if (message.type === 'output') {
-                        if (message.data.includes('\x1b[?1049h')) {
-                            // Entering alternate buffer (editor mode)
-                            terminal.altBuffer = true;
-                        } else if (message.data.includes('\x1b[?1049l')) {
-                            // Exiting alternate buffer (editor mode)
-                            terminal.altBuffer = false;
-                            // Force a save after exiting editor mode
-                            setTimeout(() => {
-                                self.saveSessionState();
-                            }, 100);
-                        }
-                        
-                        // Always write the data
-                        terminal.write(message.data);
-                        
-                        // Only save state if not in alternate buffer
-                        if (!terminal.altBuffer) {
+                        terminal.write(message.data, () => {
+                            // Save once the shell's output settles. An editor's redraws neither arm nor postpone
+                            // it: the save leaves the editor's screen out, and the timer is shared by every tab
+                            if (terminal.buffer.active.type !== 'normal') {
+                                return;
+                            }
                             clearTimeout(self.saveTimeout);
                             self.saveTimeout = setTimeout(() => {
                                 self.saveSessionState();
                             }, 500);
-                        }
+                        });
                     }
                 } catch (e) {
                     console.error('Error processing message:', e);
@@ -928,11 +926,6 @@ export default class TerminalManager {
     }
 
     saveSessionState() {
-        // Skip saving if terminal is in alternate buffer mode
-        if (this.isInAlternateBuffer) {
-            return;
-        }
-
         const sessionState = {
             activeTabId: this.activeTabId,
             tabCounter: this.tabCounter,
@@ -943,10 +936,15 @@ export default class TerminalManager {
                 if (addons && addons.serializeAddon) {
                     try {
                         // A restored tab runs a fresh shell, so leave out the modes the old program set
-                        // (e.g. insert mode), which would otherwise switch on again in the new session
-                        serializedContent = addons.serializeAddon.serialize({ excludeModes: true });
+                        // (e.g. insert mode), which would otherwise switch on again in the new session. An open
+                        // editor's screen goes too: what is saved is the shell's screen underneath it
+                        serializedContent = addons.serializeAddon.serialize({ excludeModes: true, excludeAltBuffer: true });
                         if (serializedContent) {
                             const lines = serializedContent.split(/\r?\n/);
+                            // The serializer ends by moving the cursor back to where it was (and setting its
+                            // colours), on a row of its own when the cursor is above the bottom; restored, that
+                            // would leave blank rows, or a blank line after the newline added below
+                            lines[lines.length - 1] = lines[lines.length - 1].replace(/(?:\u001b\[[\d;]*[ABCDm])+$/, '');
                             let lastContentLineIndex = -1;
                             let seenNonPrompt = false;
                             
@@ -961,15 +959,14 @@ export default class TerminalManager {
                                 // PS1 with directory
                                 /^\w+:\s*[\w/~]+[$#>]\s*$/,
                                 // Starship or other ANSI-colored prompts
-                                /^\s*\u001b\[\d+(?:;\d+)*m/,
-                                // The alternate-screen switch SerializeAddon writes while an editor is open
-                                /\u001b\[\?\d+[hl]/
+                                /^\s*\u001b\[\d+(?:;\d+)*m/
                             ];
 
                             // Bracketed paste is on while the shell sits in its line editor, so the last line
                             // is its prompt (with any half-typed command), whatever the prompt looks like; the
-                            // restored tab's new shell prints its own
-                            let dropCursorLine = terminal.modes.bracketedPasteMode;
+                            // restored tab's new shell prints its own. In the alternate buffer it is the
+                            // editor's (vim turns it on), and the last line is the command that started it
+                            let dropCursorLine = terminal.modes.bracketedPasteMode && terminal.buffer.active.type === 'normal';
                             
                             for (let i = lines.length - 1; i >= 0; i--) {
                                 const line = lines[i].trimEnd();

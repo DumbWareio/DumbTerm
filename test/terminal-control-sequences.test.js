@@ -89,6 +89,7 @@ function installBrowserGlobals() {
 
 describe('terminal control sequences', () => {
     let TerminalManager;
+    let manager;
     let terminal;
 
     let originalGlobals;
@@ -109,11 +110,15 @@ describe('terminal control sequences', () => {
     beforeEach(() => {
         // initTerminal arms reconnect, heartbeat and session-save timers; keep them from outliving the test
         mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+        // xterm schedules its parsing with setTimeout(fn) and no delay, which the mock runs out of order (after
+        // the page's 500ms session save) once other timers are pending; give it the 0 a browser would
+        const mockedSetTimeout = globalThis.setTimeout;
+        globalThis.setTimeout = (callback, delay = 0, ...args) => mockedSetTimeout(callback, delay, ...args);
         // The WebGL fallback warning is expected here
         mock.method(console, 'warn', () => {});
 
         // initTerminal only needs these from its manager; the constructor builds the whole tab UI
-        const manager = { terminalAddons: new Map(), saveSessionState() {} };
+        manager = { terminalAddons: new Map(), saveSessionState() {} };
         terminal = TerminalManager.prototype.initTerminal.call(manager, {});
     });
 
@@ -123,17 +128,103 @@ describe('terminal control sequences', () => {
         mock.restoreAll();
     });
 
-    // Deliver shell output the way the server does, then wait for xterm to parse it
-    function receiveOutput(data) {
+    // Deliver shell output the way the server does, wait for xterm to parse it, then run the timers the
+    // page armed once it had (the session save)
+    async function receiveOutput(data) {
         FakeWebSocket.last.onmessage({ data: JSON.stringify({ type: 'output', data }) });
-        return new Promise((resolve) => {
+        await new Promise((resolve) => {
             terminal.write('', resolve);
             mock.timers.runAll();
         });
+        mock.timers.runAll();
+    }
+
+    // Deliver shell output and let xterm parse it, leaving the page's own timers to mock.timers.tick
+    function deliverOutput(data) {
+        FakeWebSocket.last.onmessage({ data: JSON.stringify({ type: 'output', data }) });
+        mock.timers.tick(0);
     }
 
     function screenLine(row) {
         return terminal.buffer.active.getLine(row).translateToString(true);
+    }
+
+    // Let the terminal's own saves (on a keystroke, and the debounced one after output) run the real
+    // saveSessionState with the real SerializeAddon; returns the saved content of each save, in order
+    function recordSavedSessions() {
+        const serializeAddon = new RealSerializeAddon();
+        terminal.loadAddon(serializeAddon);
+        const saves = [];
+        Object.assign(manager, {
+            activeTabId: 1,
+            tabCounter: 2,
+            terminals: new Map([[1, { tab: { querySelector: () => ({ textContent: 'Term1' }) }, terminal }]]),
+            storageManager: { set: (key, value) => { saves.push(value.terminals[0].content); } },
+            saveSessionState: TerminalManager.prototype.saveSessionState,
+        });
+        manager.terminalAddons.set(terminal, { serializeAddon });
+        return saves;
+    }
+
+    // Open a tab restored from saved content, as loadSessionState does, once xterm has parsed it
+    async function restoreSession(content) {
+        const restored = TerminalManager.prototype.initTerminal.call(
+            { terminalAddons: new Map(), saveSessionState() {} }, {}, content);
+        await new Promise((resolve) => {
+            restored.write('', resolve);
+            mock.timers.runAll();
+        });
+        return restored;
+    }
+
+    function bufferLines(restored) {
+        const buffer = restored.buffer.active;
+        return Array.from({ length: buffer.length }, (_, row) => buffer.getLine(row).translateToString(true));
+    }
+
+    // Restore saved content, open the tab's connection and let its new shell print a prompt, then check the tab
+    async function withRestoredPrompt(content, check) {
+        const restored = await restoreSession(content);
+        try {
+            FakeWebSocket.last.onopen();
+            await new Promise((resolve) => {
+                restored.write('\x1b[?2004h$ ', resolve);
+                mock.timers.runAll();
+            });
+            check(restored);
+        } finally {
+            restored.dispose();
+        }
+    }
+
+    // The row the cursor is on, counted from the top of the scrollback
+    function cursorRow(restored) {
+        return restored.buffer.active.baseY + restored.buffer.active.cursorY;
+    }
+
+    function cellAt(restored, row, col) {
+        return restored.buffer.active.getLine(row).getCell(col);
+    }
+
+    // The socket drops and the page reconnects; the server kills a socket's shell when it closes, so the
+    // new connection talks to a new shell
+    function reconnect() {
+        const oldSocket = FakeWebSocket.last;
+        oldSocket.readyState = FakeWebSocket.CLOSED;
+        oldSocket.onclose({ code: 1006, wasClean: false });
+        mock.timers.tick(1000);
+        assert.notEqual(FakeWebSocket.last, oldSocket, 'the page reconnected');
+        FakeWebSocket.last.onopen();
+    }
+
+    // More output than the screen holds, so the rest is in the scrollback
+    const SCREENFULS = Array.from({ length: 40 }, (_, i) => `line ${i}\r\n`).join('');
+
+    // The shell runs `vim notes.txt`; vim switches to the alternate screen and turns bracketed paste on
+    async function openVim() {
+        await receiveOutput('$ ls\r\nfile1\r\n\x1b[?2004h$ ');
+        await receiveOutput('vim notes.txt\r\n\x1b[?2004l');
+        await receiveOutput('\x1b[?1049h\x1b[?2004h\x1b[H\x1b[2JVIM SCREEN\r\n~\r\n~');
     }
 
     test('insert mode (SM/RM 4, terminfo smir/rmir) inserts text instead of overwriting it', async () => {
@@ -220,10 +311,249 @@ describe('terminal control sequences', () => {
     test('alternate screen (DECSET/DECRST 1049) still switches buffers for editors', async () => {
         await receiveOutput('\x1b[?1049h');
         assert.equal(terminal.buffer.active.type, 'alternate');
-        assert.equal(terminal.altBuffer, true, 'editor output is kept out of the saved session');
 
         await receiveOutput('\x1b[?1049l');
         assert.equal(terminal.buffer.active.type, 'normal');
-        assert.equal(terminal.altBuffer, false);
+    });
+
+    test('a session saved while an editor is open keeps the shell screen, not the editor\'s', async () => {
+        const saves = recordSavedSessions();
+        await openVim();
+
+        const savesBefore = saves.length;
+        terminal.input('i');
+        assert.equal(saves.length, savesBefore + 1, 'the keystroke saved the session');
+        const content = saves.at(-1);
+        assert.doesNotMatch(content, /VIM SCREEN/);
+        assert.ok(!content.includes('\x1b[?1049h'), 'the switch to the alternate screen is not saved');
+        assert.match(content, /^\$ ls\nfile1\n\$ vim notes\.txt/, 'the shell output, including the editor command, is kept');
+    });
+
+    test('a session saved while an editor is open restores into the normal screen', async () => {
+        const saves = recordSavedSessions();
+        await openVim();
+        terminal.input('i');
+
+        const restored = await restoreSession(saves.at(-1));
+        try {
+            assert.equal(restored.buffer.active.type, 'normal');
+            assert.equal(restored.buffer.active.getLine(2).translateToString(true), '$ vim notes.txt');
+        } finally {
+            restored.dispose();
+        }
+    });
+
+    test('a session saved while an editor is open restores with no blank line before the new prompt', async () => {
+        // The serializer ends the screen by moving the cursor back to where it was, here the row below
+        const saves = recordSavedSessions();
+        await openVim();
+        terminal.input('i');
+
+        await withRestoredPrompt(saves.at(-1), (restored) => {
+            assert.deepEqual(bufferLines(restored).slice(0, 4), ['$ ls', 'file1', '$ vim notes.txt', '$ ']);
+        });
+    });
+
+    test('a restored tab\'s new shell does not inherit an open editor\'s text attributes', async () => {
+        const saves = recordSavedSessions();
+        await openVim();
+        await receiveOutput('\x1b[31;7m-- INSERT --');
+        terminal.input('i');
+
+        await withRestoredPrompt(saves.at(-1), (restored) => {
+            assert.deepEqual(bufferLines(restored).slice(0, 4), ['$ ls', 'file1', '$ vim notes.txt', '$ ']);
+            const prompt = cellAt(restored, 3, 0);
+            assert.equal(prompt.isInverse(), 0);
+            assert.equal(prompt.getFgColorMode(), 0, 'default foreground');
+        });
+    });
+
+    test('a restored tab\'s new shell does not inherit the colour a running command left on', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput('\x1b[?2004h$ make\r\n\x1b[?2004l');
+        // (colour from the line's start would make the line look like a coloured prompt, which is left out)
+        await receiveOutput('ERROR: \x1b[31;7mbuild failed');
+
+        await withRestoredPrompt(saves.at(-1), (restored) => {
+            assert.deepEqual(bufferLines(restored).slice(0, 3), ['$ make', 'ERROR: build failed', '$ ']);
+            assert.notEqual(cellAt(restored, 1, 7).isInverse(), 0, 'the output keeps its colours');
+            const prompt = cellAt(restored, 2, 0);
+            assert.equal(prompt.isInverse(), 0);
+            assert.equal(prompt.getFgColorMode(), 0, 'default foreground');
+        });
+    });
+
+    test('a session saved after the screen was cleared restores without a screen of blank rows', async () => {
+        // Ctrl-L clears the screen and keeps the scrollback, leaving the cursor near the top; the serializer
+        // then ends the save by moving the cursor back up, on a row of its own below the blank rows
+        const saves = recordSavedSessions();
+        await receiveOutput(`${SCREENFULS}\x1b[?2004h$ `);
+        await receiveOutput('\x1b[H\x1b[2J$ ');
+        await receiveOutput('vim notes.txt\r\n\x1b[?2004l');
+        await receiveOutput('\x1b[?1049h\x1b[?2004h\x1b[H\x1b[2JVIM SCREEN\r\n~\r\n~');
+        terminal.input('i');
+
+        await withRestoredPrompt(saves.at(-1), (restored) => {
+            const lines = bufferLines(restored);
+            const prompt = cursorRow(restored);
+            assert.deepEqual(lines.slice(prompt - 1, prompt + 1), ['$ vim notes.txt', '$ ']);
+        });
+    });
+
+    // Restoring a screenful scrolls on the final newline, and xterm fills the new row with the background
+    // colour set at that point; the output's last colour must not end up across the new prompt's row
+    for (const [kind, output] of [['reset', 'Result: \x1b[41m FAIL \x1b[0m'], ['left on', 'Result: \x1b[41m FAIL']]) {
+        test(`a restored tab's new prompt row has the default background (output colour ${kind})`, async () => {
+            const saves = recordSavedSessions();
+            await receiveOutput(`${SCREENFULS}\x1b[?2004h$ npm test\r\n\x1b[?2004l`);
+            await receiveOutput(output);
+
+            await withRestoredPrompt(saves.at(-1), (restored) => {
+                for (const col of [8, 20, 40, 79]) {
+                    assert.ok(cellAt(restored, cursorRow(restored), col).isBgDefault(), `column ${col}`);
+                }
+            });
+        });
+    }
+
+    test('a restored tab keeps a coloured bar the output erased to the end of the bottom row', async () => {
+        // With the cursor still on it, the serializer ends the save with the erase (ECH), not a cursor move
+        const saves = recordSavedSessions();
+        await receiveOutput(`${SCREENFULS}\x1b[?2004h$ make\r\n\x1b[?2004l`);
+        await receiveOutput('status: \x1b[44m building\x1b[K');
+        assert.match(saves.at(-1), /\x1b\[63X\n$/);
+
+        await withRestoredPrompt(saves.at(-1), (restored) => {
+            const bar = cursorRow(restored) - 1;
+            assert.equal(bufferLines(restored)[bar], 'status:  building');
+            assert.ok(!cellAt(restored, bar, 40).isBgDefault(), 'the erased cells keep the bar\'s colour');
+        });
+    });
+
+    test('output after an editor opens and closes within one message is still saved', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput('$ ls\r\nfile1\r\n');
+        await receiveOutput('\x1b[?1049h\x1b[HVIM SCREEN\x1b[?1049l');
+        await receiveOutput('$ make\r\nbuilding');
+
+        assert.equal(saves.at(-1), '$ ls\nfile1\n$ make\nbuilding\n');
+    });
+
+    test('the save after output leaves out an editor whose screen switch arrives split across messages', async () => {
+        // The shell's output arms the save, which fires once vim is open
+        const saves = recordSavedSessions();
+        deliverOutput('$ ls\r\nfile1\r\n$ vim notes.txt\r\n\x1b[?10');
+        deliverOutput('49h\x1b[H\x1b[2JVIM SCREEN\r\n~\r\n~');
+        assert.equal(terminal.buffer.active.type, 'alternate');
+        assert.equal(saves.length, 0);
+
+        mock.timers.tick(500);
+        assert.equal(saves.length, 1, 'the save ran with the editor open');
+        assert.doesNotMatch(saves[0], /VIM SCREEN/);
+    });
+
+    test('the save after output leaves out an editor on the 1047 alternate screen', async () => {
+        const saves = recordSavedSessions();
+        deliverOutput('$ ls\r\nfile1\r\n$ vim notes.txt\r\n');
+        deliverOutput('\x1b[?1047h\x1b[H\x1b[2JVIM SCREEN\r\n~\r\n~');
+        assert.equal(terminal.buffer.active.type, 'alternate');
+        assert.equal(saves.length, 0);
+
+        mock.timers.tick(500);
+        assert.equal(saves.length, 1, 'the save ran with the editor open');
+        assert.doesNotMatch(saves[0], /VIM SCREEN/);
+    });
+
+    test('the save after an editor exits stores the shell screen', async () => {
+        const saves = recordSavedSessions();
+        await openVim();
+        await receiveOutput('\x1b[?2004l\x1b[?1049l');
+        await receiveOutput('\x1b[?2004h$ ');
+
+        assert.equal(terminal.buffer.active.type, 'normal');
+        assert.equal(saves.at(-1), '$ ls\nfile1\n$ vim notes.txt\n');
+    });
+
+    test('the session is saved 500ms after the shell\'s output stops', async () => {
+        const saves = recordSavedSessions();
+        deliverOutput('$ make\r\nbuilding\r\n');
+        mock.timers.tick(499);
+        assert.equal(saves.length, 0);
+        mock.timers.tick(1);
+        assert.equal(saves.length, 1);
+
+        // More output before the 500ms are up postpones the save
+        deliverOutput('step 2\r\n');
+        mock.timers.tick(200);
+        deliverOutput('BUILD DONE');
+        mock.timers.tick(499);
+        assert.equal(saves.length, 1);
+        mock.timers.tick(1);
+        assert.equal(saves.length, 2);
+        assert.match(saves[1], /BUILD DONE\n$/);
+    });
+
+    test('an editor\'s redraws neither postpone nor repeat the save', async () => {
+        // A full-screen program redrawing more often than every 500ms (htop, a progress view) must not
+        // keep the debounced save, shared by every tab, from running
+        const saves = recordSavedSessions();
+        deliverOutput('$ make\r\nBUILD DONE\r\n');
+        mock.timers.tick(200);
+        deliverOutput('$ htop\r\n\x1b[?1049h\x1b[H\x1b[2JFRAME 0');
+        mock.timers.tick(200);
+        deliverOutput('\x1b[HFRAME 1');
+        mock.timers.tick(99);
+        assert.equal(saves.length, 0);
+        mock.timers.tick(1);
+        assert.equal(saves.length, 1, 'saved 500ms after the shell\'s output');
+        assert.match(saves[0], /BUILD DONE\n\$ htop/);
+
+        for (let frame = 2; frame < 10; frame++) {
+            deliverOutput(`\x1b[HFRAME ${frame}`);
+            mock.timers.tick(200);
+        }
+        assert.equal(saves.length, 1, 'the redraws arm no save of their own');
+    });
+
+    test('reconnecting while an editor is open leaves its screen for the new shell\'s', async () => {
+        const saves = recordSavedSessions();
+        await openVim();
+        reconnect();
+
+        await receiveOutput('\x1b[?2004h$ ');
+        assert.equal(terminal.buffer.active.type, 'normal');
+        await receiveOutput('make\r\n\x1b[?2004l');
+        await receiveOutput('BUILD DONE');
+        assert.deepEqual(bufferLines(terminal).slice(0, 5), ['$ ls', 'file1', '$ vim notes.txt', '$ make', 'BUILD DONE'],
+            'the new shell carries on under the line that started the editor');
+        assert.match(saves.at(-1), /\$ make\nBUILD DONE\n$/);
+    });
+
+    test('reconnecting while an editor is open turns off the modes the editor set', async () => {
+        await receiveOutput('$ ls\r\nfile1\r\n$ vim notes.txt\r\n');
+        await receiveOutput('\x1b[?1049h\x1b[?25l\x1b[?1h\x1b=\x1b[?1000h\x1b[?1006h\x1b[?1004h\x1b[H\x1b[2JVIM SCREEN');
+        reconnect();
+        await receiveOutput('\x1b[?2004h$ ');
+
+        // xterm.js has no public read of cursor visibility or the mouse report encoding
+        assert.equal(terminal._core.coreService.isCursorHidden, false, 'cursor shown');
+        assert.equal(terminal.modes.applicationCursorKeysMode, false);
+        assert.equal(terminal.modes.applicationKeypadMode, false);
+        assert.equal(terminal.modes.mouseTrackingMode, 'none');
+        assert.equal(terminal._core.coreMouseService.activeEncoding, 'DEFAULT', 'SGR mouse encoding off');
+        assert.equal(terminal.modes.sendFocusMode, false);
+    });
+
+    test('a session saved with an editor open by an earlier version restores without the editor', async () => {
+        // Before 1.3.0 such a save held the switch to the alternate screen, followed by the editor's screen
+        const restored = await restoreSession(
+            '$ ls\nfile1\n$ vim notes.txt\x1b[1B\x1b[15D\x1b[?1049h\x1b[HVIM SCREEN\n~\n');
+        try {
+            assert.equal(restored.buffer.active.type, 'normal');
+            assert.deepEqual(bufferLines(restored).slice(0, 3), ['$ ls', 'file1', '$ vim notes.txt']);
+            assert.ok(!bufferLines(restored).some((line) => line.includes('VIM SCREEN')));
+        } finally {
+            restored.dispose();
+        }
     });
 });
