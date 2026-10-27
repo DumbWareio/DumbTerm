@@ -565,6 +565,37 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)), ['$ ls', 'file1', '']);
     });
 
+    test('a saved session leaves out a Starship prompt redrawn below a completion listing and typed on', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput(`${starshipCompletion('ls /tmp/d/')}al`);
+
+        assert.equal(saves.at(-1), '');
+    });
+
+    test('a saved session keeps an app\'s rows five down from a blank row where it turned bracketed paste on', async () => {
+        // The rows looked at for a redrawn prompt stop short of the app's own first line
+        const saves = recordSavedSessions();
+        await receiveOutput('$ app\r\n\x1b[?2004h\r\nWelcome\r\nA\r\nB\r\nC\r\n> ');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '', 'Welcome', 'A', 'B', 'C', '']);
+    });
+
+    test('a saved session keeps the output of an app that starts with two blank rows and prints its input line again', async () => {
+        // Only one blank row is skipped to find a prompt's first line
+        const saves = recordSavedSessions();
+        await receiveOutput('$ chat\r\n\x1b[?2004h\r\n\r\n> hi\r\nhello\r\nhow can I help?\r\n> ');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ chat', '', '', '> hi', 'hello', 'how can I help?', '']);
+    });
+
+    test('a saved session keeps the output of an app that starts with two blank rows and ends on blank rows', async () => {
+        // A prompt starts with text: blank rows do not make a redrawn one
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n\x1b[?2004h\r\n\r\nWelcome\r\n${appLines(5)}\r\n`);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(-3), [' transcript line 3', ' transcript line 4', '']);
+    });
+
     test('a saved session keeps a background job\'s output printed at a Starship prompt before a completion listing', async () => {
         // Captured from bash 5.2: the job prints at the idle prompt, then Tab-Tab redraws the prompt below it
         const saves = recordSavedSessions();
