@@ -180,7 +180,7 @@ function installBrowserGlobals() {
 const LOST = 'Connection lost. Attempting to reconnect...';
 const NOT_AVAILABLE = 'Connection not available. Attempting to reconnect...';
 const CLOSED_NORMALLY = 'Connection closed normally.';
-const REFRESH = 'Connection lost. Please refresh the page to reconnect.';
+const RAN_OUT = 'Connection lost. Press any key to reconnect, or refresh the page.';
 
 describe('terminal connection', () => {
     let TerminalManager;
@@ -362,7 +362,7 @@ describe('terminal connection', () => {
         // Each attempt is given up after 5s, then retried 1, 2, 4, 8 and 16s on
         assert.deepEqual(socketsSince(first).map((socket) => socket.createdAt), [1000, 8000, 17000, 30000, 51000]);
         assert.equal(FakeWebSocket.mostConnecting, 1, 'never more than one connecting at a time');
-        assert.equal(linesSaying(REFRESH), 1);
+        assert.equal(linesSaying(RAN_OUT), 1);
     });
 
     test('keys typed while the tab reconnects open no socket of their own and say nothing more', () => {
@@ -452,7 +452,7 @@ describe('terminal connection', () => {
         first.closes({ code: 1001, wasClean: true });
         wait(60000);
         assert.equal(socketsSince(first).length, 5, 'five retries');
-        assert.equal(linesSaying(REFRESH), 1);
+        assert.equal(linesSaying(RAN_OUT), 1);
 
         server.up = true;
         type('a');
@@ -461,7 +461,24 @@ describe('terminal connection', () => {
         assert.equal(socketsSince(first).length, 6, 'one more socket');
         assert.equal(FakeWebSocket.last.readyState, FakeWebSocket.OPEN);
         assert.deepEqual(FakeWebSocket.last.inputs(), [], 'the keys are dropped');
-        assert.equal(linesSaying(LOST) + linesSaying(NOT_AVAILABLE), 1, 'one line for the whole outage');
+    });
+
+    test('once the retries run out, the first key says once that the tab is reconnecting', () => {
+        const first = FakeWebSocket.last;
+        server.up = false;
+        first.closes({ code: 1006, wasClean: false });
+        wait(60000);
+        assert.equal(linesSaying(NOT_AVAILABLE), 0);
+
+        type('a');
+        type('b');
+        wait(10);
+        type('c');
+        assert.equal(socketsSince(first).length, 6, 'one socket for the keys');
+        assert.equal(linesSaying(NOT_AVAILABLE), 1);
+        assert.equal(linesSaying(LOST), 1, 'and the round the key started says nothing more');
+        wait(60000);
+        assert.equal(linesSaying(NOT_AVAILABLE) + linesSaying(LOST), 2);
     });
 
     test('once the retries run out, a key while the server is still away starts a new round of them', () => {
@@ -477,7 +494,7 @@ describe('terminal connection', () => {
         // Retried 1, 2, 4, 8 and 16s after each refusal, as the first round was
         assert.deepEqual(socketsSince(keyed).map((socket) => socket.createdAt - 60000), [1050, 3100, 7150, 15200, 31250]);
         assert.equal(FakeWebSocket.mostConnecting, 1);
-        assert.equal(linesSaying(REFRESH), 2);
+        assert.equal(linesSaying(RAN_OUT), 2);
     });
 
     test('a key typed after a retry is refused opens one socket, and a late close of the old one starts nothing', () => {
@@ -518,7 +535,7 @@ describe('terminal connection', () => {
         assert.deepEqual(socketsSince(first).map((socket) => socket.createdAt),
             [1000, 3050, 4000, 5050, 7100, 11150, 19200, 35250]);
         assert.equal(FakeWebSocket.mostConnecting, 1);
-        assert.equal(linesSaying(REFRESH), 1);
+        assert.equal(linesSaying(RAN_OUT), 1);
     });
 
     test('coming back to the page while a retry waits gets the tab back as soon as the server is', () => {

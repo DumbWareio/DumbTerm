@@ -933,7 +933,10 @@ export default class TerminalManager {
                     connectWebSocket();
                 }, delay);
             } else {
-                terminal.writeln('\r\nConnection lost. Please refresh the page to reconnect.');
+                // The retries have run out, and the tab waits for a key to start a new round of them, which says
+                // that it is reconnecting
+                outageReported = false;
+                terminal.writeln('\r\nConnection lost. Press any key to reconnect, or refresh the page.');
             }
         }
 
