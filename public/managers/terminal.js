@@ -2,7 +2,8 @@ import StorageManager from './storage.js';
 
 const IS_MAC = /mac/i.test(navigator.userAgentData?.platform || navigator.platform || '');
 
-// Each terminal's marker on the row where its shell last turned bracketed paste on (see initTerminal)
+// Where each terminal's prompt starts (see initTerminal): a marker and the number of rows below it, or no
+// marker for the buffer's first row
 const promptMarkers = new WeakMap();
 // The furthest the cursor gets below that row at a prompt: the tallest prompt plus a little typed input.
 // Further down, the row is an app's that left bracketed paste on and kept printing (Claude Code)
@@ -662,8 +663,23 @@ export default class TerminalManager {
         terminal.parser.registerCsiHandler({ prefix: '?', final: 'h' }, (params) => {
             const buffer = terminal.buffer.active;
             if (params.includes(2004) && buffer.type === 'normal') {
-                promptMarkers.get(terminal)?.dispose();
-                promptMarkers.set(terminal, terminal.registerMarker(buffer.cursorX === 0 ? 0 : 1));
+                promptMarkers.get(terminal)?.marker?.dispose();
+                promptMarkers.set(terminal, { marker: terminal.registerMarker(buffer.cursorX === 0 ? 0 : 1), rowsBelow: 0 });
+            }
+            return false;
+        });
+
+        // Ctrl-L at a prompt clears the screen (CSI 2 J), erasing the marked row, and the shell redraws its whole
+        // prompt from the top without turning bracketed paste on again. A marker on the top row would be erased
+        // too, so mark the row above it, the end of the scrollback, or with no scrollback the buffer's first row.
+        // Returns false so xterm.js still clears the screen
+        terminal.parser.registerCsiHandler({ final: 'J' }, (params) => {
+            const buffer = terminal.buffer.active;
+            if (params[0] === 2 && terminal.modes.bracketedPasteMode && buffer.type === 'normal') {
+                promptMarkers.get(terminal)?.marker?.dispose();
+                promptMarkers.set(terminal, buffer.baseY > 0
+                    ? { marker: terminal.registerMarker(-buffer.cursorY - 1), rowsBelow: 1 }
+                    : { marker: null, rowsBelow: 0 });
             }
             return false;
         });
@@ -972,8 +988,10 @@ export default class TerminalManager {
                             // zsh turns it on after the prompt, so the upper lines of a multi-line zsh prompt stay
                             // in the save
                             const cursorRow = buffer.baseY + buffer.cursorY;
-                            const marker = promptMarkers.get(terminal);
-                            const markedRow = marker && !marker.isDisposed ? marker.line : cursorRow;
+                            const mark = promptMarkers.get(terminal);
+                            const markedRow = !mark ? cursorRow
+                                : !mark.marker ? 0
+                                : mark.marker.isDisposed ? cursorRow : mark.marker.line + mark.rowsBelow;
                             const promptStart = cursorRow - markedRow <= PROMPT_MAX_ROWS_BELOW_MARK
                                 ? Math.min(markedRow, cursorRow)
                                 : cursorRow;

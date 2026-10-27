@@ -511,6 +511,38 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)).slice(-3), ['line 15', 'line 16', '']);
     });
 
+    // bash 5.2's Ctrl-L under Starship (captured): it clears the screen and redraws the whole prompt from the
+    // top, without turning bracketed paste on again
+    const STARSHIP_CTRL_L = `\x1b[H\x1b[2J${STARSHIP_PROMPT.replace('\x1b[?2004h', '')}`;
+
+    test('a saved session leaves out a Starship prompt redrawn by Ctrl-L', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput(`${STARSHIP_PROMPT}ls /app/config\r\n\x1b[?2004l\rstarship.toml\r\n`);
+        await receiveOutput(`${STARSHIP_PROMPT}${STARSHIP_CTRL_L}`);
+
+        assert.equal(saves.at(-1), '');
+    });
+
+    test('a saved session keeps the scrollback above a Starship prompt redrawn by Ctrl-L', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput(`${SCREENFULS}${STARSHIP_PROMPT}ls /app/config\r\n\x1b[?2004l\rstarship.toml\r\n`);
+        await receiveOutput(`${STARSHIP_PROMPT}${STARSHIP_CTRL_L}`);
+
+        const lines = savedLines(saves.at(-1));
+        assert.deepEqual(lines.slice(-3), ['line 21', 'line 22', '']);
+        assert.ok(!lines.includes(plain(STARSHIP_TOP_LINE)), 'the prompt\'s top line is left out');
+    });
+
+    test('a saved session keeps the output above a zsh prompt that erases below itself', async () => {
+        // zsh erases below the prompt (CSI J) to clear away a completion listing
+        const saves = recordSavedSessions();
+        await receiveOutput(zshPrompt('CH-M4-MINI% '));
+        await receiveOutput(ZSH_PRINT_PASS);
+        await receiveOutput(`${zshPrompt('CH-M4-MINI% ')}\x1b[J`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['CH-M4-MINI% print -P "%F{green}# pass 12%f"', '# pass 12', '']);
+    });
+
     test('a saved session leaves out a prompt redrawn above the row the shell marked', async () => {
         // The cursor is on the prompt, so it starts no lower than the cursor's row, here with the marked row
         // left in place below it
