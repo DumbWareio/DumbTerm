@@ -490,7 +490,8 @@ describe('terminal connection', () => {
         assert.equal(linesSaying(LOST) + linesSaying(NOT_AVAILABLE), lines, 'nothing said about the old socket');
     });
 
-    test('coming back to the page while a retry waits leaves it to that retry', () => {
+    // A laptop waking up while the tab waits out its backoff
+    test('coming back to the page while a retry waits connects at once, with the retries renewed', () => {
         const first = FakeWebSocket.last;
         server.up = false;
         first.closes({ code: 1006, wasClean: false });
@@ -499,8 +500,65 @@ describe('terminal connection', () => {
         document.fire('visibilitychange');
         wait(60000);
 
-        // Retried 1, 2, 4, 8 and 16s after each refusal, as if the page had never been away
+        // Then retried 1, 2, 4, 8 and 16s after each refusal; the retry that waited is called off
+        assert.deepEqual(socketsSince(first).map((socket) => socket.createdAt),
+            [1000, 3050, 4000, 5050, 7100, 11150, 19200, 35250]);
+        assert.equal(FakeWebSocket.mostConnecting, 1);
+        assert.equal(linesSaying(REFRESH), 1);
+    });
+
+    test('coming back to the page while a retry waits gets the tab back as soon as the server is', () => {
+        const first = FakeWebSocket.last;
+        server.up = false;
+        first.closes({ code: 1006, wasClean: false });
+        wait(4000);
+        server.up = true;
+        document.fire('visibilitychange');
+        wait(60000);
+
+        assert.deepEqual(socketsSince(first).map((socket) => socket.createdAt), [1000, 3050, 4000]);
+        assert.deepEqual(FakeWebSocket.open, [FakeWebSocket.last]);
+    });
+
+    test('coming back to the page while an attempt connects leaves the retries after it as they were', () => {
+        const first = FakeWebSocket.last;
+        server.up = false;
+        first.closes({ code: 1006, wasClean: false });
+        // Refused at 1s; the second attempt, at 3s, hangs until the page gives up on it at 8s
+        wait(2000);
+        server.hang = true;
+        wait(2000);
+        document.fire('visibilitychange');
+        server.hang = false;
+        wait(60000);
+
+        assert.deepEqual(socketsSince(first).map((socket) => socket.createdAt), [1000, 3050, 12050, 20100, 36150]);
+    });
+
+    test('a page that is hidden leaves a waiting retry to its backoff', () => {
+        const first = FakeWebSocket.last;
+        server.up = false;
+        first.closes({ code: 1006, wasClean: false });
+        wait(4000);
+        document.visibilityState = 'hidden';
+        document.fire('visibilitychange');
+        wait(60000);
+
         assert.deepEqual(socketsSince(first).map((socket) => socket.createdAt), [1000, 3050, 7100, 15150, 31200]);
+    });
+
+    test('coming back to the page while the tab connects or is connected opens no second socket', () => {
+        const first = FakeWebSocket.last;
+        document.fire('visibilitychange');
+        assert.equal(FakeWebSocket.last, first, 'none while connected');
+
+        server.hang = true;
+        first.closes({ code: 1006, wasClean: false });
+        wait(1000);
+        const connecting = FakeWebSocket.last;
+        assert.equal(connecting.readyState, FakeWebSocket.CONNECTING);
+        document.fire('visibilitychange');
+        assert.equal(FakeWebSocket.last, connecting, 'none while connecting');
         assert.equal(FakeWebSocket.mostConnecting, 1);
     });
 

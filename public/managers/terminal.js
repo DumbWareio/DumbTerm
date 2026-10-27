@@ -985,9 +985,15 @@ export default class TerminalManager {
         });
 
         // Handle page visibility changes: coming back to the page reconnects a tab whose connection ended, with
-        // its retries renewed, and leaves one underway to finish
+        // its retries renewed. A retry waiting out its backoff is called off for it, as the page may have been
+        // away (a laptop asleep) for longer than the wait; a socket connecting or open is left to finish
         const onVisibilityChange = () => {
-            if (document.visibilityState === 'visible' && !connectionUnderway()) {
+            if (document.visibilityState !== 'visible') {
+                return;
+            }
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+            if (!connectionUnderway()) {
                 reconnectAttempts = 0;
                 connectWebSocket();
             }
