@@ -153,9 +153,11 @@ function installBrowserGlobals() {
         location: { protocol: 'http:', host: 'localhost', href: '' },
         appConfig: { basePath: '' },
     });
+    const body = { querySelectorAll: () => [] };
     globalThis.document = listeningTarget({
         documentElement: {},
-        body: { querySelectorAll: () => [] },
+        body,
+        activeElement: body,
         visibilityState: 'visible',
     });
     globalThis.getComputedStyle = () => ({ getPropertyValue: () => '' });
@@ -176,6 +178,11 @@ function installBrowserGlobals() {
     globalThis.SerializeAddon = { SerializeAddon: StubAddon };
     globalThis.Unicode11Addon = { Unicode11Addon };
 }
+
+// What can have the keyboard: a terminal's textarea is inside the page's terminals container, the search box
+// and the input for renaming a tab are not
+const TERMINAL_TEXTAREA = { closest: (selector) => (selector === '.terminals-container' ? {} : null) };
+const SEARCH_BOX = { closest: () => null };
 
 const LOST = 'Connection lost. Attempting to reconnect...';
 const NOT_AVAILABLE = 'Connection not available. Attempting to reconnect...';
@@ -663,6 +670,35 @@ describe('terminal connection', () => {
         assert.equal(FakeWebSocket.last.readyState, FakeWebSocket.OPEN, 'the tab reconnected');
         assert.equal(terminal.focusedWithReports.length, focused + 1);
     });
+
+    // The search box, or the input for renaming a tab, keeps the keyboard: what is typed there next would
+    // otherwise run in the shell
+    test('the tab in front leaves the keyboard to the search box when it reconnects', () => {
+        manager.activeTabId = 1;
+        document.activeElement = SEARCH_BOX;
+        const focused = terminal.focusedWithReports.length;
+        FakeWebSocket.last.closes({ code: 1001, wasClean: true });
+        wait(2000);
+
+        assert.equal(FakeWebSocket.last.readyState, FakeWebSocket.OPEN, 'the tab reconnected');
+        assert.equal(terminal.focusedWithReports.length, focused);
+    });
+
+    // Guards: from nothing, the page, or a terminal, the tab in front takes it. The terminal can be its own or
+    // a hidden tab's (one that had it before a tab switch); either is in the terminals container
+    for (const [what, focusedElement] of [['nothing', () => null], ['the page', () => document.body],
+        ['a terminal', () => TERMINAL_TEXTAREA]]) {
+        test(`the tab in front takes the keyboard from ${what} when it reconnects`, () => {
+            manager.activeTabId = 1;
+            document.activeElement = focusedElement();
+            const focused = terminal.focusedWithReports.length;
+            FakeWebSocket.last.closes({ code: 1001, wasClean: true });
+            wait(2000);
+
+            assert.equal(FakeWebSocket.last.readyState, FakeWebSocket.OPEN, 'the tab reconnected');
+            assert.equal(terminal.focusedWithReports.length, focused + 1);
+        });
+    }
 
     // vim turns focus reports on; the new shell would read the report as typed text
     test('the tab in front takes the keyboard once the focus reports a program turned on are off', () => {

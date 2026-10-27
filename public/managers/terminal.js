@@ -840,9 +840,13 @@ export default class TerminalManager {
                 }
                 // Only the tab in front takes the keyboard: the others are hidden but still in the page, and
                 // keys typed into one would run in a shell nobody can see. It takes it once the reset is applied,
-                // or a program's focus reports would still be on and the new shell would read one as typed text
+                // or a program's focus reports would still be on and the new shell would read one as typed text,
+                // and only from nothing or a terminal: the search box or a tab's name being edited keeps it, or
+                // what is typed there next would run in the shell
                 terminal.write('\x1b[!p\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l', () => {
-                    if (self.terminals.get(self.activeTabId)?.terminal === terminal) {
+                    const focused = document.activeElement;
+                    if (self.terminals.get(self.activeTabId)?.terminal === terminal
+                        && (!focused || focused === document.body || focused.closest('.terminals-container'))) {
                         terminal.focus();
                     }
                 });
