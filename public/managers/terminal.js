@@ -684,9 +684,15 @@ export default class TerminalManager {
         // Ctrl-L at a prompt clears the screen (CSI 2 J), erasing the marked row, and the shell redraws its whole
         // prompt from the top without turning bracketed paste on again. A marker on the top row would be erased
         // too, so mark the row above it, the end of the scrollback, or with no scrollback the buffer's first row.
-        // Returns false so xterm.js still clears the screen
+        // Returns false so xterm.js still clears the screen. readline's clear-display follows with CSI 3 J, which
+        // clears the scrollback and that row with it: the prompt is then on the buffer's first row
         terminal.parser.registerCsiHandler({ final: 'J' }, (params) => {
             const buffer = terminal.buffer.active;
+            const mark = promptMarkers.get(terminal);
+            if (params[0] === 3 && mark?.rowsBelow === 1 && !mark.marker.isDisposed && mark.marker.line === buffer.baseY - 1) {
+                mark.marker.dispose();
+                promptMarkers.set(terminal, { marker: null, rowsBelow: 0 });
+            }
             if (params[0] === 2 && terminal.modes.bracketedPasteMode && buffer.type === 'normal') {
                 promptMarkers.get(terminal)?.marker?.dispose();
                 promptMarkers.set(terminal, buffer.baseY > 0

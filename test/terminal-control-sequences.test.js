@@ -597,6 +597,25 @@ describe('terminal control sequences', () => {
         assert.ok(!lines.includes(plain(STARSHIP_TOP_LINE)), 'the prompt\'s top line is left out');
     });
 
+    test('a saved session leaves out a Starship prompt redrawn by readline\'s clear-display', async () => {
+        // M-C-l (captured from bash 5.2) clears the scrollback as well (CSI 3 J), and with it the row above the screen
+        const saves = recordSavedSessions();
+        await receiveOutput(`${SCREENFULS}${STARSHIP_PROMPT}echo hi\r\n\x1b[?2004l\rhi\r\n`);
+        await receiveOutput(`${STARSHIP_PROMPT}\x1b[H\x1b[2J\x1b[3J${STARSHIP_REDRAW}`);
+
+        assert.equal(saves.at(-1), '');
+    });
+
+    test('a saved session keeps the scrollback above a two-line zsh prompt redrawn by Ctrl-L', async () => {
+        // zsh 5.9's Ctrl-L (captured) erases below the cursor (CSI J) after clearing the screen, keeping the scrollback
+        const saves = recordSavedSessions();
+        const twoLinePrompt = zshPrompt('\x1b[34mtop line\x1b[39m\r\n% ');
+        await receiveOutput(`${SCREENFULS}${twoLinePrompt}`);
+        await receiveOutput('\x1b[H\x1b[2J\x1b[0m\x1b[27m\x1b[24m\x1b[J\x1b[34mtop line\x1b[39m\r\n% \x1b[K');
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(-3), ['line 16', 'line 17', '']);
+    });
+
     test('a saved session keeps the output above a zsh prompt that erases below itself', async () => {
         // zsh erases below the prompt (CSI J) to clear away a completion listing
         const saves = recordSavedSessions();
