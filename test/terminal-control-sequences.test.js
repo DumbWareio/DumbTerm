@@ -308,6 +308,567 @@ describe('terminal control sequences', () => {
         assert.equal(saved.terminals[0].content, 'chris@mbp DumbTerm % make\nbuilding\nstep 2 of 9\n');
     });
 
+    // Prompts as real shells print them (captured for issue #39). bash 5.2 with Starship, the Docker image's
+    // default: readline turns bracketed paste on before the prompt, which starts with a blank line
+    const STARSHIP_TOP_LINE = '\x1b[38;2;163;174;210m\u2591\u2592\u2593\x1b[48;2;163;174;210;38;2;9;12;12m \uf306 '
+        + '\x1b[48;2;118;159;240;38;2;163;174;210m\ue0b4\x1b[38;2;227;229;229m /app \x1b[48;2;57;66;96;38;2;118;159;240m'
+        + '\ue0b4\x1b[48;2;33;39;54;38;2;57;66;96m\ue0b4\x1b[38;2;118;159;240m \ue718 v24.22.1 '
+        + '\x1b[48;2;29;34;48;38;2;33;39;54m\ue0b4\x1b[38;2;160;169;203m \uf43a 10:55 PM \x1b[0m\x1b[38;2;29;34;48m\ue0b4 \x1b[0m';
+    const STARSHIP_PROMPT = `\x1b[?2004h\r\n${STARSHIP_TOP_LINE}\r\n\x1b[1;32m\u276f\x1b[0m `;
+    const PRINTF_PASS = 'printf "\\033[32m# pass 12\\033[0m\\n"';
+    // zsh 5.9 marks a partial last line (PROMPT_SP), then prints the prompt and turns bracketed paste on after it
+    const ZSH_PROMPT_SP = `\x1b[1m\x1b[7m%\x1b[27m\x1b[1m\x1b[0m${' '.repeat(79)}\r \r\r\x1b[0m\x1b[27m\x1b[24m\x1b[J`;
+    const zshPrompt = (prompt) => `${ZSH_PROMPT_SP}${prompt}\x1b[K\x1b[?2004h`;
+    const ZSH_PRINT_PASS = 'p\bprint -P "%F{green}# pass 12%f"\x1b[?2004l\r\r\n\x1b[32m# pass 12\x1b[39m\r\n';
+
+    // The text of each saved line, without its colours
+    function savedLines(content) {
+        return content.replace(/\x1b\[[\d;?]*[A-Za-z]/g, '').split('\n').map((line) => line.trimEnd());
+    }
+    const plain = (text) => savedLines(text)[0];
+
+    test('a saved session keeps the last command and its coloured output under a Starship prompt', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput(`${STARSHIP_PROMPT}echo hello\r\n\x1b[?2004l\rhello\r\n`);
+        await receiveOutput(`${STARSHIP_PROMPT}${PRINTF_PASS}\r\n\x1b[?2004l\r\x1b[32m# pass 12\x1b[0m\r\n`);
+        await receiveOutput(STARSHIP_PROMPT);
+
+        const top = plain(STARSHIP_TOP_LINE);
+        assert.deepEqual(savedLines(saves.at(-1)),
+            ['', top, '\u276f echo hello', 'hello', '', top, `\u276f ${PRINTF_PASS}`, '# pass 12', '']);
+        assert.match(saves.at(-1), /\x1b\[32m# pass 12/, 'the output keeps its colour');
+    });
+
+    test('a saved session keeps output with no final newline above a Starship prompt', async () => {
+        // bash turns bracketed paste on with the cursor still after the output, and Starship's newline follows
+        const saves = recordSavedSessions();
+        await receiveOutput(`${STARSHIP_PROMPT}printf hello\r\n\x1b[?2004l\rhello`);
+        await receiveOutput(STARSHIP_PROMPT);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['', plain(STARSHIP_TOP_LINE), '❯ printf hello', 'hello', '']);
+    });
+
+    test('a saved session keeps output with no final newline above a Starship prompt at the bottom of the screen', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput(`${SCREENFULS}${STARSHIP_PROMPT}printf hello\r\n\x1b[?2004l\rhello`);
+        await receiveOutput(STARSHIP_PROMPT);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(-4), [plain(STARSHIP_TOP_LINE), '❯ printf hello', 'hello', '']);
+    });
+
+    test('a saved session leaves out a plain prompt printed on the same row as output with no final newline', async () => {
+        // The row holds both; it goes, as before
+        const saves = recordSavedSessions();
+        await receiveOutput('\x1b[?2004h$ ls\r\n\x1b[?2004l\rfile1\r\n');
+        await receiveOutput('\x1b[?2004h$ printf hello\r\n\x1b[?2004l\rhello\x1b[?2004h$ ');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ ls', 'file1', '$ printf hello', '']);
+    });
+
+    test('a saved session leaves out every line of a two-line bash prompt', async () => {
+        // A prompt with no blank line first, e.g. PS1='\u@\h \w\n\$ ': bash marks its top line
+        const saves = recordSavedSessions();
+        const prompt = '\x1b[?2004hchris@box ~/app\r\n$ ';
+        await receiveOutput(`${prompt}ls\r\n\x1b[?2004l\rfile1\r\n`);
+        await receiveOutput(prompt);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['chris@box ~/app', '$ ls', 'file1', '']);
+    });
+
+    test('a saved session leaves out the whole Starship prompt the shell is idle at', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput(`${STARSHIP_PROMPT}echo hello\r\n\x1b[?2004l\rhello\r\n`);
+        await receiveOutput(STARSHIP_PROMPT);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['', plain(STARSHIP_TOP_LINE), '\u276f echo hello', 'hello', '']);
+    });
+
+    test('a saved session keeps output that looks like a prompt above the prompt the shell is idle at', async () => {
+        // The rows above the prompt are all kept, whatever they look like
+        const saves = recordSavedSessions();
+        await receiveOutput('\x1b[?2004h$ echo \'>\'\r\n\x1b[?2004l>\r\n\x1b[?2004h$ ');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ echo \'>\'', '>', '']);
+    });
+
+    test('a session saved at a Starship prompt restores with the new prompt under the output, in default colours', async () => {
+        const saves = recordSavedSessions();
+        // The output leaves its background colour on
+        await receiveOutput(`${STARSHIP_PROMPT}printf "\\033[41m FAIL\\n"\r\n\x1b[?2004l\r\x1b[41m FAIL\r\n`);
+        await receiveOutput(STARSHIP_PROMPT);
+
+        await withRestoredPrompt(saves.at(-1), (restored) => {
+            const prompt = cursorRow(restored);
+            assert.deepEqual(bufferLines(restored).slice(prompt - 1, prompt + 1), [' FAIL', '$ ']);
+            assert.ok(cellAt(restored, prompt - 1, 1).getBgColor() > 0, 'the output keeps its colour');
+            assert.ok(cellAt(restored, prompt, 0).isBgDefault(), 'default background');
+            assert.ok(cellAt(restored, prompt, 10).isBgDefault(), 'default background across the row');
+        });
+    });
+
+    test('a saved session keeps a coloured output line above a zsh prompt', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput(zshPrompt('host% '));
+        await receiveOutput(ZSH_PRINT_PASS);
+        await receiveOutput(zshPrompt('host% '));
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['host% print -P "%F{green}# pass 12%f"', '# pass 12', '']);
+        assert.match(saves.at(-1), /\x1b\[32m# pass 12/, 'the output keeps its colour');
+    });
+
+    test('a saved session keeps the output above a two-line zsh prompt, and that prompt\'s top line', async () => {
+        // zsh turns bracketed paste on after its prompt, which marks only the last line of it: the known
+        // limit is that the line above stays in the save. Pinned so that changing it is deliberate
+        const saves = recordSavedSessions();
+        const twoLinePrompt = zshPrompt('\x1b[34mtop line\x1b[39m\r\n% ');
+        await receiveOutput(twoLinePrompt);
+        await receiveOutput(ZSH_PRINT_PASS);
+        await receiveOutput(twoLinePrompt);
+
+        assert.deepEqual(savedLines(saves.at(-1)),
+            ['top line', '% print -P "%F{green}# pass 12%f"', '# pass 12', 'top line', '']);
+    });
+
+    test('a saved session keeps a REPL\'s coloured result and leaves out its prompt', async () => {
+        // The node REPL does not turn bracketed paste on, so its prompt is found by its look
+        const saves = recordSavedSessions();
+        await receiveOutput('Welcome to Node.js v24.15.0.\r\nType ".help" for more information.\r\n\x1b[1G\x1b[0J> \x1b[3G6*7\r\r\n');
+        await receiveOutput('\x1b[33m42\x1b[39m\r\n\x1b[1G\x1b[0J> ');
+
+        assert.deepEqual(savedLines(saves.at(-1)),
+            ['Welcome to Node.js v24.15.0.', 'Type ".help" for more information.', '> 6*7', '42', '']);
+        assert.match(saves.at(-1), /\x1b\[33m42/, 'the result keeps its colour');
+    });
+
+    test('a saved session leaves out a coloured user@host prompt from a shell without bracketed paste', async () => {
+        // e.g. bash before 5.1 with Debian's coloured prompt
+        const saves = recordSavedSessions();
+        const prompt = '\x1b[01;32muser@host\x1b[00m:\x1b[01;34m~\x1b[00m$ ';
+        await receiveOutput(`${prompt}ls\r\nfile1\r\n${prompt}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['user@host:~$ ls', 'file1', '']);
+    });
+
+    test('a saved session leaves out a host:dir prompt in several colours from a shell without bracketed paste', async () => {
+        // e.g. BusyBox ash with PS1='\[\e[1;32m\]\h\[\e[0m\]:\[\e[1;34m\]\w\[\e[0m\]\$ '
+        const saves = recordSavedSessions();
+        const prompt = '\x1b[1;32mhost\x1b[0m:\x1b[1;34m~\x1b[0m$ ';
+        await receiveOutput(`ls\r\nfile1\r\n${prompt}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['ls', 'file1', '']);
+    });
+
+    test('a saved session leaves out a Starship prompt after the cursor is hidden and shown again', async () => {
+        // readline hides and shows the cursor (CSI ? 25 l/h) while it sits at the prompt; only 2004 marks it
+        const saves = recordSavedSessions();
+        await receiveOutput(`${STARSHIP_PROMPT}ls\r\n\x1b[?2004l\rfile1\r\n`);
+        await receiveOutput(`${STARSHIP_PROMPT}\x1b[?25l\x1b[?25h`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['', plain(STARSHIP_TOP_LINE), '\u276f ls', 'file1', '']);
+    });
+
+    test('a saved session leaves out the prompt the shell is idle at after a long output', async () => {
+        // More output than the scrollback holds: lines leave the top of the buffer as the prompt is printed
+        const saves = recordSavedSessions();
+        await receiveOutput(Array.from({ length: 5100 }, (_, i) => `line ${i}\r\n`).join(''));
+        await receiveOutput(STARSHIP_PROMPT);
+
+        const lines = savedLines(saves.at(-1));
+        assert.deepEqual(lines.slice(-3), ['line 5098', 'line 5099', '']);
+        assert.ok(!lines.includes(plain(STARSHIP_TOP_LINE)), 'the prompt\'s top line is left out');
+    });
+
+    test('a saved session keeps output that pushed the prompt out of the scrollback', async () => {
+        // A background job prints while the shell sits at its prompt, until the prompt's row leaves the buffer
+        const saves = recordSavedSessions();
+        await receiveOutput('\x1b[?2004h$ ');
+        await receiveOutput(Array.from({ length: 5100 }, (_, i) => `line ${i}\r\n`).join(''));
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(-3), ['line 5098', 'line 5099', '']);
+    });
+
+    // An app in the normal screen that turns bracketed paste on once and keeps printing below, as Claude Code
+    // starts (captured from 2.1.311)
+    const APP_START = '\x1b[?2004h$ claude\r\n\x1b[?2004l\r\x1b7\x1b[r\x1b8\x1b[?25h\x1b[?25l\x1b[?2004h\x1b[?2031h\x1b[?1004h'
+        + 'Welcome to Claude Code\r\r\n';
+    const appLines = (count) => Array.from({ length: count }, (_, i) => ` transcript line ${i}\r\n`).join('');
+
+    test('a saved session keeps the output of an app that left bracketed paste on', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput(`${APP_START}${appLines(40)}> type here`);
+
+        const lines = savedLines(saves.at(-1));
+        assert.ok(lines.includes('Welcome to Claude Code'));
+        assert.deepEqual(lines.slice(-3), [' transcript line 38', ' transcript line 39', '']);
+    });
+
+    test('a saved session keeps an app\'s output from five rows below where it turned bracketed paste on', async () => {
+        // Five rows down is further than a prompt and its typed input reach
+        const saves = recordSavedSessions();
+        await receiveOutput(`${APP_START}${appLines(4)}> type here`);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(-3), [' transcript line 2', ' transcript line 3', '']);
+    });
+
+    test('a saved session keeps the output of an app that started with blank rows', async () => {
+        // A blank row above the app's input line is no sign of a prompt redrawn there
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n\x1b[?2004h\r\n\r\nWelcome\r\n${appLines(40)}\r\n> type here`);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(-3), [' transcript line 38', ' transcript line 39', '']);
+    });
+
+    test('a saved session leaves out a Starship prompt with a half-typed command three rows long', async () => {
+        // The cursor is four rows below the marked row: the prompt's blank and top lines, then three rows of input
+        const saves = recordSavedSessions();
+        await receiveOutput(`${STARSHIP_PROMPT}ls\r\n\x1b[?2004l\rfile1\r\n`);
+        await receiveOutput(`${STARSHIP_PROMPT}echo ${'x'.repeat(170)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['', plain(STARSHIP_TOP_LINE), '❯ ls', 'file1', '']);
+    });
+
+    // bash 5.2's Tab-Tab under Starship (captured): readline lists the completions under the command, then
+    // redraws the whole prompt below them without turning bracketed paste on again
+    const STARSHIP_REDRAW = STARSHIP_PROMPT.replace('\x1b[?2004h', '');
+    const COMPLETIONS = 'alpha/ beta/  delta/ gamma/ \r\n';
+    const starshipCompletion = (command) => `${STARSHIP_PROMPT}${command}\x07\r\n${COMPLETIONS}${STARSHIP_REDRAW}${command}`;
+
+    test('a saved session leaves out a Starship prompt redrawn below a completion listing', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput(starshipCompletion('ls /tmp/d/'));
+
+        assert.equal(saves.at(-1), '');
+    });
+
+    test('a saved session keeps the scrollback above a Starship prompt redrawn below a completion listing', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput(`${SCREENFULS}${starshipCompletion('ls /tmp/d/')}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(-3), ['line 38', 'line 39', '']);
+    });
+
+    test('a saved session leaves out a Starship prompt redrawn below a completion listing for a long command', async () => {
+        // The redrawn prompt's top line is three rows above the cursor: a command three rows long, the most the
+        // marked prompt allows
+        const saves = recordSavedSessions();
+        await receiveOutput(starshipCompletion(`ls /tmp/${'x'.repeat(160)}/`));
+
+        assert.equal(saves.at(-1), '');
+    });
+
+    test('a saved session leaves out a plain prompt redrawn below a completion listing', async () => {
+        // The prompt's line, with the command as typed, is redrawn on the cursor's row
+        const saves = recordSavedSessions();
+        await receiveOutput('\x1b[?2004h$ ls\r\n\x1b[?2004l\rfile1\r\n');
+        await receiveOutput('\x1b[?2004h$ ls /tmp/d/\x07\r\nalpha/\r\nbeta/\r\ndelta/\r\ngamma/\r\n$ ls /tmp/d/');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ ls', 'file1', '']);
+    });
+
+    test('a saved session leaves out a Starship prompt redrawn below a completion listing and typed on', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput(`${starshipCompletion('ls /tmp/d/')}al`);
+
+        assert.equal(saves.at(-1), '');
+    });
+
+    // Starship's default prompt under bash 5.2 in the Docker image (captured), with no starship.toml
+    const STARSHIP_DEFAULT_TOP_LINE = '\x1b[1;31mroot\x1b[0m in \x1b[1;36m/app\x1b[0m is \x1b[1;38;5;208m\u{1f4e6} v1.3.0\x1b[0m'
+        + ' via \x1b[1;32m v24.22.1 \x1b[0m';
+    const STARSHIP_DEFAULT_PROMPT = `\x1b[?2004h\r\n${STARSHIP_DEFAULT_TOP_LINE}\r\n\x1b[1;2;31m⬢ [Docker]\x1b[0m \x1b[1;32m❯\x1b[0m `;
+
+    test('a saved session leaves out a Starship prompt redrawn below a completion listing and typed on until it wraps', async () => {
+        // Captured from bash 5.2: the command typed at the redrawn prompt wraps, so the cursor is on its second row
+        const saves = recordSavedSessions();
+        await receiveOutput(`${STARSHIP_DEFAULT_PROMPT}echo out\r\n\x1b[?2004l\rout\r\n`);
+        await receiveOutput(`${STARSHIP_DEFAULT_PROMPT}ls /tmp/d/\x07\r\n${COMPLETIONS}`
+            + `${STARSHIP_DEFAULT_PROMPT.replace('\x1b[?2004h', '')}ls /tmp/d/`);
+        await receiveOutput('a'.repeat(94));
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['', plain(STARSHIP_DEFAULT_TOP_LINE), '⬢ [Docker] ❯ echo out', 'out', '']);
+    });
+
+    test('a saved session leaves out a Starship prompt redrawn below a completion listing for a long command typed on onto another row', async () => {
+        // The command already wrapped when the listing was printed: it is two rows long above the listing, three below
+        const saves = recordSavedSessions();
+        await receiveOutput(`${starshipCompletion(`ls /tmp/${'x'.repeat(100)}/`)}${'a'.repeat(70)}`);
+
+        assert.equal(saves.at(-1), '');
+    });
+
+    test('a saved session leaves out a plain prompt redrawn below a completion listing and typed on until it wraps', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput('\x1b[?2004h$ ls\r\n\x1b[?2004l\rfile1\r\n');
+        await receiveOutput(`\x1b[?2004h$ ls /tmp/d/\x07\r\nalpha/\r\nbeta/\r\ndelta/\r\ngamma/\r\n$ ls /tmp/d/${'a'.repeat(75)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ ls', 'file1', '']);
+    });
+
+    test('a saved session leaves out a plain prompt redrawn below a completion listing and typed on to four rows', async () => {
+        // The command starts three rows above the cursor, as high as a redrawn prompt is looked for
+        const saves = recordSavedSessions();
+        await receiveOutput('\x1b[?2004h$ ls\r\n\x1b[?2004l\rfile1\r\n');
+        await receiveOutput(`\x1b[?2004h$ ls /tmp/d/\x07\r\nalpha/\r\nbeta/\r\ndelta/\r\ngamma/\r\n$ ls /tmp/d/${'a'.repeat(300)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ ls', 'file1', '']);
+    });
+
+    test('a saved session keeps an app\'s rows five down from a blank row where it turned bracketed paste on', async () => {
+        // The rows looked at for a redrawn prompt stop short of the app's own first line
+        const saves = recordSavedSessions();
+        await receiveOutput('$ app\r\n\x1b[?2004h\r\nWelcome\r\nA\r\nB\r\nC\r\n> ');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '', 'Welcome', 'A', 'B', 'C', '']);
+    });
+
+    test('a saved session keeps the output of an app that starts with two blank rows and prints its input line again', async () => {
+        // Only one blank row is skipped to find a prompt's first line
+        const saves = recordSavedSessions();
+        await receiveOutput('$ chat\r\n\x1b[?2004h\r\n\r\n> hi\r\nhello\r\nhow can I help?\r\n> ');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ chat', '', '', '> hi', 'hello', 'how can I help?', '']);
+    });
+
+    test('a saved session keeps the output of an app that starts with two blank rows and ends on blank rows', async () => {
+        // A prompt starts with text: blank rows do not make a redrawn one
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n\x1b[?2004h\r\n\r\nWelcome\r\n${appLines(5)}\r\n`);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(-3), [' transcript line 3', ' transcript line 4', '']);
+    });
+
+    test('a saved session keeps a background job\'s output printed at a Starship prompt before a completion listing', async () => {
+        // Captured from bash 5.2: the job prints at the idle prompt, then Tab-Tab redraws the prompt below it
+        const saves = recordSavedSessions();
+        await receiveOutput(`${STARSHIP_PROMPT}(for i in 1 2 3 4 5 6; do sleep 0.2; echo job $i; done) &\r\n\x1b[?2004l\r[1] 117\r\n`);
+        await receiveOutput(`${STARSHIP_PROMPT}job 1\r\njob 2\r\njob 3\r\njob 4\r\njob 5\r\nls /tmp/d/job 6\r\n\x07\r\n`
+            + `${COMPLETIONS}${STARSHIP_REDRAW}ls /tmp/d/`);
+
+        const lines = savedLines(saves.at(-1));
+        const job = lines.indexOf('\u276f job 1');
+        assert.deepEqual(lines.slice(job, job + 6), ['\u276f job 1', 'job 2', 'job 3', 'job 4', 'job 5', 'ls /tmp/d/job 6']);
+    });
+
+    test('a saved session keeps a background job\'s output at a plain prompt when its last row starts with a dollar', async () => {
+        // The prompt's space counts: `$5.00 total` does not start like `$ `
+        const saves = recordSavedSessions();
+        await receiveOutput('\x1b[?2004h$ ');
+        await receiveOutput('\r\n[1] 123\r\napples  2\r\npears   1\r\nplums   3\r\nfigs    1\r\n$5.00 total');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$', '[1] 123', 'apples  2', 'pears   1', 'plums   3', 'figs    1', '']);
+    });
+
+    test('a saved session keeps a background job\'s output at a root prompt when its last row is a progress bar', async () => {
+        // The command starts its row: the `# ` inside a bar of hashes is not the prompt's
+        const saves = recordSavedSessions();
+        await receiveOutput('\x1b[?2004h# ');
+        await receiveOutput('\r\n[1] 123\r\nfile 1 of 4\r\nfile 2 of 4\r\nfile 3 of 4\r\nfile 4 of 4\r\n'
+            + `\r${'#'.repeat(20)}  50.0%\r${'#'.repeat(40)} 100.0%`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['#', '[1] 123', 'file 1 of 4', 'file 2 of 4', 'file 3 of 4', 'file 4 of 4', '']);
+    });
+
+    test('a saved session leaves out a background job\'s output at a root prompt when its last row starts like the prompt', async () => {
+        // Known limit: with no final newline, the job's last row starts with the root prompt's `# `, so it reads
+        // as that prompt redrawn below and typed on, and the save stops above the job's output. Telling the two
+        // apart would also lose the plain prompt typed on, or erased back, after a completion listing. Pinned so
+        // that changing it is deliberate
+        const saves = recordSavedSessions();
+        await receiveOutput('\x1b[?2004h# ');
+        await receiveOutput('\r\n[1] 123\r\njob line 1\r\njob line 2\r\njob line 3\r\njob line 4\r\n# done');
+
+        assert.equal(saves.at(-1), '');
+    });
+
+    test('a saved session leaves out a plain prompt redrawn below a completion listing and typed on', async () => {
+        // Captured from bash 5.2: a listing four rows tall, then `al` typed at the redrawn prompt
+        const saves = recordSavedSessions();
+        const prompt = 'root@6934e2095d8c:/app# ';
+        await receiveOutput(`\x1b[?2004h${prompt}ls\r\n\x1b[?2004l\rfile1\r\n`);
+        await receiveOutput(`\x1b[?2004h${prompt}ls /tmp/e/\x07\r\n`
+            + 'alpha-a-rather-long-directory-name/ eta-a-rather-long-directory-name/\r\n'
+            + 'beta-a-rather-long-directory-name/  gamma-a-rather-long-directory-name/\r\n'
+            + 'delta-a-rather-long-directory-name/ theta-a-rather-long-directory-name/\r\n'
+            + 'eps-a-rather-long-directory-name/   zeta-a-rather-long-directory-name/\r\n'
+            + `${prompt}ls /tmp/e/al`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), [`${prompt}ls`, 'file1', '']);
+    });
+
+    test('a saved session leaves out a plain prompt redrawn below a completion listing and erased back', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput('\x1b[?2004h$ ls\r\n\x1b[?2004l\rfile1\r\n');
+        await receiveOutput('\x1b[?2004h$ ls /tmp/d/\x07\r\nalpha/\r\nbeta/\r\ndelta/\r\ngamma/\r\n$ ls /tmp/d/\b\x1b[K');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ ls', 'file1', '']);
+    });
+
+    test('a saved session keeps the output of an app that draws its first line again above its input line', async () => {
+        const saves = recordSavedSessions();
+        const rule = '\u2500'.repeat(80);
+        await receiveOutput(`$ app\r\n\x1b[?2004h${rule}\r\n${appLines(5)}${rule}\r\n> `);
+
+        assert.deepEqual(savedLines(saves.at(-1)),
+            ['$ app', rule, ...Array.from({ length: 5 }, (_, i) => ` transcript line ${i}`), rule, '']);
+    });
+
+    test('a saved session keeps the output of an app that draws its first line again above an empty cursor row', async () => {
+        // An empty row is not the start of the line the app first drew below its first one
+        const saves = recordSavedSessions();
+        const rule = '─'.repeat(80);
+        await receiveOutput(`$ app\r\n\x1b[?2004h${rule}\r\n${appLines(5)}${rule}\r\n`);
+
+        assert.deepEqual(savedLines(saves.at(-1)),
+            ['$ app', rule, ...Array.from({ length: 5 }, (_, i) => ` transcript line ${i}`), rule, '']);
+    });
+
+    test('a saved session keeps the output of an app that draws its input line again under a different first line', async () => {
+        // Every row of a redrawn prompt has to match, not only the cursor's
+        const saves = recordSavedSessions();
+        await receiveOutput('$ app\r\n\x1b[?2004hTitle\r\n> \r\nr1\r\nr2\r\nr3\r\nr4\r\nOther\r\n> ');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'Title', '>', 'r1', 'r2', 'r3', 'r4', 'Other', '']);
+    });
+
+    test('a saved session keeps the output of an app that draws its first line again under a longer one', async () => {
+        // Only the command may have been typed on: above it, a redrawn prompt's rows equal the marked ones
+        const saves = recordSavedSessions();
+        await receiveOutput('$ app\r\n\x1b[?2004hab\r\n> \r\nr1\r\nr2\r\nr3\r\nabc\r\n> ');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'ab', '>', 'r1', 'r2', 'r3', 'abc', '']);
+    });
+
+    test('a saved session keeps the output of an app that draws its first line again above a typed row, where it first drew an empty one', async () => {
+        // An empty marked row is not a command that the cursor's row was typed on from
+        const saves = recordSavedSessions();
+        await receiveOutput('$ app\r\n\x1b[?2004hTitle\r\n\r\nr1\r\nr2\r\nr3\r\nTitle\r\nsomething');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'Title', '', 'r1', 'r2', 'r3', 'Title', '']);
+    });
+
+    test('a saved session keeps the output of an app that draws its first five lines again', async () => {
+        // Five rows are taller than a prompt and its command: the redrawn prompt is looked for no higher
+        const saves = recordSavedSessions();
+        await receiveOutput('$ app\r\n\x1b[?2004hA\r\nB\r\nC\r\nD\r\nE\r\nr1\r\nA\r\nB\r\nC\r\nD\r\nE');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'A', 'B', 'C', 'D', 'E', 'r1', 'A', 'B', 'C', 'D', '']);
+    });
+
+    test('a saved session keeps the output of an app whose last line starts like its first but differs once it wraps', async () => {
+        // A line is compared whole, with the rows it wraps onto
+        const saves = recordSavedSessions();
+        const fetching = (version) => `fetching https://registry.example.com/packages/a-long-package-name/-/a-long-package-name-${version}.tgz`;
+        await receiveOutput(`$ app\r\n\x1b[?2004h${fetching('1.0.0')}\r\nr1\r\nr2\r\nr3\r\nr4\r\n${fetching('2.0.0')}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(0, 6), ['$ app', fetching('1.0.0'), 'r1', 'r2', 'r3', 'r4']);
+    });
+
+    test('a saved session keeps the output of an app whose last line wraps up from above the rows a prompt reaches', async () => {
+        // The line starts higher than a redrawn prompt is looked for, so its rows there are not a command's first
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n\x1b[?2004h${'='.repeat(80)}\r\nr1\r\nr2\r\n${'='.repeat(400)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(0, 4), ['$ app', '='.repeat(80), 'r1', 'r2']);
+    });
+
+    test('a saved session leaves out the prompt redrawn at the top of a cleared screen', async () => {
+        // Ctrl-L clears the screen, and with it the row the shell marked, and redraws the prompt without
+        // turning bracketed paste on again
+        const saves = recordSavedSessions();
+        await receiveOutput(`${SCREENFULS}\x1b[?2004h$ `);
+        await receiveOutput('\x1b[H\x1b[2J$ ');
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(-3), ['line 15', 'line 16', '']);
+    });
+
+    // bash 5.2's Ctrl-L under Starship (captured): it clears the screen and redraws the whole prompt from the
+    // top, without turning bracketed paste on again
+    const STARSHIP_CTRL_L = `\x1b[H\x1b[2J${STARSHIP_PROMPT.replace('\x1b[?2004h', '')}`;
+
+    test('a saved session leaves out a Starship prompt redrawn by Ctrl-L', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput(`${STARSHIP_PROMPT}ls /app/config\r\n\x1b[?2004l\rstarship.toml\r\n`);
+        await receiveOutput(`${STARSHIP_PROMPT}${STARSHIP_CTRL_L}`);
+
+        assert.equal(saves.at(-1), '');
+    });
+
+    test('a saved session keeps the scrollback above a Starship prompt redrawn by Ctrl-L', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput(`${SCREENFULS}${STARSHIP_PROMPT}ls /app/config\r\n\x1b[?2004l\rstarship.toml\r\n`);
+        await receiveOutput(`${STARSHIP_PROMPT}${STARSHIP_CTRL_L}`);
+
+        const lines = savedLines(saves.at(-1));
+        assert.deepEqual(lines.slice(-3), ['line 21', 'line 22', '']);
+        assert.ok(!lines.includes(plain(STARSHIP_TOP_LINE)), 'the prompt\'s top line is left out');
+    });
+
+    test('a saved session leaves out a Starship prompt redrawn by readline\'s clear-display', async () => {
+        // M-C-l (captured from bash 5.2) clears the scrollback as well (CSI 3 J), and with it the row above the screen
+        const saves = recordSavedSessions();
+        await receiveOutput(`${SCREENFULS}${STARSHIP_PROMPT}echo hi\r\n\x1b[?2004l\rhi\r\n`);
+        await receiveOutput(`${STARSHIP_PROMPT}\x1b[H\x1b[2J\x1b[3J${STARSHIP_REDRAW}`);
+
+        assert.equal(saves.at(-1), '');
+    });
+
+    test('a saved session keeps the output above a Starship prompt when only the scrollback is cleared', async () => {
+        // CSI 3 J on its own leaves the screen, and the prompt's mark on it, alone
+        const saves = recordSavedSessions();
+        await receiveOutput(`${STARSHIP_PROMPT}ls /app/config\r\n\x1b[?2004l\rstarship.toml\r\n`);
+        await receiveOutput(`${STARSHIP_PROMPT}\x1b[3J`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['', plain(STARSHIP_TOP_LINE), '❯ ls /app/config', 'starship.toml', '']);
+    });
+
+    test('a saved session keeps the scrollback above a two-line prompt redrawn by Ctrl-L', async () => {
+        // The prompt has no blank line first, so it starts right at the top of the screen
+        const saves = recordSavedSessions();
+        const prompt = '\x1b[?2004huser@host ~/dir\r\n$ ';
+        await receiveOutput(`${SCREENFULS}${prompt}ls\r\n\x1b[?2004l\rfile\r\n`);
+        await receiveOutput(`${prompt}\x1b[H\x1b[2Juser@host ~/dir\r\n$ `);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(-3), ['line 19', 'line 20', '']);
+    });
+
+    test('a saved session keeps the scrollback above a Starship prompt redrawn after a clear sent before the cursor goes home', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput(`${SCREENFULS}${STARSHIP_PROMPT}`);
+        await receiveOutput(`\x1b[2J\x1b[H${STARSHIP_REDRAW}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(-3), ['line 17', 'line 18', '']);
+    });
+
+    test('a saved session keeps the scrollback above a two-line zsh prompt redrawn by Ctrl-L', async () => {
+        // zsh 5.9's Ctrl-L (captured) erases below the cursor (CSI J) after clearing the screen, keeping the scrollback
+        const saves = recordSavedSessions();
+        const twoLinePrompt = zshPrompt('\x1b[34mtop line\x1b[39m\r\n% ');
+        await receiveOutput(`${SCREENFULS}${twoLinePrompt}`);
+        await receiveOutput('\x1b[H\x1b[2J\x1b[0m\x1b[27m\x1b[24m\x1b[J\x1b[34mtop line\x1b[39m\r\n% \x1b[K');
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(-3), ['line 16', 'line 17', '']);
+    });
+
+    test('a saved session keeps the output above a zsh prompt that erases below itself', async () => {
+        // zsh erases below the prompt (CSI J) to clear away a completion listing
+        const saves = recordSavedSessions();
+        await receiveOutput(zshPrompt('host% '));
+        await receiveOutput(ZSH_PRINT_PASS);
+        await receiveOutput(`${zshPrompt('host% ')}\x1b[J`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['host% print -P "%F{green}# pass 12%f"', '# pass 12', '']);
+    });
+
+    test('a saved session leaves out a prompt redrawn above the row the shell marked', async () => {
+        // The cursor is on the prompt, so it starts no lower than the cursor's row, here with the marked row
+        // left in place below it
+        const saves = recordSavedSessions();
+        await receiveOutput(`${SCREENFULS}\x1b[?2004h$ `);
+        await receiveOutput('\x1b[H$ \x1b[K');
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(-3), ['line 15', 'line 16', '']);
+    });
+
     test('alternate screen (DECSET/DECRST 1049) still switches buffers for editors', async () => {
         await receiveOutput('\x1b[?1049h');
         assert.equal(terminal.buffer.active.type, 'alternate');
@@ -371,7 +932,6 @@ describe('terminal control sequences', () => {
     test('a restored tab\'s new shell does not inherit the colour a running command left on', async () => {
         const saves = recordSavedSessions();
         await receiveOutput('\x1b[?2004h$ make\r\n\x1b[?2004l');
-        // (colour from the line's start would make the line look like a coloured prompt, which is left out)
         await receiveOutput('ERROR: \x1b[31;7mbuild failed');
 
         await withRestoredPrompt(saves.at(-1), (restored) => {

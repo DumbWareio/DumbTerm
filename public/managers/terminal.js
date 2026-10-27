@@ -2,6 +2,43 @@ import StorageManager from './storage.js';
 
 const IS_MAC = /mac/i.test(navigator.userAgentData?.platform || navigator.platform || '');
 
+// Where each terminal's prompt starts (see initTerminal): a marker and the number of rows below it, or no
+// marker for the buffer's first row
+const promptMarkers = new WeakMap();
+// The furthest the cursor gets below that row at a prompt: the tallest prompt plus a little typed input.
+// Further down, the row is an app's that left bracketed paste on and kept printing (Claude Code)
+const PROMPT_MAX_ROWS_BELOW_MARK = 4;
+// readline redraws its whole prompt below a completion listing without turning bracketed paste on again, so
+// the cursor ends up further below the marked row than that. The redrawn prompt repeats the marked one row for
+// row: look for it, from its first line (after a blank one, Starship's) down to the command, starting in the
+// rows a prompt reaches above, and on, the cursor's row. The command is the cursor's whole line, wrapped onto
+// as many rows as it takes (one that starts above those rows is no command), and may have been typed on (or
+// erased back) since the listing, so there one line need only start like the other
+function redrawnPromptRow(buffer, markedRow, cursorRow) {
+    const text = (row) => buffer.getLine(row)?.translateToString(true) ?? '';
+    const line = (row) => {
+        let joined = text(row);
+        for (let next = row + 1; buffer.getLine(next)?.isWrapped; next++) joined += text(next);
+        return joined;
+    };
+    const first = text(markedRow) === '' ? markedRow + 1 : markedRow;
+    if (text(first) === '') return null;
+    const sameCommand = (a, b) => a === b || (a !== '' && b !== '' && (a.startsWith(b) || b.startsWith(a)));
+    const highestTop = cursorRow - PROMPT_MAX_ROWS_BELOW_MARK + 1;
+    let commandRow = cursorRow;
+    while (commandRow >= highestTop && buffer.getLine(commandRow)?.isWrapped) commandRow--;
+    const command = line(commandRow);
+    for (let top = commandRow; top >= highestTop; top--) {
+        let same = true;
+        for (let row = top; same && row <= commandRow; row++) {
+            const marked = first + row - top;
+            same = row === commandRow ? sameCommand(line(marked), command) : text(marked) === text(row);
+        }
+        if (same) return markedRow;
+    }
+    return null;
+}
+
 // Helper function to join paths with base path
 function joinPath(path) {
     const basePath = window.appConfig?.basePath || '';
@@ -648,6 +685,41 @@ export default class TerminalManager {
         // (CSI ? 1049 h/l) is a separate private-mode sequence that xterm.js already handles
         terminal.parser.registerOscHandler(133, () => true);
 
+        // Shells turn bracketed paste on (CSI ? 2004 h) as their line editor takes over: bash before it prints
+        // the prompt, zsh after. Mark that row so a saved session can leave the prompt out, or the row below
+        // when the cursor is not at the start of a line: the row holds output with no final newline, and a
+        // prompt that starts with a newline (Starship's) begins below it. Returns false so xterm.js still sets
+        // the mode. In the alternate buffer the mode is an editor's, not the shell's
+        terminal.parser.registerCsiHandler({ prefix: '?', final: 'h' }, (params) => {
+            const buffer = terminal.buffer.active;
+            if (params.includes(2004) && buffer.type === 'normal') {
+                promptMarkers.get(terminal)?.marker?.dispose();
+                promptMarkers.set(terminal, { marker: terminal.registerMarker(buffer.cursorX === 0 ? 0 : 1), rowsBelow: 0 });
+            }
+            return false;
+        });
+
+        // Ctrl-L at a prompt clears the screen (CSI 2 J), erasing the marked row, and the shell redraws its whole
+        // prompt from the top without turning bracketed paste on again. A marker on the top row would be erased
+        // too, so mark the row above it, the end of the scrollback, or with no scrollback the buffer's first row.
+        // Returns false so xterm.js still clears the screen. readline's clear-display follows with CSI 3 J, which
+        // clears the scrollback and that row with it: the prompt is then on the buffer's first row
+        terminal.parser.registerCsiHandler({ final: 'J' }, (params) => {
+            const buffer = terminal.buffer.active;
+            const mark = promptMarkers.get(terminal);
+            if (params[0] === 3 && mark?.rowsBelow === 1 && !mark.marker.isDisposed && mark.marker.line === buffer.baseY - 1) {
+                mark.marker.dispose();
+                promptMarkers.set(terminal, { marker: null, rowsBelow: 0 });
+            }
+            if (params[0] === 2 && terminal.modes.bracketedPasteMode && buffer.type === 'normal') {
+                promptMarkers.get(terminal)?.marker?.dispose();
+                promptMarkers.set(terminal, buffer.baseY > 0
+                    ? { marker: terminal.registerMarker(-buffer.cursorY - 1), rowsBelow: 1 }
+                    : { marker: null, rowsBelow: 0 });
+            }
+            return false;
+        });
+
         // Then load other addons
         terminal.loadAddon(fitAddon);
         terminal.loadAddon(webLinksAddon);
@@ -938,7 +1010,33 @@ export default class TerminalManager {
                         // A restored tab runs a fresh shell, so leave out the modes the old program set
                         // (e.g. insert mode), which would otherwise switch on again in the new session. An open
                         // editor's screen goes too: what is saved is the shell's screen underneath it
-                        serializedContent = addons.serializeAddon.serialize({ excludeModes: true, excludeAltBuffer: true });
+                        const serializeOptions = { excludeModes: true, excludeAltBuffer: true };
+                        const buffer = terminal.buffer.active;
+                        // Bracketed paste is on while the shell sits in its line editor, so it is at a prompt
+                        // (with any half-typed command), which the restored tab's new shell prints anew. In the
+                        // alternate buffer it is an editor's (vim turns it on)
+                        const idleAtPrompt = terminal.modes.bracketedPasteMode && buffer.type === 'normal';
+                        if (idleAtPrompt) {
+                            // The prompt starts on the row marked when the shell turned bracketed paste on, or on
+                            // the cursor's row if that is higher (zsh marks after its prompt), the marked row is
+                            // gone (erased by a screen clear, or out of the scrollback) or it is too far up to be
+                            // the prompt's, unless the prompt was redrawn below. Rows above it are all kept, so no
+                            // prompt patterns here. Known limit: zsh turns it on after the prompt, so the upper
+                            // lines of a multi-line zsh prompt stay in the save
+                            const cursorRow = buffer.baseY + buffer.cursorY;
+                            const mark = promptMarkers.get(terminal);
+                            const markedRow = !mark ? cursorRow
+                                : !mark.marker ? 0
+                                : mark.marker.isDisposed ? cursorRow : mark.marker.line + mark.rowsBelow;
+                            const promptStart = cursorRow - markedRow <= PROMPT_MAX_ROWS_BELOW_MARK
+                                ? Math.min(markedRow, cursorRow)
+                                : redrawnPromptRow(buffer, markedRow, cursorRow) ?? cursorRow;
+                            serializedContent = promptStart > 0
+                                ? addons.serializeAddon.serialize({ ...serializeOptions, range: { start: 0, end: promptStart - 1 } })
+                                : '';
+                        } else {
+                            serializedContent = addons.serializeAddon.serialize(serializeOptions);
+                        }
                         if (serializedContent) {
                             const lines = serializedContent.split(/\r?\n/);
                             // The serializer ends by moving the cursor back to where it was (and setting its
@@ -948,7 +1046,8 @@ export default class TerminalManager {
                             let lastContentLineIndex = -1;
                             let seenNonPrompt = false;
                             
-                            // Common prompt patterns
+                            // Common prompt patterns, matched against the line's text without its colours (a
+                            // line is not a prompt for starting with a colour: output often does)
                             const promptPatterns = [
                                 // Standard prompt patterns (user@host:path$, root@host:dir#, etc.)
                                 /^.*@.*[:~][#$>]\s*$/,
@@ -957,17 +1056,9 @@ export default class TerminalManager {
                                 // Simple $ or # or > prompts
                                 /^[$#>]\s*$/,
                                 // PS1 with directory
-                                /^\w+:\s*[\w/~]+[$#>]\s*$/,
-                                // Starship or other ANSI-colored prompts
-                                /^\s*\u001b\[\d+(?:;\d+)*m/
+                                /^\w+:\s*[\w/~]+[$#>]\s*$/
                             ];
 
-                            // Bracketed paste is on while the shell sits in its line editor, so the last line
-                            // is its prompt (with any half-typed command), whatever the prompt looks like; the
-                            // restored tab's new shell prints its own. In the alternate buffer it is the
-                            // editor's (vim turns it on), and the last line is the command that started it
-                            let dropCursorLine = terminal.modes.bracketedPasteMode && terminal.buffer.active.type === 'normal';
-                            
                             for (let i = lines.length - 1; i >= 0; i--) {
                                 const line = lines[i].trimEnd();
                                 
@@ -975,8 +1066,10 @@ export default class TerminalManager {
                                     continue;
                                 }
                                 
-                                const isPrompt = dropCursorLine || promptPatterns.some(pattern => pattern.test(line));
-                                dropCursorLine = false;
+                                // At a prompt, the rows kept all come before it; otherwise (a command is
+                                // running, or the shell has no bracketed paste) a prompt is found by its look
+                                const text = line.replace(/\u001b\[[\d;]*m/g, '');
+                                const isPrompt = !idleAtPrompt && promptPatterns.some(pattern => pattern.test(text));
                                 
                                 if (!isPrompt) {
                                     lastContentLineIndex = i;
