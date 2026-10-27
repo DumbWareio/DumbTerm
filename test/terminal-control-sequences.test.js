@@ -572,6 +572,47 @@ describe('terminal control sequences', () => {
         assert.equal(saves.at(-1), '');
     });
 
+    // Starship's default prompt under bash 5.2 in the Docker image (captured), with no starship.toml
+    const STARSHIP_DEFAULT_TOP_LINE = '\x1b[1;31mroot\x1b[0m in \x1b[1;36m/app\x1b[0m is \x1b[1;38;5;208m\u{1f4e6} v1.3.0\x1b[0m'
+        + ' via \x1b[1;32m v24.22.1 \x1b[0m';
+    const STARSHIP_DEFAULT_PROMPT = `\x1b[?2004h\r\n${STARSHIP_DEFAULT_TOP_LINE}\r\n\x1b[1;2;31m⬢ [Docker]\x1b[0m \x1b[1;32m❯\x1b[0m `;
+
+    test('a saved session leaves out a Starship prompt redrawn below a completion listing and typed on until it wraps', async () => {
+        // Captured from bash 5.2: the command typed at the redrawn prompt wraps, so the cursor is on its second row
+        const saves = recordSavedSessions();
+        await receiveOutput(`${STARSHIP_DEFAULT_PROMPT}echo out\r\n\x1b[?2004l\rout\r\n`);
+        await receiveOutput(`${STARSHIP_DEFAULT_PROMPT}ls /tmp/d/\x07\r\n${COMPLETIONS}`
+            + `${STARSHIP_DEFAULT_PROMPT.replace('\x1b[?2004h', '')}ls /tmp/d/`);
+        await receiveOutput('a'.repeat(94));
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['', plain(STARSHIP_DEFAULT_TOP_LINE), '⬢ [Docker] ❯ echo out', 'out', '']);
+    });
+
+    test('a saved session leaves out a Starship prompt redrawn below a completion listing for a long command typed on onto another row', async () => {
+        // The command already wrapped when the listing was printed: it is two rows long above the listing, three below
+        const saves = recordSavedSessions();
+        await receiveOutput(`${starshipCompletion(`ls /tmp/${'x'.repeat(100)}/`)}${'a'.repeat(70)}`);
+
+        assert.equal(saves.at(-1), '');
+    });
+
+    test('a saved session leaves out a plain prompt redrawn below a completion listing and typed on until it wraps', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput('\x1b[?2004h$ ls\r\n\x1b[?2004l\rfile1\r\n');
+        await receiveOutput(`\x1b[?2004h$ ls /tmp/d/\x07\r\nalpha/\r\nbeta/\r\ndelta/\r\ngamma/\r\n$ ls /tmp/d/${'a'.repeat(75)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ ls', 'file1', '']);
+    });
+
+    test('a saved session leaves out a plain prompt redrawn below a completion listing and typed on to four rows', async () => {
+        // The command starts three rows above the cursor, as high as a redrawn prompt is looked for
+        const saves = recordSavedSessions();
+        await receiveOutput('\x1b[?2004h$ ls\r\n\x1b[?2004l\rfile1\r\n');
+        await receiveOutput(`\x1b[?2004h$ ls /tmp/d/\x07\r\nalpha/\r\nbeta/\r\ndelta/\r\ngamma/\r\n$ ls /tmp/d/${'a'.repeat(300)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ ls', 'file1', '']);
+    });
+
     test('a saved session keeps an app\'s rows five down from a blank row where it turned bracketed paste on', async () => {
         // The rows looked at for a redrawn prompt stop short of the app's own first line
         const saves = recordSavedSessions();
@@ -648,6 +689,23 @@ describe('terminal control sequences', () => {
 
         assert.deepEqual(savedLines(saves.at(-1)),
             ['$ app', rule, ...Array.from({ length: 5 }, (_, i) => ` transcript line ${i}`), rule, '']);
+    });
+
+    test('a saved session keeps the output of an app whose last line starts like its first but differs once it wraps', async () => {
+        // A line is compared whole, with the rows it wraps onto
+        const saves = recordSavedSessions();
+        const fetching = (version) => `fetching https://registry.example.com/packages/a-long-package-name/-/a-long-package-name-${version}.tgz`;
+        await receiveOutput(`$ app\r\n\x1b[?2004h${fetching('1.0.0')}\r\nr1\r\nr2\r\nr3\r\nr4\r\n${fetching('2.0.0')}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(0, 6), ['$ app', fetching('1.0.0'), 'r1', 'r2', 'r3', 'r4']);
+    });
+
+    test('a saved session keeps the output of an app whose last line wraps up from above the rows a prompt reaches', async () => {
+        // The line starts higher than a redrawn prompt is looked for, so its rows there are not a command's first
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n\x1b[?2004h${'='.repeat(80)}\r\nr1\r\nr2\r\n${'='.repeat(400)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(0, 4), ['$ app', '='.repeat(80), 'r1', 'r2']);
     });
 
     test('a saved session leaves out the prompt redrawn at the top of a cleared screen', async () => {

@@ -10,19 +10,29 @@ const promptMarkers = new WeakMap();
 const PROMPT_MAX_ROWS_BELOW_MARK = 4;
 // readline redraws its whole prompt below a completion listing without turning bracketed paste on again, so
 // the cursor ends up further below the marked row than that. The redrawn prompt repeats the marked one row for
-// row: look for it, from its first line (after a blank one, Starship's) down to the cursor's row, starting in
-// the rows a prompt reaches above, and on, the cursor's row. The cursor's row holds the command, which may
-// have been typed on (or erased back) since the listing, so there one row need only start like the other
+// row: look for it, from its first line (after a blank one, Starship's) down to the command, starting in the
+// rows a prompt reaches above, and on, the cursor's row. The command is the cursor's whole line, wrapped onto
+// as many rows as it takes (one that starts above those rows is no command), and may have been typed on (or
+// erased back) since the listing, so there one line need only start like the other
 function redrawnPromptRow(buffer, markedRow, cursorRow) {
     const text = (row) => buffer.getLine(row)?.translateToString(true) ?? '';
+    const line = (row) => {
+        let joined = text(row);
+        for (let next = row + 1; buffer.getLine(next)?.isWrapped; next++) joined += text(next);
+        return joined;
+    };
     const first = text(markedRow) === '' ? markedRow + 1 : markedRow;
     if (text(first) === '') return null;
     const sameCommand = (a, b) => a === b || (a !== '' && b !== '' && (a.startsWith(b) || b.startsWith(a)));
-    for (let top = cursorRow; top > cursorRow - PROMPT_MAX_ROWS_BELOW_MARK; top--) {
+    const highestTop = cursorRow - PROMPT_MAX_ROWS_BELOW_MARK + 1;
+    let commandRow = cursorRow;
+    while (commandRow >= highestTop && buffer.getLine(commandRow)?.isWrapped) commandRow--;
+    const command = line(commandRow);
+    for (let top = commandRow; top >= highestTop; top--) {
         let same = true;
-        for (let row = top; same && row <= cursorRow; row++) {
-            const marked = text(first + row - top);
-            same = row === cursorRow ? sameCommand(marked, text(row)) : marked === text(row);
+        for (let row = top; same && row <= commandRow; row++) {
+            const marked = first + row - top;
+            same = row === commandRow ? sameCommand(line(marked), command) : text(marked) === text(row);
         }
         if (same) return markedRow;
     }
