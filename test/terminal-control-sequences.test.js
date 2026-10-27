@@ -449,6 +449,24 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)), ['user@host:~$ ls', 'file1', '']);
     });
 
+    test('a saved session leaves out a host:dir prompt in several colours from a shell without bracketed paste', async () => {
+        // e.g. BusyBox ash with PS1='\[\e[1;32m\]\h\[\e[0m\]:\[\e[1;34m\]\w\[\e[0m\]\$ '
+        const saves = recordSavedSessions();
+        const prompt = '\x1b[1;32mhost\x1b[0m:\x1b[1;34m~\x1b[0m$ ';
+        await receiveOutput(`ls\r\nfile1\r\n${prompt}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['ls', 'file1', '']);
+    });
+
+    test('a saved session leaves out a Starship prompt after the cursor is hidden and shown again', async () => {
+        // readline hides and shows the cursor (CSI ? 25 l/h) while it sits at the prompt; only 2004 marks it
+        const saves = recordSavedSessions();
+        await receiveOutput(`${STARSHIP_PROMPT}ls\r\n\x1b[?2004l\rfile1\r\n`);
+        await receiveOutput(`${STARSHIP_PROMPT}\x1b[?25l\x1b[?25h`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['', plain(STARSHIP_TOP_LINE), '\u276f ls', 'file1', '']);
+    });
+
     test('a saved session leaves out the prompt the shell is idle at after a long output', async () => {
         // More output than the scrollback holds: lines leave the top of the buffer as the prompt is printed
         const saves = recordSavedSessions();
