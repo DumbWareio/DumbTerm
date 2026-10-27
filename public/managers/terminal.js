@@ -445,9 +445,11 @@ export default class TerminalManager {
         
         const wasActive = this.activeTabId === id;
 
-        // End its connection, so the server ends its shell, then clean up the terminal
+        // End its connection, so the server ends its shell, then clean up the terminal, and let go of its addons,
+        // which would otherwise keep the disposed terminal and its scrollback
         connectionEnders.get(terminal.terminal)?.();
         terminal.terminal.dispose();
+        this.terminalAddons.delete(terminal.terminal);
         terminal.tab.remove();
         terminal.container.remove();
         this.terminals.delete(id);

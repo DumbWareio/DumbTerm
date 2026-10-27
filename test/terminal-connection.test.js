@@ -741,6 +741,12 @@ describe('terminal connection', () => {
         assert.equal(saves, 0, 'no session save for it');
     });
 
+    test('closing a tab lets go of its terminal\'s addons', () => {
+        assert.ok(manager.terminalAddons.has(terminal));
+        closeTab();
+        assert.equal(manager.terminalAddons.has(terminal), false);
+    });
+
     test('closing a tab removes its listeners from the page', () => {
         closeTab();
         for (const type of ['resize', 'beforeunload']) assert.equal(window.listening(type), 0, `window ${type}`);
