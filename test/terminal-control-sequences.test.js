@@ -339,6 +339,42 @@ describe('terminal control sequences', () => {
         assert.match(saves.at(-1), /\x1b\[32m# pass 12/, 'the output keeps its colour');
     });
 
+    test('a saved session keeps output with no final newline above a Starship prompt', async () => {
+        // bash turns bracketed paste on with the cursor still after the output, and Starship's newline follows
+        const saves = recordSavedSessions();
+        await receiveOutput(`${STARSHIP_PROMPT}printf hello\r\n\x1b[?2004l\rhello`);
+        await receiveOutput(STARSHIP_PROMPT);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['', plain(STARSHIP_TOP_LINE), '❯ printf hello', 'hello', '']);
+    });
+
+    test('a saved session keeps output with no final newline above a Starship prompt at the bottom of the screen', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput(`${SCREENFULS}${STARSHIP_PROMPT}printf hello\r\n\x1b[?2004l\rhello`);
+        await receiveOutput(STARSHIP_PROMPT);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(-4), [plain(STARSHIP_TOP_LINE), '❯ printf hello', 'hello', '']);
+    });
+
+    test('a saved session leaves out a plain prompt printed on the same row as output with no final newline', async () => {
+        // The row holds both; it goes, as before
+        const saves = recordSavedSessions();
+        await receiveOutput('\x1b[?2004h$ ls\r\n\x1b[?2004l\rfile1\r\n');
+        await receiveOutput('\x1b[?2004h$ printf hello\r\n\x1b[?2004l\rhello\x1b[?2004h$ ');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ ls', 'file1', '$ printf hello', '']);
+    });
+
+    test('a saved session leaves out every line of a two-line bash prompt', async () => {
+        // A prompt with no blank line first, e.g. PS1='\u@\h \w\n\$ ': bash marks its top line
+        const saves = recordSavedSessions();
+        const prompt = '\x1b[?2004hchris@box ~/app\r\n$ ';
+        await receiveOutput(`${prompt}ls\r\n\x1b[?2004l\rfile1\r\n`);
+        await receiveOutput(prompt);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['chris@box ~/app', '$ ls', 'file1', '']);
+    });
+
     test('a saved session leaves out the whole Starship prompt the shell is idle at', async () => {
         const saves = recordSavedSessions();
         await receiveOutput(`${STARSHIP_PROMPT}echo hello\r\n\x1b[?2004l\rhello\r\n`);

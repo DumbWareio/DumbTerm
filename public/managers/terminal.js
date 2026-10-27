@@ -652,12 +652,15 @@ export default class TerminalManager {
         terminal.parser.registerOscHandler(133, () => true);
 
         // Shells turn bracketed paste on (CSI ? 2004 h) as their line editor takes over: bash before it prints
-        // the prompt, zsh after. Mark that row so a saved session can leave the prompt out. Returns false so
-        // xterm.js still sets the mode. In the alternate buffer the mode is an editor's, not the shell's
+        // the prompt, zsh after. Mark that row so a saved session can leave the prompt out, or the row below
+        // when the cursor is not at the start of a line: the row holds output with no final newline, and a
+        // prompt that starts with a newline (Starship's) begins below it. Returns false so xterm.js still sets
+        // the mode. In the alternate buffer the mode is an editor's, not the shell's
         terminal.parser.registerCsiHandler({ prefix: '?', final: 'h' }, (params) => {
-            if (params.includes(2004) && terminal.buffer.active.type === 'normal') {
+            const buffer = terminal.buffer.active;
+            if (params.includes(2004) && buffer.type === 'normal') {
                 promptMarkers.get(terminal)?.dispose();
-                promptMarkers.set(terminal, terminal.registerMarker(0));
+                promptMarkers.set(terminal, terminal.registerMarker(buffer.cursorX === 0 ? 0 : 1));
             }
             return false;
         });
@@ -959,11 +962,11 @@ export default class TerminalManager {
                         // alternate buffer it is an editor's (vim turns it on)
                         const idleAtPrompt = terminal.modes.bracketedPasteMode && buffer.type === 'normal';
                         if (idleAtPrompt) {
-                            // The prompt starts on the row where the shell turned bracketed paste on, or on the
-                            // cursor's row if that is higher or the marked row is gone (erased by a screen clear,
-                            // or out of the scrollback). Rows above it are all kept, so no prompt patterns here.
-                            // Known limit: zsh turns it on after the prompt, so the upper lines of a multi-line
-                            // zsh prompt stay in the save
+                            // The prompt starts on the row marked when the shell turned bracketed paste on, or on
+                            // the cursor's row if that is higher (zsh marks after its prompt) or the marked row is
+                            // gone (erased by a screen clear, or out of the scrollback). Rows above it are all
+                            // kept, so no prompt patterns here. Known limit: zsh turns it on after the prompt, so
+                            // the upper lines of a multi-line zsh prompt stay in the save
                             const cursorRow = buffer.baseY + buffer.cursorY;
                             const marker = promptMarkers.get(terminal);
                             const promptStart = Math.min(marker && !marker.isDisposed ? marker.line : cursorRow, cursorRow);
