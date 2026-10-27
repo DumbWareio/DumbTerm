@@ -39,6 +39,9 @@ function redrawnPromptRow(buffer, markedRow, cursorRow) {
     return null;
 }
 
+// How to end each terminal's connection to the server (see initTerminal), for when its tab closes
+const connectionEnders = new WeakMap();
+
 // Helper function to join paths with base path
 function joinPath(path) {
     const basePath = window.appConfig?.basePath || '';
@@ -442,7 +445,8 @@ export default class TerminalManager {
         
         const wasActive = this.activeTabId === id;
 
-        // Clean up terminal first
+        // End its connection, so the server ends its shell, then clean up the terminal
+        connectionEnders.get(terminal.terminal)?.();
         terminal.terminal.dispose();
         terminal.tab.remove();
         terminal.container.remove();
@@ -780,7 +784,7 @@ export default class TerminalManager {
 
         // WebSocket connection management. A tab has one connection underway at a time, a retry waiting on its
         // timer or a socket not yet closed, and nothing starts another until it is over. A socket's events count
-        // only while it is the tab's own (ws): one the tab has replaced changes nothing
+        // only while it is the tab's own (ws): one the tab has replaced, or let go of on closing, changes nothing
         let ws;
         let reconnectTimer = null;
         const maxReconnectAttempts = 5;
@@ -863,6 +867,9 @@ export default class TerminalManager {
             };
 
             socket.onmessage = (event) => {
+                if (socket !== ws) {
+                    return;
+                }
                 try {
                     const message = JSON.parse(event.data);
                     if (message.type === 'output') {
@@ -972,15 +979,16 @@ export default class TerminalManager {
 
         // Handle page visibility changes: coming back to the page reconnects a tab whose connection ended, with
         // its retries renewed, and leaves one underway to finish
-        document.addEventListener('visibilitychange', () => {
+        const onVisibilityChange = () => {
             if (document.visibilityState === 'visible' && !connectionUnderway()) {
                 reconnectAttempts = 0;
                 connectWebSocket();
             }
-        });
+        };
+        document.addEventListener('visibilitychange', onVisibilityChange);
 
         // Handle window resize
-        window.addEventListener('resize', () => {
+        const onWindowResize = () => {
             // Delay the resize slightly to ensure container dimensions are settled
             setTimeout(() => {
                 // Let FitAddon handle terminal sizing properly
@@ -995,14 +1003,16 @@ export default class TerminalManager {
                     }));
                 }
             }, 50); // Small delay to ensure container dimensions are settled
-        });
+        };
+        window.addEventListener('resize', onWindowResize);
 
         // Clean up on page unload
-        window.addEventListener('beforeunload', () => {
+        const onBeforeUnload = () => {
             if (ws) {
                 ws.close();
             }
-        });
+        };
+        window.addEventListener('beforeunload', onBeforeUnload);
 
         // Update terminal colors when theme changes
         const observer = new MutationObserver((mutations) => {
@@ -1023,6 +1033,20 @@ export default class TerminalManager {
         observer.observe(document.documentElement, {
             attributes: true,
             attributeFilter: ['data-theme']
+        });
+
+        // Closing the tab ends its connection for good: a waiting retry is called off, the page's events no longer
+        // reach the tab, and its socket is let go of before it is closed (1000), so neither that close nor one the
+        // server sent at the same time reconnects it. The server ends the shell when the socket closes
+        connectionEnders.set(terminal, () => {
+            clearTimeout(reconnectTimer);
+            document.removeEventListener('visibilitychange', onVisibilityChange);
+            window.removeEventListener('resize', onWindowResize);
+            window.removeEventListener('beforeunload', onBeforeUnload);
+            observer.disconnect();
+            const socket = ws;
+            ws = null;
+            socket.close(1000);
         });
 
         return terminal;

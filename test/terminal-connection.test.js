@@ -1,8 +1,9 @@
 /**
  * Behavioural tests for how a browser terminal tab (public/managers/terminal.js) keeps its connection to the
- * server: which closes it reconnects after, how many sockets it opens while the server is away, and what it
- * says meanwhile. Runs the real TerminalManager.initTerminal against the real @xterm/xterm build, on a fake
- * clock, with a stand-in WebSocket whose server the test starts, stops and makes hang.
+ * server: which closes it reconnects after, how many sockets it opens while the server is away, what it says
+ * meanwhile, and that closing the tab ends it. Runs the real TerminalManager.initTerminal and handleTabClose
+ * against the real @xterm/xterm build, on a fake clock, with a stand-in WebSocket whose server the test starts,
+ * stops and makes hang.
  */
 const { describe, test, before, after, beforeEach, afterEach, mock } = require('node:test');
 const assert = require('node:assert/strict');
@@ -150,7 +151,13 @@ function installBrowserGlobals() {
         visibilityState: 'visible',
     });
     globalThis.getComputedStyle = () => ({ getPropertyValue: () => '' });
-    globalThis.MutationObserver = class { observe() {} disconnect() {} };
+    // The page's theme observer, which a closed tab no longer needs
+    globalThis.MutationObserver = class {
+        static all = [];
+        constructor() { this.observing = false; MutationObserver.all.push(this); }
+        observe() { this.observing = true; }
+        disconnect() { this.observing = false; }
+    };
     globalThis.WebSocket = FakeWebSocket;
     globalThis.Terminal = HeadlessPageTerminal;
     globalThis.FitAddon = { FitAddon: StubAddon };
@@ -186,7 +193,8 @@ describe('terminal connection', () => {
         }
     });
 
-    // Each test opens a tab and lets its first connection open
+    // Each test opens one tab, Term1, beside a second one so closing it leaves the manager a tab, and lets the
+    // tab's first connection open
     beforeEach(() => {
         mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
         // xterm parses with setTimeout(fn) and no delay; give it the 0 a browser would (see
@@ -199,8 +207,17 @@ describe('terminal connection', () => {
         installBrowserGlobals();
         Object.assign(server, { up: true, hang: false });
         FakeWebSocket.all = [];
-        manager = { terminalAddons: new Map(), saveSessionState() {} };
+        manager = {
+            terminalAddons: new Map(),
+            terminals: new Map(),
+            activeTabId: 2,
+            saveSessionState() {},
+            checkTabOverflow() {},
+            activateTab() {},
+        };
         terminal = TerminalManager.prototype.initTerminal.call(manager, {});
+        manager.terminals.set(1, { tab: { remove() {} }, container: { remove() {} }, terminal });
+        manager.terminals.set(2, { tab: { remove() {} }, container: { remove() {} }, terminal: { dispose() {} } });
         wait(50);
         assert.equal(FakeWebSocket.last.readyState, FakeWebSocket.OPEN, 'the tab connected');
         FakeWebSocket.mostConnecting = 0;
@@ -208,7 +225,7 @@ describe('terminal connection', () => {
     });
 
     afterEach(() => {
-        terminal.dispose();
+        if (manager.terminals.has(1)) terminal.dispose();
         mock.timers.reset();
         mock.restoreAll();
     });
@@ -220,6 +237,10 @@ describe('terminal connection', () => {
             now++;
             mock.timers.tick(1);
         }
+    }
+
+    function closeTab() {
+        TerminalManager.prototype.handleTabClose.call(manager, 1);
     }
 
     function type(data) {
@@ -454,5 +475,70 @@ describe('terminal connection', () => {
 
         assert.equal(socketsSince(first).length, 1);
         assert.equal(FakeWebSocket.last.readyState, FakeWebSocket.OPEN);
+    });
+
+    test('closing a tab closes its socket with 1000', () => {
+        const socket = FakeWebSocket.last;
+        closeTab();
+        assert.equal(socket.closedWith, 1000);
+        mock.timers.tick(0);
+        assert.equal(socket.readyState, FakeWebSocket.CLOSED);
+    });
+
+    // The server's own close can cross the page's: the server shutting down, or the network gone
+    for (const [code, wasClean] of [[1001, true], [1006, false]]) {
+        test(`a closed tab is not reconnected when its socket's close comes back as ${code}`, () => {
+            const socket = FakeWebSocket.last;
+            closeTab();
+            socket.closes({ code, wasClean });
+            wait(60000);
+            document.fire('visibilitychange');
+            wait(60000);
+
+            assert.equal(FakeWebSocket.last, socket, 'no new socket');
+        });
+    }
+
+    test('closing a tab while a retry waits cancels the retry', () => {
+        const first = FakeWebSocket.last;
+        first.closes({ code: 1006, wasClean: false });
+        wait(500);
+        closeTab();
+        wait(60000);
+
+        assert.equal(FakeWebSocket.last, first, 'no new socket');
+    });
+
+    test('closing a tab while it connects gives up the attempt', () => {
+        const first = FakeWebSocket.last;
+        server.hang = true;
+        first.closes({ code: 1006, wasClean: false });
+        wait(1000);
+        const connecting = FakeWebSocket.last;
+        closeTab();
+        wait(60000);
+
+        assert.equal(connecting.readyState, FakeWebSocket.CLOSED);
+        assert.equal(FakeWebSocket.last, connecting, 'no new socket');
+    });
+
+    // A socket goes on delivering what the server sent before it saw the close
+    test('output that arrives after the tab closed is left alone', () => {
+        const socket = FakeWebSocket.last;
+        let saves = 0;
+        manager.saveSessionState = () => { saves++; };
+        closeTab();
+        saves = 0;
+        socket.onmessage({ data: JSON.stringify({ type: 'output', data: 'still running\r\n' }) });
+        wait(1000);
+
+        assert.equal(saves, 0, 'no session save for it');
+    });
+
+    test('closing a tab removes its listeners from the page', () => {
+        closeTab();
+        for (const type of ['resize', 'beforeunload']) assert.equal(window.listening(type), 0, `window ${type}`);
+        assert.equal(document.listening('visibilitychange'), 0);
+        assert.ok(MutationObserver.all.every((observer) => !observer.observing), 'the theme no longer observed');
     });
 });
