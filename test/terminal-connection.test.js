@@ -504,6 +504,31 @@ describe('terminal connection', () => {
         assert.equal(FakeWebSocket.mostConnecting, 1);
     });
 
+    test('coming back to the page after the retries ran out starts a new round of them', () => {
+        const first = FakeWebSocket.last;
+        server.up = false;
+        first.closes({ code: 1006, wasClean: false });
+        wait(60000);
+
+        document.fire('visibilitychange');
+        const reconnecting = FakeWebSocket.last;
+        assert.equal(reconnecting.createdAt, 60000, 'the page connects at once');
+        wait(60000);
+        assert.deepEqual(socketsSince(reconnecting).map((socket) => socket.createdAt - 60000),
+            [1050, 3100, 7150, 15200, 31250]);
+        assert.equal(FakeWebSocket.mostConnecting, 1);
+    });
+
+    test('a page that is hidden does not reconnect a tab', () => {
+        const first = FakeWebSocket.last;
+        first.closes({ code: 1005, wasClean: true });
+        document.visibilityState = 'hidden';
+        document.fire('visibilitychange');
+        wait(60000);
+
+        assert.equal(FakeWebSocket.last, first, 'no new socket');
+    });
+
     // Guard: coming back to the page reconnects a tab whose connection ended
     test('coming back to the page reconnects a tab whose shell exited, once', () => {
         const first = FakeWebSocket.last;
