@@ -649,6 +649,25 @@ describe('terminal control sequences', () => {
         assert.deepEqual(lines.slice(job, job + 6), ['\u276f job 1', 'job 2', 'job 3', 'job 4', 'job 5', 'ls /tmp/d/job 6']);
     });
 
+    test('a saved session keeps a background job\'s output at a plain prompt when its last row starts with a dollar', async () => {
+        // The prompt's space counts: `$5.00 total` does not start like `$ `
+        const saves = recordSavedSessions();
+        await receiveOutput('\x1b[?2004h$ ');
+        await receiveOutput('\r\n[1] 123\r\napples  2\r\npears   1\r\nplums   3\r\nfigs    1\r\n$5.00 total');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$', '[1] 123', 'apples  2', 'pears   1', 'plums   3', 'figs    1', '']);
+    });
+
+    test('a saved session keeps a background job\'s output at a root prompt when its last row is a progress bar', async () => {
+        // The command starts its row: the `# ` inside a bar of hashes is not the prompt's
+        const saves = recordSavedSessions();
+        await receiveOutput('\x1b[?2004h# ');
+        await receiveOutput('\r\n[1] 123\r\nfile 1 of 4\r\nfile 2 of 4\r\nfile 3 of 4\r\nfile 4 of 4\r\n'
+            + `\r${'#'.repeat(20)}  50.0%\r${'#'.repeat(40)} 100.0%`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['#', '[1] 123', 'file 1 of 4', 'file 2 of 4', 'file 3 of 4', 'file 4 of 4', '']);
+    });
+
     test('a saved session leaves out a plain prompt redrawn below a completion listing and typed on', async () => {
         // Captured from bash 5.2: a listing four rows tall, then `al` typed at the redrawn prompt
         const saves = recordSavedSessions();
@@ -689,6 +708,38 @@ describe('terminal control sequences', () => {
 
         assert.deepEqual(savedLines(saves.at(-1)),
             ['$ app', rule, ...Array.from({ length: 5 }, (_, i) => ` transcript line ${i}`), rule, '']);
+    });
+
+    test('a saved session keeps the output of an app that draws its input line again under a different first line', async () => {
+        // Every row of a redrawn prompt has to match, not only the cursor's
+        const saves = recordSavedSessions();
+        await receiveOutput('$ app\r\n\x1b[?2004hTitle\r\n> \r\nr1\r\nr2\r\nr3\r\nr4\r\nOther\r\n> ');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'Title', '>', 'r1', 'r2', 'r3', 'r4', 'Other', '']);
+    });
+
+    test('a saved session keeps the output of an app that draws its first line again under a longer one', async () => {
+        // Only the command may have been typed on: above it, a redrawn prompt's rows equal the marked ones
+        const saves = recordSavedSessions();
+        await receiveOutput('$ app\r\n\x1b[?2004hab\r\n> \r\nr1\r\nr2\r\nr3\r\nabc\r\n> ');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'ab', '>', 'r1', 'r2', 'r3', 'abc', '']);
+    });
+
+    test('a saved session keeps the output of an app that draws its first line again above a typed row, where it first drew an empty one', async () => {
+        // An empty marked row is not a command that the cursor's row was typed on from
+        const saves = recordSavedSessions();
+        await receiveOutput('$ app\r\n\x1b[?2004hTitle\r\n\r\nr1\r\nr2\r\nr3\r\nTitle\r\nsomething');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'Title', '', 'r1', 'r2', 'r3', 'Title', '']);
+    });
+
+    test('a saved session keeps the output of an app that draws its first five lines again', async () => {
+        // Five rows are taller than a prompt and its command: the redrawn prompt is looked for no higher
+        const saves = recordSavedSessions();
+        await receiveOutput('$ app\r\n\x1b[?2004hA\r\nB\r\nC\r\nD\r\nE\r\nr1\r\nA\r\nB\r\nC\r\nD\r\nE');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'A', 'B', 'C', 'D', 'E', 'r1', 'A', 'B', 'C', 'D', '']);
     });
 
     test('a saved session keeps the output of an app whose last line starts like its first but differs once it wraps', async () => {
