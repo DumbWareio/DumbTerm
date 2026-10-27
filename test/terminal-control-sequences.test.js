@@ -408,11 +408,11 @@ describe('terminal control sequences', () => {
 
     test('a saved session keeps a coloured output line above a zsh prompt', async () => {
         const saves = recordSavedSessions();
-        await receiveOutput(zshPrompt('CH-M4-MINI% '));
+        await receiveOutput(zshPrompt('host% '));
         await receiveOutput(ZSH_PRINT_PASS);
-        await receiveOutput(zshPrompt('CH-M4-MINI% '));
+        await receiveOutput(zshPrompt('host% '));
 
-        assert.deepEqual(savedLines(saves.at(-1)), ['CH-M4-MINI% print -P "%F{green}# pass 12%f"', '# pass 12', '']);
+        assert.deepEqual(savedLines(saves.at(-1)), ['host% print -P "%F{green}# pass 12%f"', '# pass 12', '']);
         assert.match(saves.at(-1), /\x1b\[32m# pass 12/, 'the output keeps its colour');
     });
 
@@ -731,11 +731,11 @@ describe('terminal control sequences', () => {
     test('a saved session keeps the output above a zsh prompt that erases below itself', async () => {
         // zsh erases below the prompt (CSI J) to clear away a completion listing
         const saves = recordSavedSessions();
-        await receiveOutput(zshPrompt('CH-M4-MINI% '));
+        await receiveOutput(zshPrompt('host% '));
         await receiveOutput(ZSH_PRINT_PASS);
-        await receiveOutput(`${zshPrompt('CH-M4-MINI% ')}\x1b[J`);
+        await receiveOutput(`${zshPrompt('host% ')}\x1b[J`);
 
-        assert.deepEqual(savedLines(saves.at(-1)), ['CH-M4-MINI% print -P "%F{green}# pass 12%f"', '# pass 12', '']);
+        assert.deepEqual(savedLines(saves.at(-1)), ['host% print -P "%F{green}# pass 12%f"', '# pass 12', '']);
     });
 
     test('a saved session leaves out a prompt redrawn above the row the shell marked', async () => {
