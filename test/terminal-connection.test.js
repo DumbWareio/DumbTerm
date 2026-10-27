@@ -404,17 +404,31 @@ describe('terminal connection', () => {
 
     // The page closing a socket it gave up on, or the server closing one, takes a moment; the socket is still
     // the tab's connection until it has closed
-    test('a key typed while the socket is closing opens no second socket', () => {
+    test('a key typed while the socket is closing opens no second socket and says nothing', () => {
         const first = FakeWebSocket.last;
         first.readyState = FakeWebSocket.CLOSING;
         type('a');
         wait(100);
         assert.equal(FakeWebSocket.last, first, 'no socket while the old one closes');
+        assert.equal(linesSaying(NOT_AVAILABLE), 0);
 
         first.closes({ code: 1006, wasClean: false });
         wait(1100);
         assert.equal(socketsSince(first).length, 1, 'then the retry, 1s after it closed');
         assert.equal(FakeWebSocket.last.readyState, FakeWebSocket.OPEN);
+    });
+
+    // The close that follows can be final, and the tab would have said it was reconnecting
+    test('a key typed while the shell\'s close is under way leaves the tab to say only that it closed', () => {
+        const first = FakeWebSocket.last;
+        first.readyState = FakeWebSocket.CLOSING;
+        type('a');
+        first.closes({ code: 1005, wasClean: true });
+        wait(60000);
+
+        assert.equal(FakeWebSocket.last, first, 'no new socket');
+        assert.equal(linesSaying(CLOSED_NORMALLY), 1);
+        assert.equal(linesSaying(NOT_AVAILABLE), 0);
     });
 
     test('once the retries run out, keys open no socket and say nothing more', () => {
