@@ -39,6 +39,9 @@ function redrawnPromptRow(buffer, markedRow, cursorRow) {
     return null;
 }
 
+// How to end each terminal's connection to the server (see initTerminal), for when its tab closes
+const connectionEnders = new WeakMap();
+
 // Helper function to join paths with base path
 function joinPath(path) {
     const basePath = window.appConfig?.basePath || '';
@@ -442,8 +445,11 @@ export default class TerminalManager {
         
         const wasActive = this.activeTabId === id;
 
-        // Clean up terminal first
+        // End its connection, so the server ends its shell, then clean up the terminal, and let go of its addons,
+        // which would otherwise keep the disposed terminal and its scrollback
+        connectionEnders.get(terminal.terminal)?.();
         terminal.terminal.dispose();
+        this.terminalAddons.delete(terminal.terminal);
         terminal.tab.remove();
         terminal.container.remove();
         this.terminals.delete(id);
@@ -778,64 +784,113 @@ export default class TerminalManager {
             }
         }
 
-        // WebSocket connection management
+        // WebSocket connection management. A tab has one connection underway at a time, a retry waiting on its
+        // timer or a socket not yet closed, and nothing starts another until it is over. A socket's events count
+        // only while it is the tab's own (ws): one the tab has replaced, or let go of on closing, changes nothing
         let ws;
+        let reconnectTimer = null;
         const maxReconnectAttempts = 5;
         const baseReconnectDelay = 1000;
         let reconnectAttempts = 0;
+        // Whether the tab has said it is reconnecting since it was last connected: once is enough
+        let outageReported = false;
         const self = this; // Store reference to 'this' for use in callbacks
 
+        function connectionUnderway() {
+            return reconnectTimer !== null || (ws && ws.readyState !== WebSocket.CLOSED);
+        }
+
+        function reportOutage(message) {
+            if (!outageReported) {
+                outageReported = true;
+                terminal.writeln(message);
+            }
+        }
+
         function connectWebSocket() {
+            if (connectionUnderway()) {
+                return;
+            }
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const basePath = window.appConfig?.basePath || '';
             
             // Create WebSocket connection - cookies will be automatically included
-            ws = new WebSocket(`${protocol}//${window.location.host}${basePath}`);
+            const socket = new WebSocket(`${protocol}//${window.location.host}${basePath}`);
+            ws = socket;
 
-            // Set a generous timeout for the initial connection
+            // Set a generous timeout for the initial connection. Closing a socket that is still connecting fails
+            // it, and its close event arranges the retry
             const connectionTimeout = setTimeout(() => {
-                if (ws.readyState !== WebSocket.OPEN) {
-                    ws.close();
-                    handleReconnect();
+                if (socket.readyState !== WebSocket.OPEN) {
+                    socket.close();
                 }
             }, 5000);
 
-            ws.onopen = () => {
+            socket.onopen = () => {
                 clearTimeout(connectionTimeout);
                 reconnectAttempts = 0;
+                outageReported = false;
 
                 // Each connection gets a new shell, so an editor open on the old one is gone with it, and so are
-                // the modes it set: DECSTR shows the cursor and resets the cursor keys and keypad, and the mouse
-                // and focus reports are turned off on their own
+                // the modes the old shell's programs set, in either buffer (a picker drawn under the prompt sets
+                // them without leaving the normal one): DECSTR shows the cursor and resets the cursor keys and
+                // keypad, and the mouse and focus reports are turned off on their own
                 if (terminal.buffer.active.type === 'alternate') {
-                    terminal.write('\x1b[?1049l\x1b[!p\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l');
+                    terminal.write('\x1b[?1049l');
                 }
+                // Only the tab in front takes the keyboard: the others are hidden but still in the page, and
+                // keys typed into one would run in a shell nobody can see. It takes it once the reset is applied,
+                // or a program's focus reports would still be on and the new shell would read one as typed text,
+                // and only from nothing or a terminal: the search box or a tab's name being edited keeps it, or
+                // what is typed there next would run in the shell
+                terminal.write('\x1b[!p\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l', () => {
+                    const focused = document.activeElement;
+                    if (self.terminals.get(self.activeTabId)?.terminal === terminal
+                        && (!focused || focused === document.body || focused.closest('.terminals-container'))) {
+                        terminal.focus();
+                    }
+                });
 
-                if (ws.readyState === WebSocket.OPEN) {                 
-                    // Force an initial resize to ensure proper dimensions
-                    setTimeout(() => {
+                // Force an initial resize to ensure proper dimensions, unless the socket closed meanwhile or the
+                // tab let go of it
+                setTimeout(() => {
+                    if (socket === ws && socket.readyState === WebSocket.OPEN) {
                         fitAddon.fit();
-                        ws.send(JSON.stringify({
+                        socket.send(JSON.stringify({
                             type: 'resize',
                             cols: terminal.cols,
                             rows: terminal.rows
                         }));
-                    }, 100);
+                    }
+                }, 100);
+                startHeartbeat(socket);
+            };
+
+            socket.onclose = (event) => {
+                clearTimeout(connectionTimeout);
+                if (socket === ws) {
+                    // Focus and mouse reports a program left on would go on reaching the page as input, and count
+                    // as keys typed while disconnected, so turn them off with the shell gone; the next connection
+                    // resets the rest
+                    terminal.write('\x1b[?1004l\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l');
+                    handleReconnect(event);
                 }
-                terminal.focus();
-                startHeartbeat();
             };
 
-            ws.onclose = (event) => {
-                handleReconnect(event);
+            // A socket the tab let go of (closing the tab gives up one still connecting) fails as it closes,
+            // which is no error worth logging
+            socket.onerror = (error) => {
+                if (socket === ws) {
+                    console.error('WebSocket error:', error);
+                }
+                clearTimeout(connectionTimeout);
+                socket.close();
             };
 
-            ws.onerror = (error) => {
-                console.error('WebSocket error:', error);
-                ws.close();
-            };
-
-            ws.onmessage = (event) => {
+            socket.onmessage = (event) => {
+                if (socket !== ws) {
+                    return;
+                }
                 try {
                     const message = JSON.parse(event.data);
                     if (message.type === 'output') {
@@ -859,7 +914,7 @@ export default class TerminalManager {
 
         function handleReconnect(event) {
             // Handle authentication failure (code 1008 is policy violation)
-            if (event && event.code === 1008) {
+            if (event.code === 1008) {
                 terminal.writeln('\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n');
                 terminal.writeln('\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n');
                 terminal.writeln('\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n');
@@ -869,35 +924,42 @@ export default class TerminalManager {
                 return;
             }
 
-            if (event && event.wasClean) {
+            // A clean close is final (the shell exited, or failed to start), unless the server is going away
+            // (1001, shutting down) or restarting (1012): the tab then reconnects once it is back, as it does
+            // after a dropped connection
+            if (event.wasClean && event.code !== 1001 && event.code !== 1012) {
                 terminal.writeln('\r\nConnection closed normally.');
                 return;
             }
 
             if (reconnectAttempts < maxReconnectAttempts) {
                 const delay = baseReconnectDelay * Math.pow(2, reconnectAttempts);
-                terminal.writeln('\r\nConnection lost. Attempting to reconnect...');
-                setTimeout(() => {
+                reportOutage('\r\nConnection lost. Attempting to reconnect...');
+                reconnectTimer = setTimeout(() => {
+                    reconnectTimer = null;
                     reconnectAttempts++;
                     connectWebSocket();
                 }, delay);
             } else {
-                terminal.writeln('\r\nConnection lost. Please refresh the page to reconnect.');
+                // The retries have run out, and the tab waits for a key to start a new round of them, which says
+                // that it is reconnecting
+                outageReported = false;
+                terminal.writeln('\r\nConnection lost. Press any key to reconnect, or refresh the page.');
             }
         }
 
-        // Heartbeat mechanism
-        function startHeartbeat() {
+        // Heartbeat mechanism, for as long as its socket is open
+        function startHeartbeat(socket) {
             const heartbeatInterval = setInterval(() => {
-                if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({ type: 'heartbeat' }));
+                if (socket.readyState === WebSocket.OPEN) {
+                    socket.send(JSON.stringify({ type: 'heartbeat' }));
                 } else {
                     clearInterval(heartbeatInterval);
                 }
             }, 10000);
 
             // Clean up interval when connection closes
-            ws.addEventListener('close', () => {
+            socket.addEventListener('close', () => {
                 clearInterval(heartbeatInterval);
             });
         }
@@ -905,18 +967,20 @@ export default class TerminalManager {
         // Initialize WebSocket connection
         connectWebSocket();
 
-        // Handle terminal input with connection check
+        // Handle terminal input with connection check. A key typed with no connection is dropped. While one is
+        // underway it says nothing, as the close still to come may be final; otherwise it says so and starts one,
+        // with its retries renewed: that is how a tab whose shell exited gets a new one, and how one whose retries
+        // ran out before the server came back reconnects
         terminal.onData(data => {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
                     type: 'input',
                     data: data
                 }));
-            } else {
-                terminal.writeln('\r\nConnection not available. Attempting to reconnect...');
-                if (reconnectAttempts < maxReconnectAttempts) {
-                    connectWebSocket();
-                }
+            } else if (!connectionUnderway()) {
+                reportOutage('\r\nConnection not available. Attempting to reconnect...');
+                reconnectAttempts = 0;
+                connectWebSocket();
             }
             
             // Save session state on terminal input
@@ -938,18 +1002,24 @@ export default class TerminalManager {
             }
         });
 
-        // Handle page visibility changes
-        document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible') {
-                if (!ws || ws.readyState === WebSocket.CLOSED) {
-                    reconnectAttempts = 0; // Reset attempts when page becomes visible
-                    connectWebSocket();
-                }
+        // Handle page visibility changes: coming back to the page reconnects a tab whose connection ended, with
+        // its retries renewed. A retry waiting out its backoff is called off for it, as the page may have been
+        // away (a laptop asleep) for longer than the wait; a socket connecting or open is left to finish
+        const onVisibilityChange = () => {
+            if (document.visibilityState !== 'visible') {
+                return;
             }
-        });
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+            if (!connectionUnderway()) {
+                reconnectAttempts = 0;
+                connectWebSocket();
+            }
+        };
+        document.addEventListener('visibilitychange', onVisibilityChange);
 
         // Handle window resize
-        window.addEventListener('resize', () => {
+        const onWindowResize = () => {
             // Delay the resize slightly to ensure container dimensions are settled
             setTimeout(() => {
                 // Let FitAddon handle terminal sizing properly
@@ -964,14 +1034,16 @@ export default class TerminalManager {
                     }));
                 }
             }, 50); // Small delay to ensure container dimensions are settled
-        });
+        };
+        window.addEventListener('resize', onWindowResize);
 
         // Clean up on page unload
-        window.addEventListener('beforeunload', () => {
+        const onBeforeUnload = () => {
             if (ws) {
                 ws.close();
             }
-        });
+        };
+        window.addEventListener('beforeunload', onBeforeUnload);
 
         // Update terminal colors when theme changes
         const observer = new MutationObserver((mutations) => {
@@ -992,6 +1064,20 @@ export default class TerminalManager {
         observer.observe(document.documentElement, {
             attributes: true,
             attributeFilter: ['data-theme']
+        });
+
+        // Closing the tab ends its connection for good: a waiting retry is called off, the page's events no longer
+        // reach the tab, and its socket is let go of before it is closed (1000), so neither that close nor one the
+        // server sent at the same time reconnects it. The server ends the shell when the socket closes
+        connectionEnders.set(terminal, () => {
+            clearTimeout(reconnectTimer);
+            document.removeEventListener('visibilitychange', onVisibilityChange);
+            window.removeEventListener('resize', onWindowResize);
+            window.removeEventListener('beforeunload', onBeforeUnload);
+            observer.disconnect();
+            const socket = ws;
+            ws = null;
+            socket.close(1000);
         });
 
         return terminal;

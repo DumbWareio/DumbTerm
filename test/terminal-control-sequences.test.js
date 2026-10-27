@@ -118,7 +118,7 @@ describe('terminal control sequences', () => {
         mock.method(console, 'warn', () => {});
 
         // initTerminal only needs these from its manager; the constructor builds the whole tab UI
-        manager = { terminalAddons: new Map(), saveSessionState() {} };
+        manager = { terminalAddons: new Map(), terminals: new Map(), saveSessionState() {} };
         terminal = TerminalManager.prototype.initTerminal.call(manager, {});
     });
 
@@ -169,7 +169,7 @@ describe('terminal control sequences', () => {
     // Open a tab restored from saved content, as loadSessionState does, once xterm has parsed it
     async function restoreSession(content) {
         const restored = TerminalManager.prototype.initTerminal.call(
-            { terminalAddons: new Map(), saveSessionState() {} }, {}, content);
+            { terminalAddons: new Map(), terminals: new Map(), saveSessionState() {} }, {}, content);
         await new Promise((resolve) => {
             restored.write('', resolve);
             mock.timers.runAll();
@@ -256,7 +256,7 @@ describe('terminal control sequences', () => {
         assert.match(content, /x/, 'the session content itself is saved');
 
         const restored = TerminalManager.prototype.initTerminal.call(
-            { terminalAddons: new Map(), saveSessionState() {} }, {}, content);
+            { terminalAddons: new Map(), terminals: new Map(), saveSessionState() {} }, {}, content);
         try {
             await new Promise((resolve) => {
                 restored.write('', resolve);
@@ -1102,6 +1102,39 @@ describe('terminal control sequences', () => {
         assert.equal(terminal.modes.mouseTrackingMode, 'none');
         assert.equal(terminal._core.coreMouseService.activeEncoding, 'DEFAULT', 'SGR mouse encoding off');
         assert.equal(terminal.modes.sendFocusMode, false);
+    });
+
+    // Switching to the editor's screen saves the text attributes in use (DECSC), and leaving it restores them:
+    // the reset has to come after the switch back, or the new shell would get them
+    test('reconnecting while an editor is open gives the new shell none of the colours in use before it', async () => {
+        await receiveOutput('$ vim notes.txt\r\n\x1b[31;7m\x1b[?1049h\x1b[H\x1b[2JVIM SCREEN');
+        reconnect();
+        await receiveOutput('new$ ');
+
+        const row = bufferLines(terminal).indexOf('new$ ');
+        assert.notEqual(row, -1, 'the new shell\'s prompt');
+        const prompt = terminal.buffer.active.getLine(row).getCell(0);
+        assert.equal(prompt.isInverse(), 0);
+        assert.equal(prompt.getFgColorMode(), 0, 'default foreground');
+    });
+
+    test('reconnecting after a program in the normal buffer turns off the modes it set', async () => {
+        // A picker drawn under the prompt (fzf --height) never leaves the normal buffer, yet hides the cursor and
+        // turns on application cursor keys and keypad, mouse reports in SGR encoding and focus reports
+        await receiveOutput('$ fzf --height 40%\r\n\x1b[?25l\x1b[?1h\x1b=\x1b[?1000h\x1b[?1006h\x1b[?1004h> ');
+        assert.equal(terminal.buffer.active.type, 'normal');
+        reconnect();
+        await receiveOutput('\x1b[?2004hnew$ ');
+
+        assert.equal(terminal._core.coreService.isCursorHidden, false, 'cursor shown');
+        assert.equal(terminal.modes.applicationCursorKeysMode, false);
+        assert.equal(terminal.modes.applicationKeypadMode, false);
+        assert.equal(terminal.modes.mouseTrackingMode, 'none');
+        assert.equal(terminal._core.coreMouseService.activeEncoding, 'DEFAULT', 'SGR mouse encoding off');
+        assert.equal(terminal.modes.sendFocusMode, false);
+        assert.deepEqual(bufferLines(terminal).slice(0, 4),
+            ['$ fzf --height 40%', '> ', 'Connection lost. Attempting to reconnect...', 'new$ '],
+            'the new shell carries on under what the program left');
     });
 
     test('a session saved with an editor open by an earlier version restores without the editor', async () => {
