@@ -510,6 +510,14 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)).slice(-3), [' transcript line 2', ' transcript line 3', '']);
     });
 
+    test('a saved session keeps the output of an app that started with blank rows', async () => {
+        // A blank row above the app's input line is no sign of a prompt redrawn there
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n\x1b[?2004h\r\n\r\nWelcome\r\n${appLines(40)}\r\n> type here`);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(-3), [' transcript line 38', ' transcript line 39', '']);
+    });
+
     test('a saved session leaves out a Starship prompt with a half-typed command three rows long', async () => {
         // The cursor is four rows below the marked row: the prompt's blank and top lines, then three rows of input
         const saves = recordSavedSessions();
@@ -517,6 +525,44 @@ describe('terminal control sequences', () => {
         await receiveOutput(`${STARSHIP_PROMPT}echo ${'x'.repeat(170)}`);
 
         assert.deepEqual(savedLines(saves.at(-1)), ['', plain(STARSHIP_TOP_LINE), '❯ ls', 'file1', '']);
+    });
+
+    // bash 5.2's Tab-Tab under Starship (captured): readline lists the completions under the command, then
+    // redraws the whole prompt below them without turning bracketed paste on again
+    const STARSHIP_REDRAW = STARSHIP_PROMPT.replace('\x1b[?2004h', '');
+    const starshipCompletion = (command, listing) =>
+        `${STARSHIP_PROMPT}${command}\x07\r\n${listing}\r\n${STARSHIP_REDRAW}${command}`;
+
+    test('a saved session leaves out a Starship prompt redrawn below a completion listing', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput(starshipCompletion('ls /tmp/d/', 'alpha/ beta/  delta/ gamma/ \r\n'));
+
+        assert.equal(saves.at(-1), '');
+    });
+
+    test('a saved session keeps the scrollback above a Starship prompt redrawn below a completion listing', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput(`${SCREENFULS}${starshipCompletion('ls /tmp/d/', 'alpha/ beta/  delta/ gamma/ \r\n')}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(-3), ['line 38', 'line 39', '']);
+    });
+
+    test('a saved session leaves out a Starship prompt redrawn below a completion listing for a long command', async () => {
+        // The redrawn prompt's top line is three rows above the cursor: a command three rows long, the most the
+        // marked prompt allows
+        const saves = recordSavedSessions();
+        await receiveOutput(starshipCompletion(`ls /tmp/${'x'.repeat(160)}/`, 'alpha/ beta/  delta/ gamma/ \r\n'));
+
+        assert.equal(saves.at(-1), '');
+    });
+
+    test('a saved session leaves out a plain prompt redrawn below a completion listing', async () => {
+        // The prompt's line, with the command as typed, is redrawn on the cursor's row
+        const saves = recordSavedSessions();
+        await receiveOutput('\x1b[?2004h$ ls\r\n\x1b[?2004l\rfile1\r\n');
+        await receiveOutput('\x1b[?2004h$ ls /tmp/d/\x07\r\nalpha/\r\nbeta/\r\ndelta/\r\ngamma/\r\n$ ls /tmp/d/');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ ls', 'file1', '']);
     });
 
     test('a saved session leaves out the prompt redrawn at the top of a cleared screen', async () => {

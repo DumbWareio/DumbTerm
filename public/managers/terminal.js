@@ -8,6 +8,18 @@ const promptMarkers = new WeakMap();
 // The furthest the cursor gets below that row at a prompt: the tallest prompt plus a little typed input.
 // Further down, the row is an app's that left bracketed paste on and kept printing (Claude Code)
 const PROMPT_MAX_ROWS_BELOW_MARK = 4;
+// readline redraws its whole prompt below a completion listing without turning bracketed paste on again, so
+// the cursor ends up further below the marked row than that. The redrawn prompt repeats the marked one: find
+// its first line (after a blank one, Starship's) in the rows a prompt reaches above, and on, the cursor's row
+function redrawnPromptRow(buffer, markedRow, cursorRow) {
+    const text = (row) => buffer.getLine(row)?.translateToString(true) ?? '';
+    const first = text(markedRow) === '' ? markedRow + 1 : markedRow;
+    if (text(first) === '') return null;
+    for (let row = cursorRow; row > cursorRow - PROMPT_MAX_ROWS_BELOW_MARK; row--) {
+        if (text(row) === text(first)) return markedRow;
+    }
+    return null;
+}
 
 // Helper function to join paths with base path
 function joinPath(path) {
@@ -984,9 +996,9 @@ export default class TerminalManager {
                             // The prompt starts on the row marked when the shell turned bracketed paste on, or on
                             // the cursor's row if that is higher (zsh marks after its prompt), the marked row is
                             // gone (erased by a screen clear, or out of the scrollback) or it is too far up to be
-                            // the prompt's. Rows above it are all kept, so no prompt patterns here. Known limit:
-                            // zsh turns it on after the prompt, so the upper lines of a multi-line zsh prompt stay
-                            // in the save
+                            // the prompt's, unless the prompt was redrawn below. Rows above it are all kept, so no
+                            // prompt patterns here. Known limit: zsh turns it on after the prompt, so the upper
+                            // lines of a multi-line zsh prompt stay in the save
                             const cursorRow = buffer.baseY + buffer.cursorY;
                             const mark = promptMarkers.get(terminal);
                             const markedRow = !mark ? cursorRow
@@ -994,7 +1006,7 @@ export default class TerminalManager {
                                 : mark.marker.isDisposed ? cursorRow : mark.marker.line + mark.rowsBelow;
                             const promptStart = cursorRow - markedRow <= PROMPT_MAX_ROWS_BELOW_MARK
                                 ? Math.min(markedRow, cursorRow)
-                                : cursorRow;
+                                : redrawnPromptRow(buffer, markedRow, cursorRow) ?? cursorRow;
                             serializedContent = promptStart > 0
                                 ? addons.serializeAddon.serialize({ ...serializeOptions, range: { start: 0, end: promptStart - 1 } })
                                 : '';
