@@ -1104,6 +1104,25 @@ describe('terminal control sequences', () => {
         assert.equal(terminal.modes.sendFocusMode, false);
     });
 
+    test('reconnecting after a program in the normal buffer turns off the modes it set', async () => {
+        // A picker drawn under the prompt (fzf --height) never leaves the normal buffer, yet hides the cursor and
+        // turns on application cursor keys and keypad, mouse reports in SGR encoding and focus reports
+        await receiveOutput('$ fzf --height 40%\r\n\x1b[?25l\x1b[?1h\x1b=\x1b[?1000h\x1b[?1006h\x1b[?1004h> ');
+        assert.equal(terminal.buffer.active.type, 'normal');
+        reconnect();
+        await receiveOutput('\x1b[?2004hnew$ ');
+
+        assert.equal(terminal._core.coreService.isCursorHidden, false, 'cursor shown');
+        assert.equal(terminal.modes.applicationCursorKeysMode, false);
+        assert.equal(terminal.modes.applicationKeypadMode, false);
+        assert.equal(terminal.modes.mouseTrackingMode, 'none');
+        assert.equal(terminal._core.coreMouseService.activeEncoding, 'DEFAULT', 'SGR mouse encoding off');
+        assert.equal(terminal.modes.sendFocusMode, false);
+        assert.deepEqual(bufferLines(terminal).slice(0, 4),
+            ['$ fzf --height 40%', '> ', 'Connection lost. Attempting to reconnect...', 'new$ '],
+            'the new shell carries on under what the program left');
+    });
+
     test('a session saved with an editor open by an earlier version restores without the editor', async () => {
         // Before 1.3.0 such a save held the switch to the alternate screen, followed by the editor's screen
         const restored = await restoreSession(
