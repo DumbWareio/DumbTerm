@@ -606,6 +606,33 @@ describe('terminal control sequences', () => {
         assert.equal(saves.at(-1), '');
     });
 
+    test('a saved session keeps the output above a Starship prompt when only the scrollback is cleared', async () => {
+        // CSI 3 J on its own leaves the screen, and the prompt's mark on it, alone
+        const saves = recordSavedSessions();
+        await receiveOutput(`${STARSHIP_PROMPT}ls /app/config\r\n\x1b[?2004l\rstarship.toml\r\n`);
+        await receiveOutput(`${STARSHIP_PROMPT}\x1b[3J`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['', plain(STARSHIP_TOP_LINE), '❯ ls /app/config', 'starship.toml', '']);
+    });
+
+    test('a saved session keeps the scrollback above a two-line prompt redrawn by Ctrl-L', async () => {
+        // The prompt has no blank line first, so it starts right at the top of the screen
+        const saves = recordSavedSessions();
+        const prompt = '\x1b[?2004huser@host ~/dir\r\n$ ';
+        await receiveOutput(`${SCREENFULS}${prompt}ls\r\n\x1b[?2004l\rfile\r\n`);
+        await receiveOutput(`${prompt}\x1b[H\x1b[2Juser@host ~/dir\r\n$ `);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(-3), ['line 19', 'line 20', '']);
+    });
+
+    test('a saved session keeps the scrollback above a Starship prompt redrawn after a clear sent before the cursor goes home', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput(`${SCREENFULS}${STARSHIP_PROMPT}`);
+        await receiveOutput(`\x1b[2J\x1b[H${STARSHIP_REDRAW}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(-3), ['line 17', 'line 18', '']);
+    });
+
     test('a saved session keeps the scrollback above a two-line zsh prompt redrawn by Ctrl-L', async () => {
         // zsh 5.9's Ctrl-L (captured) erases below the cursor (CSI J) after clearing the screen, keeping the scrollback
         const saves = recordSavedSessions();
