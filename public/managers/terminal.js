@@ -849,7 +849,11 @@ export default class TerminalManager {
                         }));
                     }, 100);
                 }
-                terminal.focus();
+                // Only the tab in front takes the keyboard: the others are hidden but still in the page, and
+                // keys typed into one would run in a shell nobody can see
+                if (self.terminals.get(self.activeTabId)?.terminal === terminal) {
+                    terminal.focus();
+                }
                 startHeartbeat(socket);
             };
 

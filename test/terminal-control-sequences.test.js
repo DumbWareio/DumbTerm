@@ -118,7 +118,7 @@ describe('terminal control sequences', () => {
         mock.method(console, 'warn', () => {});
 
         // initTerminal only needs these from its manager; the constructor builds the whole tab UI
-        manager = { terminalAddons: new Map(), saveSessionState() {} };
+        manager = { terminalAddons: new Map(), terminals: new Map(), saveSessionState() {} };
         terminal = TerminalManager.prototype.initTerminal.call(manager, {});
     });
 
@@ -169,7 +169,7 @@ describe('terminal control sequences', () => {
     // Open a tab restored from saved content, as loadSessionState does, once xterm has parsed it
     async function restoreSession(content) {
         const restored = TerminalManager.prototype.initTerminal.call(
-            { terminalAddons: new Map(), saveSessionState() {} }, {}, content);
+            { terminalAddons: new Map(), terminals: new Map(), saveSessionState() {} }, {}, content);
         await new Promise((resolve) => {
             restored.write('', resolve);
             mock.timers.runAll();
@@ -256,7 +256,7 @@ describe('terminal control sequences', () => {
         assert.match(content, /x/, 'the session content itself is saved');
 
         const restored = TerminalManager.prototype.initTerminal.call(
-            { terminalAddons: new Map(), saveSessionState() {} }, {}, content);
+            { terminalAddons: new Map(), terminals: new Map(), saveSessionState() {} }, {}, content);
         try {
             await new Promise((resolve) => {
                 restored.write('', resolve);

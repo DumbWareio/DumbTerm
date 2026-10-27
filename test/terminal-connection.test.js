@@ -24,9 +24,15 @@ registerHooks({
     },
 });
 
+// focus() needs a document. This one keeps whether focus reports were on each time the page focused the
+// terminal, and sends one (CSI I) when they were, as the browser's focus event does
 class HeadlessPageTerminal extends XtermTerminal {
+    focusedWithReports = [];
     open() {}
-    focus() {}
+    focus() {
+        this.focusedWithReports.push(this.modes.sendFocusMode);
+        if (this.modes.sendFocusMode) this.input('\x1b[I', false);
+    }
 }
 
 class StubAddon {
@@ -475,6 +481,26 @@ describe('terminal connection', () => {
 
         assert.equal(socketsSince(first).length, 1);
         assert.equal(FakeWebSocket.last.readyState, FakeWebSocket.OPEN);
+    });
+
+    // Every tab's terminal sits in the page; the hidden ones are only transparent, and can take the keyboard
+    test('a tab behind another one does not take the keyboard when it connects or reconnects', () => {
+        FakeWebSocket.last.closes({ code: 1001, wasClean: true });
+        wait(2000);
+
+        assert.equal(FakeWebSocket.last.readyState, FakeWebSocket.OPEN, 'the tab reconnected');
+        assert.deepEqual(terminal.focusedWithReports, []);
+    });
+
+    // Guard
+    test('the tab in front takes the keyboard once it reconnects', () => {
+        manager.activeTabId = 1;
+        const focused = terminal.focusedWithReports.length;
+        FakeWebSocket.last.closes({ code: 1001, wasClean: true });
+        wait(2000);
+
+        assert.equal(FakeWebSocket.last.readyState, FakeWebSocket.OPEN, 'the tab reconnected');
+        assert.equal(terminal.focusedWithReports.length, focused + 1);
     });
 
     test('closing a tab closes its socket with 1000', () => {
