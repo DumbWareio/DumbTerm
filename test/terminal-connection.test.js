@@ -431,19 +431,39 @@ describe('terminal connection', () => {
         assert.equal(linesSaying(NOT_AVAILABLE), 0);
     });
 
-    test('once the retries run out, keys open no socket and say nothing more', () => {
+    // A server stopped for longer than the retries last, then started again
+    test('once the retries run out, a key reconnects the tab when the server is back', () => {
         const first = FakeWebSocket.last;
         server.up = false;
-        first.closes({ code: 1006, wasClean: false });
+        first.closes({ code: 1001, wasClean: true });
         wait(60000);
         assert.equal(socketsSince(first).length, 5, 'five retries');
         assert.equal(linesSaying(REFRESH), 1);
 
+        server.up = true;
         type('a');
         type('b');
         wait(60000);
-        assert.equal(socketsSince(first).length, 5);
-        assert.equal(linesSaying(LOST) + linesSaying(NOT_AVAILABLE), 1);
+        assert.equal(socketsSince(first).length, 6, 'one more socket');
+        assert.equal(FakeWebSocket.last.readyState, FakeWebSocket.OPEN);
+        assert.deepEqual(FakeWebSocket.last.inputs(), [], 'the keys are dropped');
+        assert.equal(linesSaying(LOST) + linesSaying(NOT_AVAILABLE), 1, 'one line for the whole outage');
+    });
+
+    test('once the retries run out, a key while the server is still away starts a new round of them', () => {
+        const first = FakeWebSocket.last;
+        server.up = false;
+        first.closes({ code: 1006, wasClean: false });
+        wait(60000);
+
+        type('a');
+        const keyed = FakeWebSocket.last;
+        assert.equal(keyed.createdAt, 60000, 'the key connects at once');
+        wait(60000);
+        // Retried 1, 2, 4, 8 and 16s after each refusal, as the first round was
+        assert.deepEqual(socketsSince(keyed).map((socket) => socket.createdAt - 60000), [1050, 3100, 7150, 15200, 31250]);
+        assert.equal(FakeWebSocket.mostConnecting, 1);
+        assert.equal(linesSaying(REFRESH), 2);
     });
 
     test('a key typed after a retry is refused opens one socket, and a late close of the old one starts nothing', () => {

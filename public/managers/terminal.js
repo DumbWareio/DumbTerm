@@ -951,7 +951,8 @@ export default class TerminalManager {
 
         // Handle terminal input with connection check. A key typed with no connection is dropped. While one is
         // underway it says nothing, as the close still to come may be final; otherwise it says so and starts one,
-        // unless the retries have run out, which is how a tab whose shell exited gets a new one
+        // with its retries renewed: that is how a tab whose shell exited gets a new one, and how one whose retries
+        // ran out before the server came back reconnects
         terminal.onData(data => {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
@@ -960,9 +961,8 @@ export default class TerminalManager {
                 }));
             } else if (!connectionUnderway()) {
                 reportOutage('\r\nConnection not available. Attempting to reconnect...');
-                if (reconnectAttempts < maxReconnectAttempts) {
-                    connectWebSocket();
-                }
+                reconnectAttempts = 0;
+                connectWebSocket();
             }
             
             // Save session state on terminal input
