@@ -668,6 +668,18 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)), ['#', '[1] 123', 'file 1 of 4', 'file 2 of 4', 'file 3 of 4', 'file 4 of 4', '']);
     });
 
+    test('a saved session leaves out a background job\'s output at a root prompt when its last row starts like the prompt', async () => {
+        // Known limit: with no final newline, the job's last row starts with the root prompt's `# `, so it reads
+        // as that prompt redrawn below and typed on, and the save stops above the job's output. Telling the two
+        // apart would also lose the plain prompt typed on, or erased back, after a completion listing. Pinned so
+        // that changing it is deliberate
+        const saves = recordSavedSessions();
+        await receiveOutput('\x1b[?2004h# ');
+        await receiveOutput('\r\n[1] 123\r\njob line 1\r\njob line 2\r\njob line 3\r\njob line 4\r\n# done');
+
+        assert.equal(saves.at(-1), '');
+    });
+
     test('a saved session leaves out a plain prompt redrawn below a completion listing and typed on', async () => {
         // Captured from bash 5.2: a listing four rows tall, then `al` typed at the redrawn prompt
         const saves = recordSavedSessions();
