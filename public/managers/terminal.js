@@ -836,7 +836,14 @@ export default class TerminalManager {
                 if (terminal.buffer.active.type === 'alternate') {
                     terminal.write('\x1b[?1049l');
                 }
-                terminal.write('\x1b[!p\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l');
+                // Only the tab in front takes the keyboard: the others are hidden but still in the page, and
+                // keys typed into one would run in a shell nobody can see. It takes it once the reset is applied,
+                // or a program's focus reports would still be on and the new shell would read one as typed text
+                terminal.write('\x1b[!p\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l', () => {
+                    if (self.terminals.get(self.activeTabId)?.terminal === terminal) {
+                        terminal.focus();
+                    }
+                });
 
                 if (socket.readyState === WebSocket.OPEN) {
                     // Force an initial resize to ensure proper dimensions
@@ -848,11 +855,6 @@ export default class TerminalManager {
                             rows: terminal.rows
                         }));
                     }, 100);
-                }
-                // Only the tab in front takes the keyboard: the others are hidden but still in the page, and
-                // keys typed into one would run in a shell nobody can see
-                if (self.terminals.get(self.activeTabId)?.terminal === terminal) {
-                    terminal.focus();
                 }
                 startHeartbeat(socket);
             };

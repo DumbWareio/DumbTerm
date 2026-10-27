@@ -503,6 +503,23 @@ describe('terminal connection', () => {
         assert.equal(terminal.focusedWithReports.length, focused + 1);
     });
 
+    // vim turns focus reports on; the new shell would read the report as typed text
+    test('the tab in front takes the keyboard once the focus reports a program turned on are off', () => {
+        manager.activeTabId = 1;
+        const first = FakeWebSocket.last;
+        first.onmessage({ data: JSON.stringify({ type: 'output', data: '\x1b[?1049h\x1b[?1004hVIM SCREEN' }) });
+        wait(1);
+        assert.equal(terminal.modes.sendFocusMode, true);
+        const focused = terminal.focusedWithReports.length;
+        first.closes({ code: 1001, wasClean: true });
+        wait(2000);
+
+        const reconnected = FakeWebSocket.last;
+        assert.equal(reconnected.readyState, FakeWebSocket.OPEN, 'the tab reconnected');
+        assert.deepEqual(terminal.focusedWithReports.slice(focused), [false], 'focused once, with the reports off');
+        assert.deepEqual(reconnected.inputs(), [], 'no focus report reached the new shell');
+    });
+
     test('closing a tab closes its socket with 1000', () => {
         const socket = FakeWebSocket.last;
         closeTab();
