@@ -869,6 +869,10 @@ export default class TerminalManager {
             socket.onclose = (event) => {
                 clearTimeout(connectionTimeout);
                 if (socket === ws) {
+                    // Focus and mouse reports a program left on would go on reaching the page as input, and count
+                    // as keys typed while disconnected, so turn them off with the shell gone; the next connection
+                    // resets the rest
+                    terminal.write('\x1b[?1004l\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l');
                     handleReconnect(event);
                 }
             };

@@ -270,6 +270,22 @@ describe('terminal connection', () => {
             .filter((line) => line.includes(text)).length;
     }
 
+    // A click in the terminal, which xterm reports to the shell as input while a program has mouse reports on
+    // in SGR encoding (in the default one it reports them as binary data, which the page does not send)
+    function click() {
+        terminal._core.coreMouseService.triggerMouseEvent({ col: 0, row: 0, x: 0, y: 0, button: 0, action: 1,
+            ctrl: false, alt: false, shift: false });
+    }
+
+    // vim turns focus reports and mouse reports on
+    function openVim() {
+        FakeWebSocket.last.onmessage({ data: JSON.stringify({ type: 'output',
+            data: '\x1b[?1049h\x1b[?1004h\x1b[?1000h\x1b[?1006hVIM' }) });
+        wait(1);
+        assert.equal(terminal.modes.sendFocusMode, true);
+        assert.equal(terminal.modes.mouseTrackingMode, 'vt200');
+    }
+
     function socketsSince(socket) {
         return FakeWebSocket.all.slice(FakeWebSocket.all.indexOf(socket) + 1);
     }
@@ -502,6 +518,46 @@ describe('terminal connection', () => {
         assert.deepEqual(socketsSince(keyed).map((socket) => socket.createdAt - 60000), [1050, 3100, 7150, 15200, 31250]);
         assert.equal(FakeWebSocket.mostConnecting, 1);
         assert.equal(linesSaying(RAN_OUT), 2);
+    });
+
+    // The browser sends them as input, but nobody typed them
+    test('once the retries run out, focus and mouse reports a program left on are no keys', () => {
+        openVim();
+        const first = FakeWebSocket.last;
+        server.up = false;
+        first.closes({ code: 1006, wasClean: false });
+        wait(60000);
+        const sockets = FakeWebSocket.all.length;
+        terminal.focus();
+        wait(1000);
+        assert.equal(FakeWebSocket.all.length, sockets, 'no socket for a focus report');
+        click();
+        wait(1000);
+        assert.equal(FakeWebSocket.all.length, sockets, 'nor for a mouse report');
+        assert.equal(linesSaying(NOT_AVAILABLE), 0);
+
+        type('a');
+        assert.equal(FakeWebSocket.all.length, sockets + 1, 'a key still reconnects');
+        assert.equal(linesSaying(NOT_AVAILABLE), 1);
+    });
+
+    test('after the shell exits, focus and mouse reports a program left on get the tab no new shell', () => {
+        openVim();
+        const first = FakeWebSocket.last;
+        first.closes({ code: 1005, wasClean: true });
+        wait(1000);
+        terminal.focus();
+        wait(1000);
+        assert.equal(FakeWebSocket.last, first, 'no socket for a focus report');
+        click();
+        wait(1000);
+        assert.equal(FakeWebSocket.last, first, 'nor for a mouse report');
+        assert.equal(linesSaying(NOT_AVAILABLE), 0);
+
+        type('a');
+        wait(1000);
+        assert.equal(socketsSince(first).length, 1, 'a key still reconnects');
+        assert.equal(FakeWebSocket.last.readyState, FakeWebSocket.OPEN);
     });
 
     test('a key typed after a retry is refused opens one socket, and a late close of the old one starts nothing', () => {
