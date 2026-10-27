@@ -1104,6 +1104,20 @@ describe('terminal control sequences', () => {
         assert.equal(terminal.modes.sendFocusMode, false);
     });
 
+    // Switching to the editor's screen saves the text attributes in use (DECSC), and leaving it restores them:
+    // the reset has to come after the switch back, or the new shell would get them
+    test('reconnecting while an editor is open gives the new shell none of the colours in use before it', async () => {
+        await receiveOutput('$ vim notes.txt\r\n\x1b[31;7m\x1b[?1049h\x1b[H\x1b[2JVIM SCREEN');
+        reconnect();
+        await receiveOutput('new$ ');
+
+        const row = bufferLines(terminal).indexOf('new$ ');
+        assert.notEqual(row, -1, 'the new shell\'s prompt');
+        const prompt = terminal.buffer.active.getLine(row).getCell(0);
+        assert.equal(prompt.isInverse(), 0);
+        assert.equal(prompt.getFgColorMode(), 0, 'default foreground');
+    });
+
     test('reconnecting after a program in the normal buffer turns off the modes it set', async () => {
         // A picker drawn under the prompt (fzf --height) never leaves the normal buffer, yet hides the cursor and
         // turns on application cursor keys and keypad, mouse reports in SGR encoding and focus reports
