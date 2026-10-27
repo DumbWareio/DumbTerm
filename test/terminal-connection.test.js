@@ -608,6 +608,19 @@ describe('terminal connection', () => {
         assert.equal(FakeWebSocket.mostConnecting, 1);
     });
 
+    test('coming back to the page after the retries ran out says once that the tab is reconnecting', () => {
+        const first = FakeWebSocket.last;
+        server.up = false;
+        first.closes({ code: 1006, wasClean: false });
+        wait(60000);
+        assert.equal(linesSaying(LOST), 1);
+
+        document.fire('visibilitychange');
+        wait(60000);
+        assert.equal(linesSaying(LOST), 2, 'one more line for the round coming back started');
+        assert.equal(linesSaying(RAN_OUT), 2);
+    });
+
     test('a page that is hidden does not reconnect a tab', () => {
         const first = FakeWebSocket.last;
         first.closes({ code: 1005, wasClean: true });
