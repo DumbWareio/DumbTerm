@@ -347,6 +347,21 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)), ['', plain(STARSHIP_TOP_LINE), '\u276f echo hello', 'hello', '']);
     });
 
+    test('a session saved at a Starship prompt restores with the new prompt under the output, in default colours', async () => {
+        const saves = recordSavedSessions();
+        // The output leaves its background colour on
+        await receiveOutput(`${STARSHIP_PROMPT}printf "\\033[41m FAIL\\n"\r\n\x1b[?2004l\r\x1b[41m FAIL\r\n`);
+        await receiveOutput(STARSHIP_PROMPT);
+
+        await withRestoredPrompt(saves.at(-1), (restored) => {
+            const prompt = cursorRow(restored);
+            assert.deepEqual(bufferLines(restored).slice(prompt - 1, prompt + 1), [' FAIL', '$ ']);
+            assert.ok(cellAt(restored, prompt - 1, 1).getBgColor() > 0, 'the output keeps its colour');
+            assert.ok(cellAt(restored, prompt, 0).isBgDefault(), 'default background');
+            assert.ok(cellAt(restored, prompt, 10).isBgDefault(), 'default background across the row');
+        });
+    });
+
     test('a saved session keeps a coloured output line above a zsh prompt', async () => {
         const saves = recordSavedSessions();
         await receiveOutput(zshPrompt('CH-M4-MINI% '));
