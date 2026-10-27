@@ -9,14 +9,22 @@ const promptMarkers = new WeakMap();
 // Further down, the row is an app's that left bracketed paste on and kept printing (Claude Code)
 const PROMPT_MAX_ROWS_BELOW_MARK = 4;
 // readline redraws its whole prompt below a completion listing without turning bracketed paste on again, so
-// the cursor ends up further below the marked row than that. The redrawn prompt repeats the marked one: find
-// its first line (after a blank one, Starship's) in the rows a prompt reaches above, and on, the cursor's row
+// the cursor ends up further below the marked row than that. The redrawn prompt repeats the marked one row for
+// row: look for it, from its first line (after a blank one, Starship's) down to the cursor's row, starting in
+// the rows a prompt reaches above, and on, the cursor's row. The cursor's row holds the command, which may
+// have been typed on (or erased back) since the listing, so there one row need only start like the other
 function redrawnPromptRow(buffer, markedRow, cursorRow) {
     const text = (row) => buffer.getLine(row)?.translateToString(true) ?? '';
     const first = text(markedRow) === '' ? markedRow + 1 : markedRow;
     if (text(first) === '') return null;
-    for (let row = cursorRow; row > cursorRow - PROMPT_MAX_ROWS_BELOW_MARK; row--) {
-        if (text(row) === text(first)) return markedRow;
+    const sameCommand = (a, b) => a === b || (a !== '' && b !== '' && (a.startsWith(b) || b.startsWith(a)));
+    for (let top = cursorRow; top > cursorRow - PROMPT_MAX_ROWS_BELOW_MARK; top--) {
+        let same = true;
+        for (let row = top; same && row <= cursorRow; row++) {
+            const marked = text(first + row - top);
+            same = row === cursorRow ? sameCommand(marked, text(row)) : marked === text(row);
+        }
+        if (same) return markedRow;
     }
     return null;
 }

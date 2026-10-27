@@ -565,6 +565,60 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)), ['$ ls', 'file1', '']);
     });
 
+    test('a saved session keeps a background job\'s output printed at a Starship prompt before a completion listing', async () => {
+        // Captured from bash 5.2: the job prints at the idle prompt, then Tab-Tab redraws the prompt below it
+        const saves = recordSavedSessions();
+        await receiveOutput(`${STARSHIP_PROMPT}(for i in 1 2 3 4 5 6; do sleep 0.2; echo job $i; done) &\r\n\x1b[?2004l\r[1] 117\r\n`);
+        await receiveOutput(`${STARSHIP_PROMPT}job 1\r\njob 2\r\njob 3\r\njob 4\r\njob 5\r\nls /tmp/d/job 6\r\n\x07\r\n`
+            + `${COMPLETIONS}${STARSHIP_REDRAW}ls /tmp/d/`);
+
+        const lines = savedLines(saves.at(-1));
+        const job = lines.indexOf('\u276f job 1');
+        assert.deepEqual(lines.slice(job, job + 6), ['\u276f job 1', 'job 2', 'job 3', 'job 4', 'job 5', 'ls /tmp/d/job 6']);
+    });
+
+    test('a saved session leaves out a plain prompt redrawn below a completion listing and typed on', async () => {
+        // Captured from bash 5.2: a listing four rows tall, then `al` typed at the redrawn prompt
+        const saves = recordSavedSessions();
+        const prompt = 'root@6934e2095d8c:/app# ';
+        await receiveOutput(`\x1b[?2004h${prompt}ls\r\n\x1b[?2004l\rfile1\r\n`);
+        await receiveOutput(`\x1b[?2004h${prompt}ls /tmp/e/\x07\r\n`
+            + 'alpha-a-rather-long-directory-name/ eta-a-rather-long-directory-name/\r\n'
+            + 'beta-a-rather-long-directory-name/  gamma-a-rather-long-directory-name/\r\n'
+            + 'delta-a-rather-long-directory-name/ theta-a-rather-long-directory-name/\r\n'
+            + 'eps-a-rather-long-directory-name/   zeta-a-rather-long-directory-name/\r\n'
+            + `${prompt}ls /tmp/e/al`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), [`${prompt}ls`, 'file1', '']);
+    });
+
+    test('a saved session leaves out a plain prompt redrawn below a completion listing and erased back', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput('\x1b[?2004h$ ls\r\n\x1b[?2004l\rfile1\r\n');
+        await receiveOutput('\x1b[?2004h$ ls /tmp/d/\x07\r\nalpha/\r\nbeta/\r\ndelta/\r\ngamma/\r\n$ ls /tmp/d/\b\x1b[K');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ ls', 'file1', '']);
+    });
+
+    test('a saved session keeps the output of an app that draws its first line again above its input line', async () => {
+        const saves = recordSavedSessions();
+        const rule = '\u2500'.repeat(80);
+        await receiveOutput(`$ app\r\n\x1b[?2004h${rule}\r\n${appLines(5)}${rule}\r\n> `);
+
+        assert.deepEqual(savedLines(saves.at(-1)),
+            ['$ app', rule, ...Array.from({ length: 5 }, (_, i) => ` transcript line ${i}`), rule, '']);
+    });
+
+    test('a saved session keeps the output of an app that draws its first line again above an empty cursor row', async () => {
+        // An empty row is not the start of the line the app first drew below its first one
+        const saves = recordSavedSessions();
+        const rule = '─'.repeat(80);
+        await receiveOutput(`$ app\r\n\x1b[?2004h${rule}\r\n${appLines(5)}${rule}\r\n`);
+
+        assert.deepEqual(savedLines(saves.at(-1)),
+            ['$ app', rule, ...Array.from({ length: 5 }, (_, i) => ` transcript line ${i}`), rule, '']);
+    });
+
     test('a saved session leaves out the prompt redrawn at the top of a cleared screen', async () => {
         // Ctrl-L clears the screen, and with it the row the shell marked, and redraws the prompt without
         // turning bracketed paste on again
