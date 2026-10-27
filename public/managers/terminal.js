@@ -778,31 +778,52 @@ export default class TerminalManager {
             }
         }
 
-        // WebSocket connection management
+        // WebSocket connection management. A tab has one connection underway at a time, a retry waiting on its
+        // timer or a socket not yet closed, and nothing starts another until it is over. A socket's events count
+        // only while it is the tab's own (ws): one the tab has replaced changes nothing
         let ws;
+        let reconnectTimer = null;
         const maxReconnectAttempts = 5;
         const baseReconnectDelay = 1000;
         let reconnectAttempts = 0;
+        // Whether the tab has said it is reconnecting since it was last connected: once is enough
+        let outageReported = false;
         const self = this; // Store reference to 'this' for use in callbacks
 
+        function connectionUnderway() {
+            return reconnectTimer !== null || (ws && ws.readyState !== WebSocket.CLOSED);
+        }
+
+        function reportOutage(message) {
+            if (!outageReported) {
+                outageReported = true;
+                terminal.writeln(message);
+            }
+        }
+
         function connectWebSocket() {
+            if (connectionUnderway()) {
+                return;
+            }
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const basePath = window.appConfig?.basePath || '';
             
             // Create WebSocket connection - cookies will be automatically included
-            ws = new WebSocket(`${protocol}//${window.location.host}${basePath}`);
+            const socket = new WebSocket(`${protocol}//${window.location.host}${basePath}`);
+            ws = socket;
 
-            // Set a generous timeout for the initial connection
+            // Set a generous timeout for the initial connection. Closing a socket that is still connecting fails
+            // it, and its close event arranges the retry
             const connectionTimeout = setTimeout(() => {
-                if (ws.readyState !== WebSocket.OPEN) {
-                    ws.close();
-                    handleReconnect();
+                if (socket.readyState !== WebSocket.OPEN) {
+                    socket.close();
                 }
             }, 5000);
 
-            ws.onopen = () => {
+            socket.onopen = () => {
                 clearTimeout(connectionTimeout);
                 reconnectAttempts = 0;
+                outageReported = false;
 
                 // Each connection gets a new shell, so an editor open on the old one is gone with it, and so are
                 // the modes the old shell's programs set, in either buffer (a picker drawn under the prompt sets
@@ -813,11 +834,11 @@ export default class TerminalManager {
                 }
                 terminal.write('\x1b[!p\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l');
 
-                if (ws.readyState === WebSocket.OPEN) {                 
+                if (socket.readyState === WebSocket.OPEN) {
                     // Force an initial resize to ensure proper dimensions
                     setTimeout(() => {
                         fitAddon.fit();
-                        ws.send(JSON.stringify({
+                        socket.send(JSON.stringify({
                             type: 'resize',
                             cols: terminal.cols,
                             rows: terminal.rows
@@ -825,19 +846,23 @@ export default class TerminalManager {
                     }, 100);
                 }
                 terminal.focus();
-                startHeartbeat();
+                startHeartbeat(socket);
             };
 
-            ws.onclose = (event) => {
-                handleReconnect(event);
+            socket.onclose = (event) => {
+                clearTimeout(connectionTimeout);
+                if (socket === ws) {
+                    handleReconnect(event);
+                }
             };
 
-            ws.onerror = (error) => {
+            socket.onerror = (error) => {
                 console.error('WebSocket error:', error);
-                ws.close();
+                clearTimeout(connectionTimeout);
+                socket.close();
             };
 
-            ws.onmessage = (event) => {
+            socket.onmessage = (event) => {
                 try {
                     const message = JSON.parse(event.data);
                     if (message.type === 'output') {
@@ -861,7 +886,7 @@ export default class TerminalManager {
 
         function handleReconnect(event) {
             // Handle authentication failure (code 1008 is policy violation)
-            if (event && event.code === 1008) {
+            if (event.code === 1008) {
                 terminal.writeln('\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n');
                 terminal.writeln('\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n');
                 terminal.writeln('\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n');
@@ -871,15 +896,16 @@ export default class TerminalManager {
                 return;
             }
 
-            if (event && event.wasClean) {
+            if (event.wasClean) {
                 terminal.writeln('\r\nConnection closed normally.');
                 return;
             }
 
             if (reconnectAttempts < maxReconnectAttempts) {
                 const delay = baseReconnectDelay * Math.pow(2, reconnectAttempts);
-                terminal.writeln('\r\nConnection lost. Attempting to reconnect...');
-                setTimeout(() => {
+                reportOutage('\r\nConnection lost. Attempting to reconnect...');
+                reconnectTimer = setTimeout(() => {
+                    reconnectTimer = null;
                     reconnectAttempts++;
                     connectWebSocket();
                 }, delay);
@@ -888,18 +914,18 @@ export default class TerminalManager {
             }
         }
 
-        // Heartbeat mechanism
-        function startHeartbeat() {
+        // Heartbeat mechanism, for as long as its socket is open
+        function startHeartbeat(socket) {
             const heartbeatInterval = setInterval(() => {
-                if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({ type: 'heartbeat' }));
+                if (socket.readyState === WebSocket.OPEN) {
+                    socket.send(JSON.stringify({ type: 'heartbeat' }));
                 } else {
                     clearInterval(heartbeatInterval);
                 }
             }, 10000);
 
             // Clean up interval when connection closes
-            ws.addEventListener('close', () => {
+            socket.addEventListener('close', () => {
                 clearInterval(heartbeatInterval);
             });
         }
@@ -907,7 +933,8 @@ export default class TerminalManager {
         // Initialize WebSocket connection
         connectWebSocket();
 
-        // Handle terminal input with connection check
+        // Handle terminal input with connection check. A key typed with no connection is dropped; it starts one
+        // unless one is underway or the retries have run out, which is how a tab whose shell exited gets a new one
         terminal.onData(data => {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
@@ -915,7 +942,7 @@ export default class TerminalManager {
                     data: data
                 }));
             } else {
-                terminal.writeln('\r\nConnection not available. Attempting to reconnect...');
+                reportOutage('\r\nConnection not available. Attempting to reconnect...');
                 if (reconnectAttempts < maxReconnectAttempts) {
                     connectWebSocket();
                 }
@@ -940,13 +967,12 @@ export default class TerminalManager {
             }
         });
 
-        // Handle page visibility changes
+        // Handle page visibility changes: coming back to the page reconnects a tab whose connection ended, with
+        // its retries renewed, and leaves one underway to finish
         document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible') {
-                if (!ws || ws.readyState === WebSocket.CLOSED) {
-                    reconnectAttempts = 0; // Reset attempts when page becomes visible
-                    connectWebSocket();
-                }
+            if (document.visibilityState === 'visible' && !connectionUnderway()) {
+                reconnectAttempts = 0;
+                connectWebSocket();
             }
         });
 
