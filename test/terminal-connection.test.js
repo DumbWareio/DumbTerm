@@ -55,8 +55,8 @@ const server = { up: true, hang: false };
 let now = 0;
 
 // Stands in for the page's WebSockets the way a browser runs them: a socket starts out connecting, close()
-// on one that is still connecting fails it (error, then close 1006), and the close event comes after close()
-// returns
+// on one that is still connecting fails it (error, then close 1006), the close event comes after close()
+// returns, and what is sent on a socket closing or closed is dropped (the browser logs that it was)
 class FakeWebSocket {
     static CONNECTING = 0;
     static OPEN = 1;
@@ -69,6 +69,7 @@ class FakeWebSocket {
         this.url = url;
         this.readyState = FakeWebSocket.CONNECTING;
         this.sent = [];
+        this.sentWhileClosed = 0;
         this.closeListeners = [];
         this.closedWith = undefined;
         this.createdAt = now;
@@ -84,6 +85,7 @@ class FakeWebSocket {
     send(data) {
         if (this.readyState === FakeWebSocket.CONNECTING) throw new Error('InvalidStateError: still connecting');
         if (this.readyState === FakeWebSocket.OPEN) this.sent.push(JSON.parse(data));
+        else this.sentWhileClosed++;
     }
 
     close(code) {
@@ -680,6 +682,50 @@ describe('terminal connection', () => {
 
         assert.equal(connecting.readyState, FakeWebSocket.CLOSED);
         assert.equal(FakeWebSocket.last, connecting, 'no new socket');
+    });
+
+    // The browser reports the attempt the page gives up on as an error; it is not one
+    test('closing a tab while it connects logs no error', () => {
+        server.hang = true;
+        FakeWebSocket.last.closes({ code: 1006, wasClean: false });
+        wait(1000);
+        closeTab();
+        wait(1000);
+
+        assert.equal(console.error.mock.callCount(), 0);
+    });
+
+    // Guard
+    test('an attempt the server refuses is logged', () => {
+        server.up = false;
+        FakeWebSocket.last.closes({ code: 1006, wasClean: false });
+        wait(1100);
+
+        assert.equal(console.error.mock.callCount(), 1);
+        assert.equal(console.error.mock.calls[0].arguments[0], 'WebSocket error:');
+    });
+
+    // The new shell is told its size 100ms after the socket opens
+    test('a socket closed just after it opened is not sent the shell\'s size', () => {
+        FakeWebSocket.last.closes({ code: 1006, wasClean: false });
+        wait(1070);
+        const reconnected = FakeWebSocket.last;
+        assert.equal(reconnected.readyState, FakeWebSocket.OPEN);
+        reconnected.closes({ code: 1001, wasClean: true });
+        wait(1000);
+
+        assert.equal(reconnected.sentWhileClosed, 0);
+    });
+
+    test('a tab closed just after its socket opened sends it nothing', () => {
+        FakeWebSocket.last.closes({ code: 1006, wasClean: false });
+        wait(1070);
+        const reconnected = FakeWebSocket.last;
+        assert.equal(reconnected.readyState, FakeWebSocket.OPEN);
+        closeTab();
+        wait(1000);
+
+        assert.equal(reconnected.sentWhileClosed, 0);
     });
 
     // A socket goes on delivering what the server sent before it saw the close

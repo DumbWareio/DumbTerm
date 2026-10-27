@@ -845,17 +845,18 @@ export default class TerminalManager {
                     }
                 });
 
-                if (socket.readyState === WebSocket.OPEN) {
-                    // Force an initial resize to ensure proper dimensions
-                    setTimeout(() => {
+                // Force an initial resize to ensure proper dimensions, unless the socket closed meanwhile or the
+                // tab let go of it
+                setTimeout(() => {
+                    if (socket === ws && socket.readyState === WebSocket.OPEN) {
                         fitAddon.fit();
                         socket.send(JSON.stringify({
                             type: 'resize',
                             cols: terminal.cols,
                             rows: terminal.rows
                         }));
-                    }, 100);
-                }
+                    }
+                }, 100);
                 startHeartbeat(socket);
             };
 
@@ -866,8 +867,12 @@ export default class TerminalManager {
                 }
             };
 
+            // A socket the tab let go of (closing the tab gives up one still connecting) fails as it closes,
+            // which is no error worth logging
             socket.onerror = (error) => {
-                console.error('WebSocket error:', error);
+                if (socket === ws) {
+                    console.error('WebSocket error:', error);
+                }
                 clearTimeout(connectionTimeout);
                 socket.close();
             };
