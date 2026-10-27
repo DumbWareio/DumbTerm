@@ -386,6 +386,18 @@ describe('terminal connection', () => {
         assert.equal(linesSaying(LOST) + linesSaying(NOT_AVAILABLE), 1, 'one line for the whole outage');
     });
 
+    test('keys typed while a retry waits leave the backoff as it was', () => {
+        const first = FakeWebSocket.last;
+        server.up = false;
+        first.closes({ code: 1006, wasClean: false });
+        // Refused at 1s and 3s; the third retry waits for 7.1s
+        wait(4000);
+        type('a');
+        wait(60000);
+
+        assert.deepEqual(socketsSince(first).map((socket) => socket.createdAt), [1000, 3050, 7100, 15150, 31200]);
+    });
+
     test('after the shell exits, the first key reconnects and the next ones open no second socket', () => {
         const first = FakeWebSocket.last;
         first.closes({ code: 1005, wasClean: true });
