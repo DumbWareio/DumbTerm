@@ -308,6 +308,108 @@ describe('terminal control sequences', () => {
         assert.equal(saved.terminals[0].content, 'chris@mbp DumbTerm % make\nbuilding\nstep 2 of 9\n');
     });
 
+    // Prompts as real shells print them (captured for issue #39). bash 5.2 with Starship, the Docker image's
+    // default: readline turns bracketed paste on before the prompt, which starts with a blank line
+    const STARSHIP_TOP_LINE = '\x1b[38;2;163;174;210m\u2591\u2592\u2593\x1b[48;2;163;174;210;38;2;9;12;12m \uf306 '
+        + '\x1b[48;2;118;159;240;38;2;163;174;210m\ue0b4\x1b[38;2;227;229;229m /app \x1b[48;2;57;66;96;38;2;118;159;240m'
+        + '\ue0b4\x1b[48;2;33;39;54;38;2;57;66;96m\ue0b4\x1b[38;2;118;159;240m \ue718 v24.22.1 '
+        + '\x1b[48;2;29;34;48;38;2;33;39;54m\ue0b4\x1b[38;2;160;169;203m \uf43a 10:55 PM \x1b[0m\x1b[38;2;29;34;48m\ue0b4 \x1b[0m';
+    const STARSHIP_PROMPT = `\x1b[?2004h\r\n${STARSHIP_TOP_LINE}\r\n\x1b[1;32m\u276f\x1b[0m `;
+    const PRINTF_PASS = 'printf "\\033[32m# pass 12\\033[0m\\n"';
+    // zsh 5.9 marks a partial last line (PROMPT_SP), then prints the prompt and turns bracketed paste on after it
+    const ZSH_PROMPT_SP = `\x1b[1m\x1b[7m%\x1b[27m\x1b[1m\x1b[0m${' '.repeat(79)}\r \r\r\x1b[0m\x1b[27m\x1b[24m\x1b[J`;
+    const zshPrompt = (prompt) => `${ZSH_PROMPT_SP}${prompt}\x1b[K\x1b[?2004h`;
+    const ZSH_PRINT_PASS = 'p\bprint -P "%F{green}# pass 12%f"\x1b[?2004l\r\r\n\x1b[32m# pass 12\x1b[39m\r\n';
+
+    // The text of each saved line, without its colours
+    function savedLines(content) {
+        return content.replace(/\x1b\[[\d;?]*[A-Za-z]/g, '').split('\n').map((line) => line.trimEnd());
+    }
+    const plain = (text) => savedLines(text)[0];
+
+    test('a saved session keeps the last command and its coloured output under a Starship prompt', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput(`${STARSHIP_PROMPT}echo hello\r\n\x1b[?2004l\rhello\r\n`);
+        await receiveOutput(`${STARSHIP_PROMPT}${PRINTF_PASS}\r\n\x1b[?2004l\r\x1b[32m# pass 12\x1b[0m\r\n`);
+        await receiveOutput(STARSHIP_PROMPT);
+
+        const top = plain(STARSHIP_TOP_LINE);
+        assert.deepEqual(savedLines(saves.at(-1)),
+            ['', top, '\u276f echo hello', 'hello', '', top, `\u276f ${PRINTF_PASS}`, '# pass 12', '']);
+        assert.match(saves.at(-1), /\x1b\[32m# pass 12/, 'the output keeps its colour');
+    });
+
+    test('a saved session leaves out the whole Starship prompt the shell is idle at', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput(`${STARSHIP_PROMPT}echo hello\r\n\x1b[?2004l\rhello\r\n`);
+        await receiveOutput(STARSHIP_PROMPT);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['', plain(STARSHIP_TOP_LINE), '\u276f echo hello', 'hello', '']);
+    });
+
+    test('a saved session keeps a coloured output line above a zsh prompt', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput(zshPrompt('CH-M4-MINI% '));
+        await receiveOutput(ZSH_PRINT_PASS);
+        await receiveOutput(zshPrompt('CH-M4-MINI% '));
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['CH-M4-MINI% print -P "%F{green}# pass 12%f"', '# pass 12', '']);
+        assert.match(saves.at(-1), /\x1b\[32m# pass 12/, 'the output keeps its colour');
+    });
+
+    test('a saved session keeps the output above a two-line zsh prompt, and that prompt\'s top line', async () => {
+        // zsh turns bracketed paste on after its prompt, which marks only the last line of it: the known
+        // limit is that the line above stays in the save. Pinned so that changing it is deliberate
+        const saves = recordSavedSessions();
+        const twoLinePrompt = zshPrompt('\x1b[34mtop line\x1b[39m\r\n% ');
+        await receiveOutput(twoLinePrompt);
+        await receiveOutput(ZSH_PRINT_PASS);
+        await receiveOutput(twoLinePrompt);
+
+        assert.deepEqual(savedLines(saves.at(-1)),
+            ['top line', '% print -P "%F{green}# pass 12%f"', '# pass 12', 'top line', '']);
+    });
+
+    test('a saved session leaves out the prompt the shell is idle at after a long output', async () => {
+        // More output than the scrollback holds: lines leave the top of the buffer as the prompt is printed
+        const saves = recordSavedSessions();
+        await receiveOutput(Array.from({ length: 5100 }, (_, i) => `line ${i}\r\n`).join(''));
+        await receiveOutput(STARSHIP_PROMPT);
+
+        const lines = savedLines(saves.at(-1));
+        assert.deepEqual(lines.slice(-3), ['line 5098', 'line 5099', '']);
+        assert.ok(!lines.includes(plain(STARSHIP_TOP_LINE)), 'the prompt\'s top line is left out');
+    });
+
+    test('a saved session keeps output that pushed the prompt out of the scrollback', async () => {
+        // A background job prints while the shell sits at its prompt, until the prompt's row leaves the buffer
+        const saves = recordSavedSessions();
+        await receiveOutput('\x1b[?2004h$ ');
+        await receiveOutput(Array.from({ length: 5100 }, (_, i) => `line ${i}\r\n`).join(''));
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(-3), ['line 5098', 'line 5099', '']);
+    });
+
+    test('a saved session leaves out the prompt redrawn at the top of a cleared screen', async () => {
+        // Ctrl-L clears the screen, and with it the row the shell marked, and redraws the prompt without
+        // turning bracketed paste on again
+        const saves = recordSavedSessions();
+        await receiveOutput(`${SCREENFULS}\x1b[?2004h$ `);
+        await receiveOutput('\x1b[H\x1b[2J$ ');
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(-3), ['line 15', 'line 16', '']);
+    });
+
+    test('a saved session leaves out a prompt redrawn above the row the shell marked', async () => {
+        // The cursor is on the prompt, so it starts no lower than the cursor's row, here with the marked row
+        // left in place below it
+        const saves = recordSavedSessions();
+        await receiveOutput(`${SCREENFULS}\x1b[?2004h$ `);
+        await receiveOutput('\x1b[H$ \x1b[K');
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(-3), ['line 15', 'line 16', '']);
+    });
+
     test('alternate screen (DECSET/DECRST 1049) still switches buffers for editors', async () => {
         await receiveOutput('\x1b[?1049h');
         assert.equal(terminal.buffer.active.type, 'alternate');

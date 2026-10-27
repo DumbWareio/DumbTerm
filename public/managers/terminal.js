@@ -2,6 +2,9 @@ import StorageManager from './storage.js';
 
 const IS_MAC = /mac/i.test(navigator.userAgentData?.platform || navigator.platform || '');
 
+// Each terminal's marker on the row where its shell last turned bracketed paste on (see initTerminal)
+const promptMarkers = new WeakMap();
+
 // Helper function to join paths with base path
 function joinPath(path) {
     const basePath = window.appConfig?.basePath || '';
@@ -648,6 +651,17 @@ export default class TerminalManager {
         // (CSI ? 1049 h/l) is a separate private-mode sequence that xterm.js already handles
         terminal.parser.registerOscHandler(133, () => true);
 
+        // Shells turn bracketed paste on (CSI ? 2004 h) as their line editor takes over: bash before it prints
+        // the prompt, zsh after. Mark that row so a saved session can leave the prompt out. Returns false so
+        // xterm.js still sets the mode. In the alternate buffer the mode is an editor's, not the shell's
+        terminal.parser.registerCsiHandler({ prefix: '?', final: 'h' }, (params) => {
+            if (params.includes(2004) && terminal.buffer.active.type === 'normal') {
+                promptMarkers.get(terminal)?.dispose();
+                promptMarkers.set(terminal, terminal.registerMarker(0));
+            }
+            return false;
+        });
+
         // Then load other addons
         terminal.loadAddon(fitAddon);
         terminal.loadAddon(webLinksAddon);
@@ -938,7 +952,27 @@ export default class TerminalManager {
                         // A restored tab runs a fresh shell, so leave out the modes the old program set
                         // (e.g. insert mode), which would otherwise switch on again in the new session. An open
                         // editor's screen goes too: what is saved is the shell's screen underneath it
-                        serializedContent = addons.serializeAddon.serialize({ excludeModes: true, excludeAltBuffer: true });
+                        const serializeOptions = { excludeModes: true, excludeAltBuffer: true };
+                        const buffer = terminal.buffer.active;
+                        // Bracketed paste is on while the shell sits in its line editor, so it is at a prompt
+                        // (with any half-typed command), which the restored tab's new shell prints anew. In the
+                        // alternate buffer it is an editor's (vim turns it on)
+                        const idleAtPrompt = terminal.modes.bracketedPasteMode && buffer.type === 'normal';
+                        if (idleAtPrompt) {
+                            // The prompt starts on the row where the shell turned bracketed paste on, or on the
+                            // cursor's row if that is higher or the marked row is gone (erased by a screen clear,
+                            // or out of the scrollback). Rows above it are all kept, so no prompt patterns here.
+                            // Known limit: zsh turns it on after the prompt, so the upper lines of a multi-line
+                            // zsh prompt stay in the save
+                            const cursorRow = buffer.baseY + buffer.cursorY;
+                            const marker = promptMarkers.get(terminal);
+                            const promptStart = Math.min(marker && !marker.isDisposed ? marker.line : cursorRow, cursorRow);
+                            serializedContent = promptStart > 0
+                                ? addons.serializeAddon.serialize({ ...serializeOptions, range: { start: 0, end: promptStart - 1 } })
+                                : '';
+                        } else {
+                            serializedContent = addons.serializeAddon.serialize(serializeOptions);
+                        }
                         if (serializedContent) {
                             const lines = serializedContent.split(/\r?\n/);
                             // The serializer ends by moving the cursor back to where it was (and setting its
@@ -962,12 +996,6 @@ export default class TerminalManager {
                                 /^\s*\u001b\[\d+(?:;\d+)*m/
                             ];
 
-                            // Bracketed paste is on while the shell sits in its line editor, so the last line
-                            // is its prompt (with any half-typed command), whatever the prompt looks like; the
-                            // restored tab's new shell prints its own. In the alternate buffer it is the
-                            // editor's (vim turns it on), and the last line is the command that started it
-                            let dropCursorLine = terminal.modes.bracketedPasteMode && terminal.buffer.active.type === 'normal';
-                            
                             for (let i = lines.length - 1; i >= 0; i--) {
                                 const line = lines[i].trimEnd();
                                 
@@ -975,8 +1003,9 @@ export default class TerminalManager {
                                     continue;
                                 }
                                 
-                                const isPrompt = dropCursorLine || promptPatterns.some(pattern => pattern.test(line));
-                                dropCursorLine = false;
+                                // At a prompt, the rows kept all come before it; otherwise (a command is
+                                // running, or the shell has no bracketed paste) a prompt is found by its look
+                                const isPrompt = !idleAtPrompt && promptPatterns.some(pattern => pattern.test(line));
                                 
                                 if (!isPrompt) {
                                     lastContentLineIndex = i;
