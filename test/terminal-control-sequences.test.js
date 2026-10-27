@@ -347,6 +347,14 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)), ['', plain(STARSHIP_TOP_LINE), '\u276f echo hello', 'hello', '']);
     });
 
+    test('a saved session keeps output that looks like a prompt above the prompt the shell is idle at', async () => {
+        // The rows above the prompt are all kept, whatever they look like
+        const saves = recordSavedSessions();
+        await receiveOutput('\x1b[?2004h$ echo \'>\'\r\n\x1b[?2004l>\r\n\x1b[?2004h$ ');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ echo \'>\'', '>', '']);
+    });
+
     test('a session saved at a Starship prompt restores with the new prompt under the output, in default colours', async () => {
         const saves = recordSavedSessions();
         // The output leaves its background colour on
