@@ -530,19 +530,19 @@ describe('terminal control sequences', () => {
     // bash 5.2's Tab-Tab under Starship (captured): readline lists the completions under the command, then
     // redraws the whole prompt below them without turning bracketed paste on again
     const STARSHIP_REDRAW = STARSHIP_PROMPT.replace('\x1b[?2004h', '');
-    const starshipCompletion = (command, listing) =>
-        `${STARSHIP_PROMPT}${command}\x07\r\n${listing}\r\n${STARSHIP_REDRAW}${command}`;
+    const COMPLETIONS = 'alpha/ beta/  delta/ gamma/ \r\n';
+    const starshipCompletion = (command) => `${STARSHIP_PROMPT}${command}\x07\r\n${COMPLETIONS}${STARSHIP_REDRAW}${command}`;
 
     test('a saved session leaves out a Starship prompt redrawn below a completion listing', async () => {
         const saves = recordSavedSessions();
-        await receiveOutput(starshipCompletion('ls /tmp/d/', 'alpha/ beta/  delta/ gamma/ \r\n'));
+        await receiveOutput(starshipCompletion('ls /tmp/d/'));
 
         assert.equal(saves.at(-1), '');
     });
 
     test('a saved session keeps the scrollback above a Starship prompt redrawn below a completion listing', async () => {
         const saves = recordSavedSessions();
-        await receiveOutput(`${SCREENFULS}${starshipCompletion('ls /tmp/d/', 'alpha/ beta/  delta/ gamma/ \r\n')}`);
+        await receiveOutput(`${SCREENFULS}${starshipCompletion('ls /tmp/d/')}`);
 
         assert.deepEqual(savedLines(saves.at(-1)).slice(-3), ['line 38', 'line 39', '']);
     });
@@ -551,7 +551,7 @@ describe('terminal control sequences', () => {
         // The redrawn prompt's top line is three rows above the cursor: a command three rows long, the most the
         // marked prompt allows
         const saves = recordSavedSessions();
-        await receiveOutput(starshipCompletion(`ls /tmp/${'x'.repeat(160)}/`, 'alpha/ beta/  delta/ gamma/ \r\n'));
+        await receiveOutput(starshipCompletion(`ls /tmp/${'x'.repeat(160)}/`));
 
         assert.equal(saves.at(-1), '');
     });
