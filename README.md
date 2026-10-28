@@ -318,7 +318,7 @@ We're dumb, but not stupid. Use a full-featured auth provider for production use
 
 - **Backend**: Node.js (>=24) with Express
 - **Frontend**: XTerm.js for terminal emulation
-- **Container**: Docker with Debian Trixie (as of v1.2.1+) base (v1.1.1 for Bullseye)
+- **Container**: Docker with Debian Trixie (as of v1.2.0) base (v1.1.1 for Bullseye)
 - **Terminal**: node-pty for process spawning
 - **Communication**: WebSockets for real-time terminal I/O
 - **Security**: cors for cross-origin requests
@@ -342,16 +342,15 @@ DumbTerm includes the following XTerm.js addons to enhance your terminal experie
 | Addon                      | Description                                                                       |
 | -------------------------- | --------------------------------------------------------------------------------- |
 | **@xterm/addon-attach**    | Attaches a terminal session to a websocket                                        |
-| **@xterm/addon-canvas**    | Renderer that uses canvas to draw terminal content (used as fallback after webgl) |
 | **@xterm/addon-clipboard** | Clipboard integration for copy/paste support                                      |
 | **@xterm/addon-fit**       | Automatically resize terminal to fit its container                                |
 | **@xterm/addon-image**     | Display images inline in the terminal                                             |
-| **@xterm/addon-ligatures** | Font ligatures support                                                            |
+| **@xterm/addon-ligatures** | Font ligatures support (with the WebGL renderer)                                  |
 | **@xterm/addon-search**    | Search text in the terminal buffer                                                |
 | **@xterm/addon-serialize** | Serialize terminal output to string or HTML                                       |
 | **@xterm/addon-unicode11** | Additional Unicode 11 character width support                                     |
 | **@xterm/addon-web-links** | Automatically hyperlink URLs in terminal                                          |
-| **@xterm/addon-webgl**     | Renderer that uses WebGL for better performance (default render method)           |
+| **@xterm/addon-webgl**     | Renderer that uses WebGL (default; falls back to the built-in DOM renderer)       |
 
 ## Links
 
