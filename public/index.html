@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title id="pageTitle">DumbTerm</title>
     <!-- Preload critical fonts -->
-    <link rel="preload" href="/assets/fonts/FiraCodeNerdFontMono-Regular.ttf" as="font" type="font/ttf" crossorigin>
-    <link rel="preload" href="/assets/fonts/FiraCodeNerdFontMono-Medium.ttf" as="font" type="font/ttf" crossorigin>
-    <link rel="preload" href="/assets/fonts/FiraCodeNerdFontMono-Bold.ttf" as="font" type="font/ttf" crossorigin>
+    <link rel="preload" href="assets/fonts/FiraCodeNerdFontMono-Regular.ttf" as="font" type="font/ttf" crossorigin>
+    <link rel="preload" href="assets/fonts/FiraCodeNerdFontMono-Medium.ttf" as="font" type="font/ttf" crossorigin>
+    <link rel="preload" href="assets/fonts/FiraCodeNerdFontMono-Bold.ttf" as="font" type="font/ttf" crossorigin>
     <script src="config.js"></script>
     <link rel="stylesheet" href="styles.css">
     <link rel="icon" type="image/svg+xml" href="assets/dumbterm.svg">
@@ -26,10 +26,9 @@
     </script>
     <script src="./node_modules/@xterm/xterm/lib/xterm.js"></script>
     <script src="./node_modules/@xterm/addon-attach/lib/addon-attach.js"></script>
-    <script src="./node_modules/@xterm/addon-canvas/lib/addon-canvas.js"></script>
     <script src="./node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
     <script src="./node_modules/@xterm/addon-image/lib/addon-image.js"></script>
-    <script src="./node_modules/@xterm/addon-ligatures/lib/addon-ligatures.js"></script>
+    <!-- addon-ligatures ships as an ES module only; managers/terminal.js imports it -->
     <script src="./node_modules/@xterm/addon-search/lib/addon-search.js"></script>
     <script src="./node_modules/@xterm/addon-serialize/lib/addon-serialize.js"></script>
     <script src="./node_modules/@xterm/addon-unicode11/lib/addon-unicode11.js"></script>

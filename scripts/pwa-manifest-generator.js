@@ -3,6 +3,9 @@ const path = require("path");
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
 const ASSETS_DIR = path.join(PUBLIC_DIR, "assets");
 const BASE_PATH = process.env.BASE_URL ? new URL(process.env.BASE_URL).pathname.replace(/\/$/, '') : '';
+// Source maps and TypeScript sources/typings that copy-xterm brings along are only for debugging;
+// leaving them out keeps the service worker from precaching megabytes the app never loads
+const EXCLUDED_EXTENSIONS = [".map", ".ts"];
 
 function getFiles(dir, basePath = "/") {
   let fileList = [];
@@ -16,7 +19,7 @@ function getFiles(dir, basePath = "/") {
     if (fs.statSync(filePath).isDirectory()) {
       fileList = fileList.concat(getFiles(filePath, fileUrl));
     } else {
-      if (!excludeList.includes(file)){
+      if (!excludeList.includes(file) && !EXCLUDED_EXTENSIONS.some(ext => file.endsWith(ext))){
         fileList.push(fileUrl);
       }
     }

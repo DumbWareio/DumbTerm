@@ -1,5 +1,8 @@
 // Core service worker configuration
-let CACHE_VERSION = "1.0.0"; // Default fallback version
+// The page registers this worker as service-worker.js?v=<app version>, so read the version from there:
+// a worker the browser restarts after idling would otherwise start at 1.0.0 and cache into a stray cache
+const REGISTERED_VERSION = new URL(self.location.href).searchParams.get('v');
+let CACHE_VERSION = /^\d+\.\d+\.\d+/.test(REGISTERED_VERSION || '') ? REGISTERED_VERSION : "1.0.0"; // Default fallback version
 let CACHE_NAME = `DUMBTERM_CACHE_V${CACHE_VERSION}`; // Default format, will be overridden
 const ASSETS_TO_CACHE = [];
 const BASE_PATH = self.registration.scope;
@@ -358,6 +361,17 @@ self.addEventListener("activate", event => {
                 // Take control of all clients
                 await self.clients.claim();
                 console.log("Service worker has claimed clients");
+
+                // Fetches are network-first, so pages already run this version and older caches are only
+                // dead weight; removing them also stops them being reported as the installed version
+                if (CACHE_VERSION !== "1.0.0") {
+                    const staleCaches = (await caches.keys())
+                        .filter(key => key.startsWith('DUMBTERM_') && key !== CACHE_NAME);
+                    await Promise.all(staleCaches.map(key => caches.delete(key)));
+                    if (staleCaches.length > 0) {
+                        console.log(`Deleted old caches: ${staleCaches}`);
+                    }
+                }
                 
                 // Check cache status
                 const { isFirstInstall, existingVersion } = await checkCacheVersion();
@@ -403,33 +417,31 @@ self.addEventListener("activate", event => {
 });
 
 self.addEventListener("fetch", event => {
+    // Only GET responses can be cached; let the browser send everything else as normal
+    if (event.request.method !== 'GET') return;
+
+    // Network first, cache as the offline fallback. Serving from the cache first meant a returning
+    // browser kept getting the previous release's config.js and scripts, so it never noticed an update.
     event.respondWith(
-        caches.match(event.request)
-            .then(cachedResponse => {
-                // Return cached response if found
+        fetch(event.request)
+            .then(response => {
+                // Keep a copy of valid responses for offline use; a redirected response (e.g. to /login
+                // when signed out) would be stored under the wrong URL
+                if (response && response.status === 200 && response.type === 'basic' && !response.redirected) {
+                    const responseToCache = response.clone();
+                    event.waitUntil(
+                        caches.open(CACHE_NAME)
+                            .then(cache => cache.put(event.request, responseToCache))
+                            .catch(error => console.warn('Could not cache response:', error))
+                    );
+                }
+                return response;
+            })
+            .catch(async () => {
+                const cachedResponse = await caches.match(event.request);
                 if (cachedResponse) {
                     return cachedResponse;
                 }
-
-                // Otherwise fetch from network
-                return fetch(event.request.clone())
-                    .then(response => {
-                        // Don't cache if not a valid response
-                        if (!response || response.status !== 200 || response.type !== 'basic') {
-                            return response;
-                        }
-
-                        // Clone the response and cache it
-                        const responseToCache = response.clone();
-                        caches.open(CACHE_NAME)
-                            .then(cache => {
-                                cache.put(event.request, responseToCache);
-                            });
-
-                        return response;
-                    });
-            })
-            .catch(() => {
                 // Return fallback for navigation requests
                 if (event.request.mode === 'navigate') {
                     return caches.match(getAssetPath('index.html'));

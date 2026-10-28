@@ -1,5 +1,47 @@
 import StorageManager from './storage.js';
 
+const IS_MAC = /mac/i.test(navigator.userAgentData?.platform || navigator.platform || '');
+
+// Where each terminal's prompt starts (see initTerminal): a marker and the number of rows below it, or no
+// marker for the buffer's first row
+const promptMarkers = new WeakMap();
+// The furthest the cursor gets below that row at a prompt: the tallest prompt plus a little typed input.
+// Further down, the row is an app's that left bracketed paste on and kept printing (Claude Code)
+const PROMPT_MAX_ROWS_BELOW_MARK = 4;
+// readline redraws its whole prompt below a completion listing without turning bracketed paste on again, so
+// the cursor ends up further below the marked row than that. The redrawn prompt repeats the marked one row for
+// row: look for it, from its first line (after a blank one, Starship's) down to the command, starting in the
+// rows a prompt reaches above, and on, the cursor's row. The command is the cursor's whole line, wrapped onto
+// as many rows as it takes (one that starts above those rows is no command), and may have been typed on (or
+// erased back) since the listing, so there one line need only start like the other
+function redrawnPromptRow(buffer, markedRow, cursorRow) {
+    const text = (row) => buffer.getLine(row)?.translateToString(true) ?? '';
+    const line = (row) => {
+        let joined = text(row);
+        for (let next = row + 1; buffer.getLine(next)?.isWrapped; next++) joined += text(next);
+        return joined;
+    };
+    const first = text(markedRow) === '' ? markedRow + 1 : markedRow;
+    if (text(first) === '') return null;
+    const sameCommand = (a, b) => a === b || (a !== '' && b !== '' && (a.startsWith(b) || b.startsWith(a)));
+    const highestTop = cursorRow - PROMPT_MAX_ROWS_BELOW_MARK + 1;
+    let commandRow = cursorRow;
+    while (commandRow >= highestTop && buffer.getLine(commandRow)?.isWrapped) commandRow--;
+    const command = line(commandRow);
+    for (let top = commandRow; top >= highestTop; top--) {
+        let same = true;
+        for (let row = top; same && row <= commandRow; row++) {
+            const marked = first + row - top;
+            same = row === commandRow ? sameCommand(line(marked), command) : text(marked) === text(row);
+        }
+        if (same) return markedRow;
+    }
+    return null;
+}
+
+// How to end each terminal's connection to the server (see initTerminal), for when its tab closes
+const connectionEnders = new WeakMap();
+
 // Helper function to join paths with base path
 function joinPath(path) {
     const basePath = window.appConfig?.basePath || '';
@@ -403,8 +445,11 @@ export default class TerminalManager {
         
         const wasActive = this.activeTabId === id;
 
-        // Clean up terminal first
+        // End its connection, so the server ends its shell, then clean up the terminal, and let go of its addons,
+        // which would otherwise keep the disposed terminal and its scrollback
+        connectionEnders.get(terminal.terminal)?.();
         terminal.terminal.dispose();
+        this.terminalAddons.delete(terminal.terminal);
         terminal.tab.remove();
         terminal.container.remove();
         this.terminals.delete(id);
@@ -611,7 +656,10 @@ export default class TerminalManager {
             termProgram: 'xterm-256color',
             // Add these new options for better control sequence handling
             smoothScrollDuration: 0,
-            fastScrollModifier: 'alt',
+            // xterm.js 6 scrolls 50px per wheel tick. Browsers off macOS report a mouse-wheel notch as one
+            // tick, where native scrolling (xterm.js 5) moved ~100px, so double it there; on macOS a tick is
+            // 40px of movement, so 50px is already close to native
+            scrollSensitivity: IS_MAC ? 1 : 2,
             fastScrollSensitivity: 5,
             // Better handling of alternative screen buffer
             altClickMovesCursor: true,
@@ -622,15 +670,13 @@ export default class TerminalManager {
         const fitAddon = new FitAddon.FitAddon();
         const webLinksAddon = new WebLinksAddon.WebLinksAddon();
         const webglAddon = new WebglAddon.WebglAddon();
-        const canvasAddon = new CanvasAddon.CanvasAddon();
         const imageAddon = new ImageAddon.ImageAddon();
-        const ligaturesAddon = new LigaturesAddon.LigaturesAddon();
         const searchAddon = new SearchAddon.SearchAddon();
         const serializeAddon = new SerializeAddon.SerializeAddon();
         const unicode11Addon = new Unicode11Addon.Unicode11Addon();
         
         // Store addons for this terminal
-        const addons = { fitAddon, webLinksAddon, webglAddon, canvasAddon, imageAddon, ligaturesAddon, searchAddon, serializeAddon, unicode11Addon };
+        const addons = { fitAddon, webLinksAddon, webglAddon, imageAddon, searchAddon, serializeAddon, unicode11Addon };
         this.terminalAddons.set(terminal, addons);
 
         // Open terminal in the container first
@@ -640,35 +686,86 @@ export default class TerminalManager {
         terminal.loadAddon(unicode11Addon);
         terminal.unicode.activeVersion = '11';
 
-        // Register custom handlers for problematic control sequences
-        terminal.parser.registerOscHandler(133, () => true); // Ignore OSC 133 (shell integration)
-        terminal.parser.registerCsiHandler({final: 'h'}, () => true); // Better handling of DECSET
-        terminal.parser.registerCsiHandler({final: 'l'}, () => true); // Better handling of DECRST
-        
+        // Ignore OSC 133 (shell integration marks). Mode sets and resets (CSI h/l) are left to xterm.js:
+        // swallowing them broke insert mode (terminfo smir/rmir), and editors' alternate screen
+        // (CSI ? 1049 h/l) is a separate private-mode sequence that xterm.js already handles
+        terminal.parser.registerOscHandler(133, () => true);
+
+        // Shells turn bracketed paste on (CSI ? 2004 h) as their line editor takes over: bash before it prints
+        // the prompt, zsh after. Mark that row so a saved session can leave the prompt out, or the row below
+        // when the cursor is not at the start of a line: the row holds output with no final newline, and a
+        // prompt that starts with a newline (Starship's) begins below it. Returns false so xterm.js still sets
+        // the mode. In the alternate buffer the mode is an editor's, not the shell's
+        terminal.parser.registerCsiHandler({ prefix: '?', final: 'h' }, (params) => {
+            const buffer = terminal.buffer.active;
+            if (params.includes(2004) && buffer.type === 'normal') {
+                promptMarkers.get(terminal)?.marker?.dispose();
+                promptMarkers.set(terminal, { marker: terminal.registerMarker(buffer.cursorX === 0 ? 0 : 1), rowsBelow: 0 });
+            }
+            return false;
+        });
+
+        // Ctrl-L at a prompt clears the screen (CSI 2 J), erasing the marked row, and the shell redraws its whole
+        // prompt from the top without turning bracketed paste on again. A marker on the top row would be erased
+        // too, so mark the row above it, the end of the scrollback, or with no scrollback the buffer's first row.
+        // Returns false so xterm.js still clears the screen. readline's clear-display follows with CSI 3 J, which
+        // clears the scrollback and that row with it: the prompt is then on the buffer's first row
+        terminal.parser.registerCsiHandler({ final: 'J' }, (params) => {
+            const buffer = terminal.buffer.active;
+            const mark = promptMarkers.get(terminal);
+            if (params[0] === 3 && mark?.rowsBelow === 1 && !mark.marker.isDisposed && mark.marker.line === buffer.baseY - 1) {
+                mark.marker.dispose();
+                promptMarkers.set(terminal, { marker: null, rowsBelow: 0 });
+            }
+            if (params[0] === 2 && terminal.modes.bracketedPasteMode && buffer.type === 'normal') {
+                promptMarkers.get(terminal)?.marker?.dispose();
+                promptMarkers.set(terminal, buffer.baseY > 0
+                    ? { marker: terminal.registerMarker(-buffer.cursorY - 1), rowsBelow: 1 }
+                    : { marker: null, rowsBelow: 0 });
+            }
+            return false;
+        });
+
         // Then load other addons
         terminal.loadAddon(fitAddon);
         terminal.loadAddon(webLinksAddon);
         terminal.loadAddon(searchAddon);
         terminal.loadAddon(serializeAddon);
 
-        // Try to load WebGL first, fallback to Canvas if it fails
+        // Try to load WebGL first. xterm.js 6 removed the canvas renderer, so if WebGL is
+        // unavailable or its context is lost, disposing the addon falls back to the built-in DOM renderer.
+        // The ligatures addon is only for WebGL: the DOM renderer already draws ligatures from the font
+        // (font-feature-settings in styles.css), and the addon's joined runs overflow its cells.
+        let webglActive = false;
+        let ligaturesAddon = null;
         try {
             terminal.loadAddon(webglAddon);
-            webglAddon.onContextLoss(e => {
-                console.warn('WebGL context lost, falling back to canvas renderer');
-                terminal.loadAddon(canvasAddon);
+            webglActive = true;
+            webglAddon.onContextLoss(() => {
+                console.warn('WebGL context lost, falling back to DOM renderer');
+                webglActive = false;
+                ligaturesAddon?.dispose();
+                webglAddon.dispose();
             });
         } catch (e) {
-            console.warn('WebGL addon could not be loaded, using canvas renderer:', e);
-            terminal.loadAddon(canvasAddon);
+            console.warn('WebGL addon could not be loaded, using DOM renderer:', e);
+            webglAddon.dispose();
         }
 
         // Load remaining addons
         terminal.loadAddon(imageAddon);
-        try {
-            terminal.loadAddon(ligaturesAddon);
-        } catch (e) {
-            console.warn('Ligatures addon could not be loaded:', e);
+
+        // addon-ligatures only ships an ES module build, so it is imported on demand.
+        // Ligatures are cosmetic: a failure here must never stop the terminal from working.
+        if (webglActive) {
+            import('../node_modules/@xterm/addon-ligatures/lib/addon-ligatures.mjs')
+                .then(({ LigaturesAddon }) => {
+                    // WebGL may have been lost, or the tab closed, while the module was loading
+                    if (!webglActive || !terminal.element?.isConnected) return;
+                    ligaturesAddon = new LigaturesAddon();
+                    terminal.loadAddon(ligaturesAddon);
+                })
+                .catch(e => console.warn('Ligatures addon could not be loaded:', e));
         }
 
         // Initial fit
@@ -677,90 +774,137 @@ export default class TerminalManager {
         // Restore saved content if available
         if (savedContent) {
             try {
-                terminal.write(savedContent);
+                // Saves from before 1.3.0 can hold an open editor's screen after the switch to it; the new
+                // shell has no editor open, so restore only what came before. Reset the text attributes before
+                // the final newline, so the colours the old program left set neither carry into the new shell's
+                // prompt nor fill the row that newline scrolls in
+                terminal.write(savedContent.split('\x1b[?1049h')[0].replace(/\n?$/, '\x1b[0m$&'));
             } catch (e) {
                 console.warn('Failed to restore terminal content:', e);
             }
         }
 
-        // WebSocket connection management
+        // WebSocket connection management. A tab has one connection underway at a time, a retry waiting on its
+        // timer or a socket not yet closed, and nothing starts another until it is over. A socket's events count
+        // only while it is the tab's own (ws): one the tab has replaced, or let go of on closing, changes nothing
         let ws;
+        let reconnectTimer = null;
         const maxReconnectAttempts = 5;
         const baseReconnectDelay = 1000;
         let reconnectAttempts = 0;
+        // Whether the tab has said it is reconnecting since it was last connected: once is enough
+        let outageReported = false;
         const self = this; // Store reference to 'this' for use in callbacks
 
+        function connectionUnderway() {
+            return reconnectTimer !== null || (ws && ws.readyState !== WebSocket.CLOSED);
+        }
+
+        function reportOutage(message) {
+            if (!outageReported) {
+                outageReported = true;
+                terminal.writeln(message);
+            }
+        }
+
         function connectWebSocket() {
+            if (connectionUnderway()) {
+                return;
+            }
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const basePath = window.appConfig?.basePath || '';
             
             // Create WebSocket connection - cookies will be automatically included
-            ws = new WebSocket(`${protocol}//${window.location.host}${basePath}`);
+            const socket = new WebSocket(`${protocol}//${window.location.host}${basePath}`);
+            ws = socket;
 
-            // Set a generous timeout for the initial connection
+            // Set a generous timeout for the initial connection. Closing a socket that is still connecting fails
+            // it, and its close event arranges the retry
             const connectionTimeout = setTimeout(() => {
-                if (ws.readyState !== WebSocket.OPEN) {
-                    ws.close();
-                    handleReconnect();
+                if (socket.readyState !== WebSocket.OPEN) {
+                    socket.close();
                 }
             }, 5000);
 
-            ws.onopen = () => {
+            socket.onopen = () => {
                 clearTimeout(connectionTimeout);
                 reconnectAttempts = 0;
+                outageReported = false;
 
-                if (ws.readyState === WebSocket.OPEN) {                 
-                    // Force an initial resize to ensure proper dimensions
-                    setTimeout(() => {
+                // Each connection gets a new shell, so an editor open on the old one is gone with it, and so are
+                // the modes the old shell's programs set, in either buffer (a picker drawn under the prompt sets
+                // them without leaving the normal one): DECSTR shows the cursor and resets the cursor keys and
+                // keypad, and the mouse and focus reports are turned off on their own
+                if (terminal.buffer.active.type === 'alternate') {
+                    terminal.write('\x1b[?1049l');
+                }
+                // Only the tab in front takes the keyboard: the others are hidden but still in the page, and
+                // keys typed into one would run in a shell nobody can see. It takes it once the reset is applied,
+                // or a program's focus reports would still be on and the new shell would read one as typed text,
+                // and only from nothing or a terminal: the search box or a tab's name being edited keeps it, or
+                // what is typed there next would run in the shell
+                terminal.write('\x1b[!p\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l', () => {
+                    const focused = document.activeElement;
+                    if (self.terminals.get(self.activeTabId)?.terminal === terminal
+                        && (!focused || focused === document.body || focused.closest('.terminals-container'))) {
+                        terminal.focus();
+                    }
+                });
+
+                // Force an initial resize to ensure proper dimensions, unless the socket closed meanwhile or the
+                // tab let go of it
+                setTimeout(() => {
+                    if (socket === ws && socket.readyState === WebSocket.OPEN) {
                         fitAddon.fit();
-                        ws.send(JSON.stringify({
+                        socket.send(JSON.stringify({
                             type: 'resize',
                             cols: terminal.cols,
                             rows: terminal.rows
                         }));
-                    }, 100);
+                    }
+                }, 100);
+                startHeartbeat(socket);
+            };
+
+            socket.onclose = (event) => {
+                clearTimeout(connectionTimeout);
+                if (socket === ws) {
+                    // Focus and mouse reports a program left on would go on reaching the page as input, and count
+                    // as keys typed while disconnected, so turn them off with the shell gone; the next connection
+                    // resets the rest
+                    terminal.write('\x1b[?1004l\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l');
+                    handleReconnect(event);
                 }
-                terminal.focus();
-                startHeartbeat();
             };
 
-            ws.onclose = (event) => {
-                handleReconnect(event);
+            // A socket the tab let go of (closing the tab gives up one still connecting) fails as it closes,
+            // which is no error worth logging
+            socket.onerror = (error) => {
+                if (socket === ws) {
+                    console.error('WebSocket error:', error);
+                }
+                clearTimeout(connectionTimeout);
+                socket.close();
             };
 
-            ws.onerror = (error) => {
-                console.error('WebSocket error:', error);
-                ws.close();
-            };
-
-            let isInAlternateBuffer = false;
-            
-            ws.onmessage = (event) => {
+            socket.onmessage = (event) => {
+                if (socket !== ws) {
+                    return;
+                }
                 try {
                     const message = JSON.parse(event.data);
                     if (message.type === 'output') {
-                        if (message.data.includes('\x1b[?1049h')) {
-                            // Entering alternate buffer (editor mode)
-                            terminal.altBuffer = true;
-                        } else if (message.data.includes('\x1b[?1049l')) {
-                            // Exiting alternate buffer (editor mode)
-                            terminal.altBuffer = false;
-                            // Force a save after exiting editor mode
-                            setTimeout(() => {
-                                self.saveSessionState();
-                            }, 100);
-                        }
-                        
-                        // Always write the data
-                        terminal.write(message.data);
-                        
-                        // Only save state if not in alternate buffer
-                        if (!terminal.altBuffer) {
+                        terminal.write(message.data, () => {
+                            // Save once the shell's output settles. An editor's redraws neither arm nor postpone
+                            // it: the save leaves the editor's screen out, and the timer is shared by every tab
+                            if (terminal.buffer.active.type !== 'normal') {
+                                return;
+                            }
                             clearTimeout(self.saveTimeout);
                             self.saveTimeout = setTimeout(() => {
                                 self.saveSessionState();
                             }, 500);
-                        }
+                        });
                     }
                 } catch (e) {
                     console.error('Error processing message:', e);
@@ -770,7 +914,7 @@ export default class TerminalManager {
 
         function handleReconnect(event) {
             // Handle authentication failure (code 1008 is policy violation)
-            if (event && event.code === 1008) {
+            if (event.code === 1008) {
                 terminal.writeln('\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n');
                 terminal.writeln('\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n');
                 terminal.writeln('\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n');
@@ -780,35 +924,42 @@ export default class TerminalManager {
                 return;
             }
 
-            if (event && event.wasClean) {
+            // A clean close is final (the shell exited, or failed to start), unless the server is going away
+            // (1001, shutting down) or restarting (1012): the tab then reconnects once it is back, as it does
+            // after a dropped connection
+            if (event.wasClean && event.code !== 1001 && event.code !== 1012) {
                 terminal.writeln('\r\nConnection closed normally.');
                 return;
             }
 
             if (reconnectAttempts < maxReconnectAttempts) {
                 const delay = baseReconnectDelay * Math.pow(2, reconnectAttempts);
-                terminal.writeln('\r\nConnection lost. Attempting to reconnect...');
-                setTimeout(() => {
+                reportOutage('\r\nConnection lost. Attempting to reconnect...');
+                reconnectTimer = setTimeout(() => {
+                    reconnectTimer = null;
                     reconnectAttempts++;
                     connectWebSocket();
                 }, delay);
             } else {
-                terminal.writeln('\r\nConnection lost. Please refresh the page to reconnect.');
+                // The retries have run out, and the tab waits for a key to start a new round of them, which says
+                // that it is reconnecting
+                outageReported = false;
+                terminal.writeln('\r\nConnection lost. Press any key to reconnect, or refresh the page.');
             }
         }
 
-        // Heartbeat mechanism
-        function startHeartbeat() {
+        // Heartbeat mechanism, for as long as its socket is open
+        function startHeartbeat(socket) {
             const heartbeatInterval = setInterval(() => {
-                if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({ type: 'heartbeat' }));
+                if (socket.readyState === WebSocket.OPEN) {
+                    socket.send(JSON.stringify({ type: 'heartbeat' }));
                 } else {
                     clearInterval(heartbeatInterval);
                 }
             }, 10000);
 
             // Clean up interval when connection closes
-            ws.addEventListener('close', () => {
+            socket.addEventListener('close', () => {
                 clearInterval(heartbeatInterval);
             });
         }
@@ -816,18 +967,20 @@ export default class TerminalManager {
         // Initialize WebSocket connection
         connectWebSocket();
 
-        // Handle terminal input with connection check
+        // Handle terminal input with connection check. A key typed with no connection is dropped. While one is
+        // underway it says nothing, as the close still to come may be final; otherwise it says so and starts one,
+        // with its retries renewed: that is how a tab whose shell exited gets a new one, and how one whose retries
+        // ran out before the server came back reconnects
         terminal.onData(data => {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
                     type: 'input',
                     data: data
                 }));
-            } else {
-                terminal.writeln('\r\nConnection not available. Attempting to reconnect...');
-                if (reconnectAttempts < maxReconnectAttempts) {
-                    connectWebSocket();
-                }
+            } else if (!connectionUnderway()) {
+                reportOutage('\r\nConnection not available. Attempting to reconnect...');
+                reconnectAttempts = 0;
+                connectWebSocket();
             }
             
             // Save session state on terminal input
@@ -849,18 +1002,24 @@ export default class TerminalManager {
             }
         });
 
-        // Handle page visibility changes
-        document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible') {
-                if (!ws || ws.readyState === WebSocket.CLOSED) {
-                    reconnectAttempts = 0; // Reset attempts when page becomes visible
-                    connectWebSocket();
-                }
+        // Handle page visibility changes: coming back to the page reconnects a tab whose connection ended, with
+        // its retries renewed. A retry waiting out its backoff is called off for it, as the page may have been
+        // away (a laptop asleep) for longer than the wait; a socket connecting or open is left to finish
+        const onVisibilityChange = () => {
+            if (document.visibilityState !== 'visible') {
+                return;
             }
-        });
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+            if (!connectionUnderway()) {
+                reconnectAttempts = 0;
+                connectWebSocket();
+            }
+        };
+        document.addEventListener('visibilitychange', onVisibilityChange);
 
         // Handle window resize
-        window.addEventListener('resize', () => {
+        const onWindowResize = () => {
             // Delay the resize slightly to ensure container dimensions are settled
             setTimeout(() => {
                 // Let FitAddon handle terminal sizing properly
@@ -875,14 +1034,16 @@ export default class TerminalManager {
                     }));
                 }
             }, 50); // Small delay to ensure container dimensions are settled
-        });
+        };
+        window.addEventListener('resize', onWindowResize);
 
         // Clean up on page unload
-        window.addEventListener('beforeunload', () => {
+        const onBeforeUnload = () => {
             if (ws) {
                 ws.close();
             }
-        });
+        };
+        window.addEventListener('beforeunload', onBeforeUnload);
 
         // Update terminal colors when theme changes
         const observer = new MutationObserver((mutations) => {
@@ -905,15 +1066,24 @@ export default class TerminalManager {
             attributeFilter: ['data-theme']
         });
 
+        // Closing the tab ends its connection for good: a waiting retry is called off, the page's events no longer
+        // reach the tab, and its socket is let go of before it is closed (1000), so neither that close nor one the
+        // server sent at the same time reconnects it. The server ends the shell when the socket closes
+        connectionEnders.set(terminal, () => {
+            clearTimeout(reconnectTimer);
+            document.removeEventListener('visibilitychange', onVisibilityChange);
+            window.removeEventListener('resize', onWindowResize);
+            window.removeEventListener('beforeunload', onBeforeUnload);
+            observer.disconnect();
+            const socket = ws;
+            ws = null;
+            socket.close(1000);
+        });
+
         return terminal;
     }
 
     saveSessionState() {
-        // Skip saving if terminal is in alternate buffer mode
-        if (this.isInAlternateBuffer) {
-            return;
-        }
-
         const sessionState = {
             activeTabId: this.activeTabId,
             tabCounter: this.tabCounter,
@@ -923,13 +1093,47 @@ export default class TerminalManager {
                 
                 if (addons && addons.serializeAddon) {
                     try {
-                        serializedContent = addons.serializeAddon.serialize();
+                        // A restored tab runs a fresh shell, so leave out the modes the old program set
+                        // (e.g. insert mode), which would otherwise switch on again in the new session. An open
+                        // editor's screen goes too: what is saved is the shell's screen underneath it
+                        const serializeOptions = { excludeModes: true, excludeAltBuffer: true };
+                        const buffer = terminal.buffer.active;
+                        // Bracketed paste is on while the shell sits in its line editor, so it is at a prompt
+                        // (with any half-typed command), which the restored tab's new shell prints anew. In the
+                        // alternate buffer it is an editor's (vim turns it on)
+                        const idleAtPrompt = terminal.modes.bracketedPasteMode && buffer.type === 'normal';
+                        if (idleAtPrompt) {
+                            // The prompt starts on the row marked when the shell turned bracketed paste on, or on
+                            // the cursor's row if that is higher (zsh marks after its prompt), the marked row is
+                            // gone (erased by a screen clear, or out of the scrollback) or it is too far up to be
+                            // the prompt's, unless the prompt was redrawn below. Rows above it are all kept, so no
+                            // prompt patterns here. Known limit: zsh turns it on after the prompt, so the upper
+                            // lines of a multi-line zsh prompt stay in the save
+                            const cursorRow = buffer.baseY + buffer.cursorY;
+                            const mark = promptMarkers.get(terminal);
+                            const markedRow = !mark ? cursorRow
+                                : !mark.marker ? 0
+                                : mark.marker.isDisposed ? cursorRow : mark.marker.line + mark.rowsBelow;
+                            const promptStart = cursorRow - markedRow <= PROMPT_MAX_ROWS_BELOW_MARK
+                                ? Math.min(markedRow, cursorRow)
+                                : redrawnPromptRow(buffer, markedRow, cursorRow) ?? cursorRow;
+                            serializedContent = promptStart > 0
+                                ? addons.serializeAddon.serialize({ ...serializeOptions, range: { start: 0, end: promptStart - 1 } })
+                                : '';
+                        } else {
+                            serializedContent = addons.serializeAddon.serialize(serializeOptions);
+                        }
                         if (serializedContent) {
                             const lines = serializedContent.split(/\r?\n/);
+                            // The serializer ends by moving the cursor back to where it was (and setting its
+                            // colours), on a row of its own when the cursor is above the bottom; restored, that
+                            // would leave blank rows, or a blank line after the newline added below
+                            lines[lines.length - 1] = lines[lines.length - 1].replace(/(?:\u001b\[[\d;]*[ABCDm])+$/, '');
                             let lastContentLineIndex = -1;
                             let seenNonPrompt = false;
                             
-                            // Common prompt patterns
+                            // Common prompt patterns, matched against the line's text without its colours (a
+                            // line is not a prompt for starting with a colour: output often does)
                             const promptPatterns = [
                                 // Standard prompt patterns (user@host:path$, root@host:dir#, etc.)
                                 /^.*@.*[:~][#$>]\s*$/,
@@ -938,13 +1142,9 @@ export default class TerminalManager {
                                 // Simple $ or # or > prompts
                                 /^[$#>]\s*$/,
                                 // PS1 with directory
-                                /^\w+:\s*[\w/~]+[$#>]\s*$/,
-                                // Starship or other ANSI-colored prompts
-                                /^\s*\u001b\[\d+(?:;\d+)*m/,
-                                // ANSI input mode sequences
-                                /\u001b\[\?\d+[hl]/
+                                /^\w+:\s*[\w/~]+[$#>]\s*$/
                             ];
-                            
+
                             for (let i = lines.length - 1; i >= 0; i--) {
                                 const line = lines[i].trimEnd();
                                 
@@ -952,7 +1152,10 @@ export default class TerminalManager {
                                     continue;
                                 }
                                 
-                                const isPrompt = promptPatterns.some(pattern => pattern.test(line));
+                                // At a prompt, the rows kept all come before it; otherwise (a command is
+                                // running, or the shell has no bracketed paste) a prompt is found by its look
+                                const text = line.replace(/\u001b\[[\d;]*m/g, '');
+                                const isPrompt = !idleAtPrompt && promptPatterns.some(pattern => pattern.test(text));
                                 
                                 if (!isPrompt) {
                                     lastContentLineIndex = i;

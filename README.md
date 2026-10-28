@@ -71,8 +71,8 @@ A stupidly simple web-based terminal emulator, with common tools and Starship en
 ### Prerequisites
 
 - Docker (recommended)
-- Node.js >=20.0.0 (for local development)
-  - _Windows-specific_: [WSL or Node.js v16 - Option 3: Running Locally](#option-3-running-locally-for-developers)
+- Node.js >=24 (for local development)
+  - _Windows-specific_: see [Option 3: Running Locally](#option-3-running-locally-for-developers)
 
 ### Option 1: Docker (For Dummies)
 
@@ -136,6 +136,8 @@ Then run:
 docker compose up -d
 ```
 
+To update to the latest version later, run `docker compose pull && docker compose up -d`.
+
 ### Option 3: Running Locally (For Developers)
 
 - Local method will use your local terminal environment (Windows: Powershell, Mac / Linux: bash).
@@ -150,10 +152,8 @@ npm install
 >
 > #### Windows specific:
 >
-> - If you encounter issues with `node-pty` you can try using [Windows Subsystem for Linux (WSL)](https://learn.microsoft.com/en-us/windows/wsl/install) or may need to install:
-> - `Node.js v16` (Look into [nvm for windows](https://github.com/coreybutler/nvm-windows) for multi node version support):
->   - `winget install CoreyButler.NVMforWindows`
->   - with nvm installed use: `nvm install 16 && nvm use 16`
+> - `node-pty` ships prebuilt Windows binaries (x64 and arm64), so build tools are normally not needed.
+> - If you still encounter issues with `node-pty` you can try using [Windows Subsystem for Linux (WSL)](https://learn.microsoft.com/en-us/windows/wsl/install) or install:
 > - `windows-build-tools` through Visual Studio Installer `MSVC v142 - VS 2019 C++ {arch} Build Tools`
 >   - Contact us or View the [official Microsoft documentation](https://github.com/microsoft/node-pty?tab=readme-ov-file#windows) for more details
 
@@ -170,6 +170,12 @@ BASE_URL=http://localhost:3000  # Base URL for the application
 
 ```bash
 npm start
+```
+
+4. (Optional) Run the test suite:
+
+```bash
+npm test
 ```
 
 ## Configuration
@@ -310,9 +316,9 @@ We're dumb, but not stupid. Use a full-featured auth provider for production use
 
 ### Stack
 
-- **Backend**: Node.js (>=20.0.0) with Express
+- **Backend**: Node.js (>=24) with Express
 - **Frontend**: XTerm.js for terminal emulation
-- **Container**: Docker with Debian Trixie (as of v1.2.1+) base (v1.1.1 for Bullseye)
+- **Container**: Docker with Debian Trixie (as of v1.2.0) base (v1.1.1 for Bullseye)
 - **Terminal**: node-pty for process spawning
 - **Communication**: WebSockets for real-time terminal I/O
 - **Security**: cors for cross-origin requests
@@ -336,16 +342,15 @@ DumbTerm includes the following XTerm.js addons to enhance your terminal experie
 | Addon                      | Description                                                                       |
 | -------------------------- | --------------------------------------------------------------------------------- |
 | **@xterm/addon-attach**    | Attaches a terminal session to a websocket                                        |
-| **@xterm/addon-canvas**    | Renderer that uses canvas to draw terminal content (used as fallback after webgl) |
 | **@xterm/addon-clipboard** | Clipboard integration for copy/paste support                                      |
 | **@xterm/addon-fit**       | Automatically resize terminal to fit its container                                |
 | **@xterm/addon-image**     | Display images inline in the terminal                                             |
-| **@xterm/addon-ligatures** | Font ligatures support                                                            |
+| **@xterm/addon-ligatures** | Font ligatures support (with the WebGL renderer)                                  |
 | **@xterm/addon-search**    | Search text in the terminal buffer                                                |
 | **@xterm/addon-serialize** | Serialize terminal output to string or HTML                                       |
 | **@xterm/addon-unicode11** | Additional Unicode 11 character width support                                     |
 | **@xterm/addon-web-links** | Automatically hyperlink URLs in terminal                                          |
-| **@xterm/addon-webgl**     | Renderer that uses WebGL for better performance (default render method)           |
+| **@xterm/addon-webgl**     | Renderer that uses WebGL (default; falls back to the built-in DOM renderer)       |
 
 ## Links
 

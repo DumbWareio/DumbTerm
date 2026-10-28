@@ -1,7 +1,10 @@
 services:
   dumbterm:
-    # image: dumbwareio/dumbterm:latest
-    build: .
+    image: dumbwareio/dumbterm:latest
+    # To build from source instead, comment out `image` above and uncomment `build` below
+    # build:
+    #   context: .
+    #   pull: true # Always fetch the latest node:24 base image so builds include Node.js security patches
     container_name: dumbterm
     restart: unless-stopped
     ports:

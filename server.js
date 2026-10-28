@@ -106,6 +106,8 @@ function recordAttempt(ip) {
 }
 
 // Security middleware
+// Express reads NODE_ENV itself and defaults to development, which puts stack traces in error pages
+app.set('env', NODE_ENV);
 app.set('trust proxy', 1);
 app.use(cors(getCorsOptions(BASE_URL)));
 app.use(express.json());
@@ -180,6 +182,18 @@ const authMiddleware = (req, res, next) => {
     debugLog('Auth failed - No valid session or PIN cookie, redirecting to login');
     return res.redirect(BASE_PATH + '/login');
 };
+
+// The pages load their assets with relative URLs, which only resolve under the base path with its
+// trailing slash (/dumbterm/), so send /dumbterm there instead of serving the page from it
+if (BASE_PATH) {
+    app.use((req, res, next) => {
+        if (req.path !== BASE_PATH) return next();
+        // originalUrl can be absolute-form (http://host/dumbterm?x) when sent through a proxy, so cut at '?'
+        const queryStart = req.originalUrl.indexOf('?');
+        const query = queryStart === -1 ? '' : req.originalUrl.slice(queryStart);
+        res.redirect(`${BASE_PATH}/${query}`);
+    });
+}
 
 // Global middleware for origin validation and authentication
 app.use(BASE_PATH, (req, res, next) => {
@@ -296,7 +310,7 @@ app.post(BASE_PATH + '/verify-pin', (req, res) => {
         });
     }
 
-    const { pin } = req.body;
+    const { pin } = req.body || {};
     
     if (!pin || typeof pin !== 'string') {
         debugLog('PIN verification failed - Invalid PIN format');
@@ -398,7 +412,7 @@ const wss = new WebSocketServer({
         const isOriginValid = validateOrigin(info.req.headers.origin);
         if (isOriginValid) callback(true); // allow the connection
         else {
-            console.warn("Blocked connection from origin:", {origin});
+            console.warn("Blocked connection from origin:", info.req.headers.origin);
             callback(false, 403, 'Forbidden'); // reject the connection
         }
     }
@@ -439,8 +453,10 @@ wss.on('connection', (ws, req) => {
     // Parse the cookies
     const parsedCookies = {};
     req.headers.cookie.split(';').forEach(cookie => {
-        const parts = cookie.split('=');
-        parsedCookies[parts[0].trim()] = parts[1].trim();
+        // Split on the first '=' only; skip nameless cookies (no '=') instead of crashing the server
+        const separatorIndex = cookie.indexOf('=');
+        if (separatorIndex === -1) return;
+        parsedCookies[cookie.slice(0, separatorIndex).trim()] = cookie.slice(separatorIndex + 1).trim();
     });
 
     // Check if the user has the correct PIN cookie
@@ -473,32 +489,35 @@ const heartbeatInterval = setInterval(() => {
 }, 15000); // Check every 15 seconds
 
 // Clean up interval on server shutdown
-process.on('SIGTERM', () => {
-    clearInterval(heartbeatInterval);
-    wss.close();
-});
-
 // Terminal creation helper function
 function createTerminal(ws) {
     // Create terminal process
     const shell = process.env.SHELL || (os.platform() === 'win32' ? 'powershell.exe' : 'bash');
     
-    const term = ptyModule.spawn(shell, [], {
-        name: 'xterm-256color',
-        cols: 80,
-        rows: 24,
-        cwd: DEMO_MODE ? '/home/demo' : (process.env.HOME || '/root'),
-        env: {
-            ...process.env,
-            TERM: 'xterm-256color',
-            COLORTERM: 'truecolor',
-            LANG: 'en_US.UTF-8',
-            // Force buffer flushing for better alternate buffer handling
-            STDBUF: 'L',
-            // Ensure proper handling of alternate buffer in applications
-            TERM_PROGRAM: 'xterm-256color'
-        }
-    });
+    let term;
+    try {
+        term = ptyModule.spawn(shell, [], {
+            name: 'xterm-256color',
+            cols: 80,
+            rows: 24,
+            cwd: DEMO_MODE ? '/home/demo' : (process.env.HOME || '/root'),
+            env: {
+                ...process.env,
+                TERM: 'xterm-256color',
+                COLORTERM: 'truecolor',
+                LANG: 'en_US.UTF-8',
+                // Force buffer flushing for better alternate buffer handling
+                STDBUF: 'L',
+                // Ensure proper handling of alternate buffer in applications
+                TERM_PROGRAM: 'xterm-256color'
+            }
+        });
+    } catch (error) {
+        // A failed spawn (bad SHELL, broken node-pty install) must not take down every other session
+        console.error(`Failed to start terminal shell "${shell}":`, error.message);
+        ws.close(1011, 'Failed to start terminal');
+        return;
+    }
 
     debugLog(`Terminal created with PID: ${term.pid}${DEMO_MODE ? ' (Demo Mode)' : ''}`);
 
@@ -546,7 +565,7 @@ function createTerminal(ws) {
 }
 
 // Cleanup old lockouts periodically
-setInterval(() => {
+const lockoutCleanupInterval = setInterval(() => {
     const now = Date.now();
     for (const [ip, attempts] of loginAttempts.entries()) {
         if (now - attempts.lastAttempt >= LOCKOUT_TIME) {
@@ -569,3 +588,27 @@ server.listen(PORT, () => {
     });
     console.log(`Server running on: ${BASE_URL}`);
 });
+
+// Graceful shutdown (docker stop sends SIGTERM, Ctrl+C sends SIGINT): close every terminal with 1001
+// so browsers see a shutdown rather than a crash (the close handler kills each pty), stop accepting
+// connections, then exit
+let shuttingDown = false;
+function shutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`${signal} received, shutting down`);
+    clearInterval(heartbeatInterval);
+    clearInterval(lockoutCleanupInterval);
+    wss.clients.forEach(ws => ws.close(1001, 'Server shutting down'));
+    wss.close();
+    // No explicit exit here: the process ends once every socket has closed and each terminal's close
+    // handler has killed its pty (exiting from server.close's callback could run before those handlers)
+    server.close();
+    // Don't wait forever for a client that never completes the close handshake
+    setTimeout(() => {
+        server.closeAllConnections();
+        process.exit(0);
+    }, 2000).unref();
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

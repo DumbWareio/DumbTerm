@@ -1,3 +1,5 @@
+# Track the Node.js 24 LTS line rather than an exact release: every image build pulls the
+# latest 24.x security patch (24.22.1 or newer). Rebuild the image to pick up new releases.
 FROM node:24-trixie-slim
 
 # Install additional terminal utilities and prerequisites
@@ -39,7 +41,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install dependencies
-RUN npm ci --production && \
+RUN npm ci --omit=dev && \
     npm cache clean --force
 
 # Copy entrypoint script and set permissions
@@ -60,4 +62,6 @@ EXPOSE 3000
 
 # Start the application
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["npm", "start"]
+# Run node directly (copy-xterm already ran at build time) so it receives docker stop's SIGTERM and
+# shuts down cleanly; under `npm start` the signal stopped at an intermediate shell
+CMD ["node", "server.js"]
