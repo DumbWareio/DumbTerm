@@ -13,7 +13,8 @@ export default class ServiceWorkerManager {
         this._receivedCacheName = null;
         // The version the user put off with Later
         this.dismissedVersion = null;
-        // The Update Now under way, which the update timeout and Later call off
+        // The Update Now under way, which the update timeout, Later, a prompt that replaces it and a failure of its
+        // own request call off
         this.updateAttempt = null;
         
         // Initialize with basePath from config
@@ -411,11 +412,8 @@ export default class ServiceWorkerManager {
             return;
         }
         
-        // Clear any existing update timeout to prevent race conditions
-        if (this.updateTimeout) {
-            clearTimeout(this.updateTimeout);
-            this.updateTimeout = null;
-        }
+        // This prompt replaces the one an Update Now may be waiting on, so that Update Now is over, as with Later
+        this.cancelUpdateAttempt();
         
         // Update tracking variables
         this.updateNotificationActive = true;
@@ -480,28 +478,7 @@ export default class ServiceWorkerManager {
         this.updateTimeout = setTimeout(() => {
             attempt.abort();
             this.updateAttempt = null;
-            
-            // Remove any notifications
-            const existingNotifications = document.querySelectorAll('.update-notification');
-            existingNotifications.forEach(notification => notification.remove());
-            
-            // Show timeout error
-            const errorNotification = document.createElement('div');
-            errorNotification.className = 'update-notification error';
-            errorNotification.innerHTML = `
-                <p>Update timed out. Please try again.</p>
-                <button onclick="this.parentElement.remove()">Dismiss</button>
-            `;
-            document.body.appendChild(errorNotification);
-            setTimeout(() => {
-                errorNotification.remove();
-                this.updateNotificationActive = false;
-            }, 5000);
-            
-            // Restore version display
-            if (this.updateVersionDisplayCallback) {
-                this.updateVersionDisplayCallback();
-            }
+            this.showUpdateError('Update timed out. Please try again.');
         }, 30000); // 30 second timeout
         
         // The worker controlling the page caches the release it was registered with, so only a newer worker can
@@ -509,8 +486,10 @@ export default class ServiceWorkerManager {
         // (pages are fetched network-first) and registers the new version's worker
         const controller = navigator.serviceWorker?.controller;
         if (controller && !fromServer) {
-            // Request the update via service worker
-            controller.postMessage({ type: 'PERFORM_UPDATE' });
+            // Request the update via service worker. It answers every tab, naming the request it answers, so this
+            // attempt keeps the id it sends
+            attempt.requestId = crypto.randomUUID();
+            controller.postMessage({ type: 'PERFORM_UPDATE', requestId: attempt.requestId });
             return;
         }
         
@@ -587,11 +566,17 @@ export default class ServiceWorkerManager {
      * @param {Object} data - Update completion data
      */
     handleUpdateComplete(data) {
-        // Clear any pending timeout
-        if (this.updateTimeout) {
-            clearTimeout(this.updateTimeout);
-            this.updateTimeout = null;
-        }
+        // The worker tells every tab when an update fails, so only the tab whose waiting Update Now sent that request
+        // says so. Any other leaves its page as it is: a prompt that replaced that Update Now, or one that waits on
+        // the server. A worker from before the request ids names none, and its failure still ends the Update Now
+        // waiting on it rather than leave it to time out
+        const waitingRequest = this.updateAttempt?.requestId;
+        const answersWaitingRequest = waitingRequest !== undefined
+            && (data.requestId === undefined || data.requestId === waitingRequest);
+        if (data.success === false && !answersWaitingRequest) return;
+        
+        // Whatever the outcome, the Update Now waiting on the worker is over
+        this.cancelUpdateAttempt();
         
         // Reset notification tracking state
         this.updateNotificationActive = false;
@@ -602,15 +587,7 @@ export default class ServiceWorkerManager {
         existingNotifications.forEach(notification => notification.remove());
         
         if (data.success === false) {
-            // Show error notification
-            const errorNotification = document.createElement('div');
-            errorNotification.className = 'update-notification error';
-            errorNotification.innerHTML = `
-                <p>Update failed: ${data.error || 'Unknown error'}</p>
-                <button onclick="this.parentElement.remove()">Dismiss</button>
-            `;
-            document.body.appendChild(errorNotification);
-            setTimeout(() => errorNotification.remove(), 5000);
+            this.showUpdateError(`Update failed: ${data.error || 'Unknown error'}`);
         } else {
             // Store cacheName if available for future use
             if (data.cacheName) {

@@ -203,6 +203,7 @@ async function click(id) {
 }
 
 const PROMPT_1_3_1 = 'New version v1.3.1 available! Current: v1.3.0 Update Now Later';
+const PROMPT_1_3_2 = 'New version v1.3.2 available! Current: v1.3.0 Update Now Later';
 
 describe('service worker manager version display', () => {
     before(() => {
@@ -282,6 +283,11 @@ describe('service worker manager update prompt', () => {
 
     function performUpdates() {
         return navigator.serviceWorker.controller.messages.filter((message) => message.type === 'PERFORM_UPDATE').length;
+    }
+
+    // The id the page sent with its last Update Now to the worker, which the worker's answer to it names
+    function requestSent() {
+        return navigator.serviceWorker.controller.messages.filter((message) => message.type === 'PERFORM_UPDATE').at(-1)?.requestId;
     }
 
     // The checks don't go through the worker, so a page no worker controls yet, or a browser without service
@@ -376,13 +382,14 @@ describe('service worker manager update prompt', () => {
     // An attempt the update timeout or Later gave up on is over: its request is called off, and an answer that
     // comes anyway changes nothing
     test('Update Now does not reload after the update timed out', async () => {
-        await loneTabAcrossUpgrade();
+        const { displayed } = await loneTabAcrossUpgrade();
         await reconnect();
         server.held = true;
         await click('update-now');
         mock.timers.tick(30000);
         assert.deepEqual(prompts(), ['Update timed out. Please try again. Dismiss']);
         assert.equal(signals.at(-1)?.aborted, true, 'the request was called off');
+        assert.equal(displayed.at(-1), '1.3.0', 'the footer is no longer loading');
         releaseHeld();
         await settle();
         assert.equal(window.location.reloads, 0);
@@ -398,6 +405,24 @@ describe('service worker manager update prompt', () => {
         releaseHeld();
         await settle();
         assert.deepEqual(prompts(), ['Update timed out. Please try again. Dismiss']);
+    });
+
+    // The prompt that replaces the timeout notice is not taken down by that notice's own 5 s timer
+    test('Update Now that timed out leaves a prompt shown in the next 5 seconds up', async () => {
+        await loneTabAcrossUpgrade();
+        await reconnect();
+        server.held = true;
+        await click('update-now');
+        mock.timers.tick(30000);
+        server.held = false;
+        mock.timers.tick(1000);
+        await reconnect();
+        assert.deepEqual(prompts(), [PROMPT_1_3_1], 'the next check offers the update again');
+        mock.timers.tick(5000);
+        assert.deepEqual(prompts(), [PROMPT_1_3_1]);
+        const requests = fetched.length;
+        await reconnect();
+        assert.equal(fetched.length, requests, 'no second request while the prompt is up');
     });
 
     test('Later while Update Now waits for the server calls the update off, with no error then or later', async () => {
@@ -428,6 +453,46 @@ describe('service worker manager update prompt', () => {
         await settle();
         assert.equal(window.location.reloads, 1);
     });
+
+    // The worker's word for other versions can replace the prompt while its Update Now waits for the server: that
+    // Update Now is over, as with Later, and whatever the server answers later changes nothing
+    for (const [outcome, answer] of [['fails', () => { server.down = true; }], ['answers', () => {}]]) {
+        test(`Update Now on a prompt the new worker's word replaced is called off, and a request that then ${outcome} changes nothing`, async () => {
+            const { displayed, fromWorker } = await loneTabAcrossUpgrade();
+            await reconnect();
+            server.held = true;
+            await click('update-now');
+            fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.2' });
+            assert.deepEqual(prompts(), [PROMPT_1_3_2]);
+            assert.equal(displayed.at(-1), '1.3.0', 'the footer is no longer loading');
+            assert.equal(signals.at(-1)?.aborted, true, 'the request was called off');
+            answer();
+            releaseHeld();
+            await settle();
+            assert.equal(window.location.reloads, 0);
+            assert.deepEqual(prompts(), [PROMPT_1_3_2], 'the new prompt stays, with no error');
+            mock.timers.tick(30000);
+            assert.deepEqual(prompts(), [PROMPT_1_3_2], 'no "Update timed out" later on');
+        });
+    }
+
+    // The worker tells every tab when an update another tab asked it for fails, and an older worker names no
+    // request; this tab's Update Now asked the server, not the worker, so it goes on waiting for the server
+    for (const [whose, requestId] of [['another tab\'s', 'tab-2'], ['an older worker\'s', undefined]]) {
+        test(`Update Now waiting for the server is left alone when ${whose} update fails`, async () => {
+            const { fromWorker } = await loneTabAcrossUpgrade();
+            await reconnect();
+            server.held = true;
+            await click('update-now');
+            fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', requestId, success: false, error: 'boom' });
+            fromWorker({ type: 'CACHE_VERSION_INFO', currentVersion: '1.3.1' });
+            assert.deepEqual(prompts(), ['New version v1.3.1 available! Current: v1.3.0 Updating... Later']);
+            assert.equal(signals.at(-1)?.aborted, false, 'the request goes on');
+            releaseHeld();
+            await settle();
+            assert.equal(window.location.reloads, 1);
+        });
+    }
 
     test('a new Update Now after one called off with Later still reloads', async () => {
         await loneTabAcrossUpgrade();
@@ -585,6 +650,129 @@ describe('service worker manager update prompt', () => {
         assert.equal(performUpdates(), 1);
         assert.equal(window.location.reloads, 0);
     });
+
+    // The worker tells every tab when an update it was asked for fails; only the tab whose Update Now waits says so
+    test('Update Now on the new worker\'s word that fails says so, and the footer shows the page\'s version again', async () => {
+        const { manager, displayed, fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
+        fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
+        await click('update-now');
+        assert.equal(displayed.at(-1), 'loading');
+        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', requestId: requestSent(), success: false, error: 'boom' });
+        assert.deepEqual(prompts(), ['Update failed: boom Dismiss']);
+        assert.equal(displayed.at(-1), '1.3.0', 'the footer is no longer loading');
+        assert.equal(manager.updateAttempt, null, 'the attempt is over');
+        mock.timers.tick(5000);
+        assert.deepEqual(prompts(), []);
+        mock.timers.tick(30000);
+        assert.deepEqual(prompts(), [], 'no "Update timed out" later on');
+        assert.equal(displayed.at(-1), '1.3.0');
+    });
+
+    test('Update Now on the new worker\'s word shows the worker\'s error as text', async () => {
+        const { fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
+        fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
+        await click('update-now');
+        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', requestId: requestSent(), success: false, error: '<b>x</b>' });
+        assert.deepEqual(prompts(), ['Update failed: <b>x</b> Dismiss']);
+    });
+
+    // A worker from before the request ids names none: its failure still ends the Update Now waiting on it, rather
+    // than leave it to time out
+    test('Update Now on the new worker\'s word says so when an older worker\'s update fails', async () => {
+        const { manager, fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
+        fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
+        await click('update-now');
+        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', success: false, error: 'boom' });
+        assert.deepEqual(prompts(), ['Update failed: boom Dismiss']);
+        assert.equal(manager.updateAttempt, null, 'the attempt is over');
+    });
+
+    // An Update Now called off by a newer prompt goes on in the worker, and its answer can come after the next one
+    // started
+    test('Update Now on a newer prompt goes on waiting when the update it replaced fails', async () => {
+        const { manager, fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
+        fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
+        await click('update-now');
+        const replaced = requestSent();
+        fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.2' });
+        await click('update-now');
+        assert.notEqual(requestSent(), replaced, 'each Update Now sends its own id');
+        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', requestId: replaced, success: false, error: 'old' });
+        fromWorker({ type: 'CACHE_VERSION_INFO', currentVersion: '1.3.1' });
+        assert.deepEqual(prompts(), ['New version v1.3.2 available! Current: v1.3.0 Updating... Later']);
+        assert.notEqual(manager.updateTimeout, null, 'its timeout still runs');
+        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.2', requestId: requestSent(), success: false, error: 'new' });
+        assert.deepEqual(prompts(), ['Update failed: new Dismiss']);
+    });
+
+    // With no worker in control when the user clicks, Update Now asks the server, even on the worker's prompt
+    test('Update Now on the new worker\'s word with no worker in control is left alone when a worker\'s update fails', async () => {
+        const { manager, fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
+        fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
+        navigator.serviceWorker.controller = null;
+        server.held = true;
+        await click('update-now');
+        assert.equal(fetched.at(-1)?.method, 'HEAD', 'it asked the server');
+        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', success: false, error: 'boom' });
+        assert.deepEqual(prompts(), ['New version v1.3.1 available! Current: v1.3.0 Updating... Later']);
+        assert.notEqual(manager.updateAttempt, null, 'the attempt still waits');
+        assert.notEqual(manager.updateTimeout, null, 'its timeout still runs');
+        releaseHeld();
+        await settle();
+        assert.equal(window.location.reloads, 1);
+    });
+
+    // The worker's word for the versions already offered leaves the prompt and its waiting Update Now as they are
+    test('Update Now on the new worker\'s word goes on waiting when the worker offers the same versions again', async () => {
+        const { manager, displayed, fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
+        fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
+        await click('update-now');
+        fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
+        assert.notEqual(manager.updateAttempt, null, 'the attempt still waits');
+        assert.equal(displayed.at(-1), 'loading');
+        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', requestId: requestSent(), success: false, error: 'boom' });
+        assert.deepEqual(prompts(), ['Update failed: boom Dismiss']);
+    });
+
+    test('Update Now on the new worker\'s word that fails after the update timed out shows no second error', async () => {
+        const { fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
+        fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
+        await click('update-now');
+        mock.timers.tick(30000);
+        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', requestId: requestSent(), success: false, error: 'boom' });
+        assert.deepEqual(prompts(), ['Update timed out. Please try again. Dismiss']);
+    });
+
+    test('Update Now on the new worker\'s word that a newer prompt replaced shows no error when it fails', async () => {
+        const { displayed, fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
+        fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
+        await click('update-now');
+        fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.2' });
+        assert.equal(displayed.at(-1), '1.3.0', 'the footer is no longer loading');
+        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', requestId: requestSent(), success: false, error: 'boom' });
+        assert.deepEqual(prompts(), [PROMPT_1_3_2]);
+    });
+
+    test('an update that fails in another tab leaves this tab\'s prompt as it is', async () => {
+        const { displayed, fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
+        fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
+        const footer = displayed.length;
+        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', requestId: 'tab-2', success: false, error: 'boom' });
+        assert.deepEqual(prompts(), [PROMPT_1_3_1]);
+        assert.equal(displayed.length, footer, 'the footer is left as it is');
+    });
+
+    // A finished update reloads every tab, whether or not it asked, to the version the server now runs
+    for (const [tab, clickUpdateNow] of [['the tab that asked', true], ['a tab that did not ask', false]]) {
+        test(`an update the worker finished reloads ${tab}`, async () => {
+            const { fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
+            fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
+            if (clickUpdateNow) await click('update-now');
+            fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', success: true });
+            mock.timers.tick(100);
+            assert.equal(window.location.reloads, 1);
+        });
+    }
 
     // The same versions from the worker while the server's prompt is up leave that prompt as it is, so its
     // Update Now still reloads
