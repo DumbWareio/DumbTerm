@@ -670,13 +670,22 @@ describe('terminal control sequences', () => {
     });
 
     test('a saved session leaves out a background job\'s output at a root prompt when its last row starts like the prompt', async () => {
-        // Known limit: with no final newline, the job's last row starts with the root prompt's `# `, so it reads
-        // as that prompt redrawn below and typed on, and the save stops above the job's output. Telling the two
-        // apart would also lose the plain prompt typed on, or erased back, after a completion listing. Pinned so
-        // that changing it is deliberate
+        // Known limit: with no final newline, the job's last line, wrapped or not, starts with the root prompt's
+        // `# `, so it reads as that prompt redrawn below and typed on, and the save stops above the job's output.
+        // Telling the two apart would also lose the plain prompt typed on, or erased back, after a completion
+        // listing. Pinned so that changing it is deliberate
         const saves = recordSavedSessions();
         await receiveOutput('\x1b[?2004h# ');
         await receiveOutput('\r\n[1] 123\r\njob line 1\r\njob line 2\r\njob line 3\r\njob line 4\r\n# done');
+
+        assert.equal(saves.at(-1), '');
+    });
+
+    test('a saved session leaves out a background job\'s output at a root prompt when its wrapped last line starts like the prompt', async () => {
+        // The same known limit, for a last line that wraps: lines are compared whole. Pinned with the one above
+        const saves = recordSavedSessions();
+        await receiveOutput('\x1b[?2004h# ');
+        await receiveOutput(`\r\n[1] 123\r\njob line 1\r\njob line 2\r\njob line 3\r\njob line 4\r\n# ${'x'.repeat(100)}`);
 
         assert.equal(saves.at(-1), '');
     });
@@ -770,6 +779,74 @@ describe('terminal control sequences', () => {
         await receiveOutput(`$ app\r\n\x1b[?2004h${'='.repeat(80)}\r\nr1\r\nr2\r\n${'='.repeat(400)}`);
 
         assert.deepEqual(savedLines(saves.at(-1)).slice(0, 4), ['$ app', '='.repeat(80), 'r1', 'r2']);
+    });
+
+    test('a saved session keeps the output of an app whose last line starts like its first for two of the three rows it wraps onto', async () => {
+        // Every row a line wraps onto counts, not only the first
+        const saves = recordSavedSessions();
+        const wide = (tail) => `${'x'.repeat(170)}${tail}`;
+        await receiveOutput(`$ app\r\n\x1b[?2004h${wide('-old-line-tail')}\r\nr1\r\nr2\r\nr3\r\nr4\r\n${wide('-new-line-tail')}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(0, 6), ['$ app', wide('-old-line-tail'), 'r1', 'r2', 'r3', 'r4']);
+    });
+
+    test('a saved session keeps the output of an app that draws a rule, a blank row, its transcript, a rule and its input line', async () => {
+        // A row filled to its last column, like the rule above the input line, does not run on into the row below
+        const saves = recordSavedSessions();
+        const rule = '─'.repeat(80);
+        await receiveOutput(`$ app\r\n\x1b[?2004h${rule}\r\n\r\n r1\r\n r2\r\n r3\r\n${rule}\r\n❯ hi`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', rule, '', ' r1', ' r2', ' r3', rule, '']);
+    });
+
+    test('a saved session keeps the output of an app that draws its first line and input line again above a status row', async () => {
+        // The rows under a command's first row are its own only where they continue it
+        const saves = recordSavedSessions();
+        await receiveOutput('$ app\r\n\x1b[?2004hTitle\r\n> \r\nr1\r\nr2\r\nr3\r\nTitle\r\n> hi\r\nstatus');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'Title', '>', 'r1', 'r2', 'r3', 'Title', '> hi', '']);
+    });
+
+    // bash 5.2's output at each keystroke (test/fixtures/bash-completion-listings.json); the terminal takes the
+    // width it was captured at. Returns the content saved after each step
+    const LISTINGS = require('./fixtures/bash-completion-listings.json');
+    async function replayCapture(name, stepCount) {
+        const { columns, steps } = LISTINGS[name];
+        const saves = recordSavedSessions();
+        terminal.resize(columns, terminal.rows);
+        const savedAfter = [];
+        for (const { output } of steps.slice(0, stepCount)) {
+            await receiveOutput(output);
+            savedAfter.push(saves.at(-1));
+        }
+        return savedAfter;
+    }
+
+    test('a saved session keeps a plain prompt redrawn below a completion listing once the cursor moved down across the command\'s wrap', async () => {
+        // Known limit: readline moves the cursor down a wrapped command with a newline, which leaves the row it
+        // moves to unmarked as a wrapped one, and a one-row prompt has no row above its command to anchor the
+        // rows below on. The save keeps the listing and the redrawn prompt, which the tab shows again above its new
+        // prompt. Pinned so that changing it is deliberate
+        const saved = await replayCapture('plainCtrlE', 6);
+
+        const prompt = 'root@box:/app# ';
+        assert.deepEqual(savedLines(saved.at(-1)), [`${prompt}echo out`, 'out', `${prompt}ls /tmp/e/`,
+            'alpha-a-rather-long-directory-name/ eta-a-rather-long-directory-name/',
+            'beta-a-rather-long-directory-name/  gamma-a-rather-long-directory-name/',
+            'delta-a-rather-long-directory-name/ theta-a-rather-long-directory-name/',
+            'eps-a-rather-long-directory-name/   zeta-a-rather-long-directory-name/',
+            `${prompt}ls /tmp/e/${'a'.repeat(55)}`, '']);
+        assert.deepEqual(savedLines(saved[4]), [`${prompt}echo out`, 'out', ''], 'before the cursor moved, it was left out');
+    });
+
+    test('a saved session keeps a plain prompt redrawn below a completion listing with a command more than four rows long', async () => {
+        // Known limit: the redrawn prompt is looked for no higher than four rows up, and a one-row prompt has no
+        // row above its command to anchor a longer one on. Pinned so that changing it is deliberate
+        const saved = await replayCapture('plainSixRows', 4);
+
+        const prompt = 'root@box:/app# ';
+        assert.deepEqual(savedLines(saved.at(-1)), [`${prompt}echo out`, 'out', `${prompt}ls /tmp/d/`,
+            'alpha/ beta/  delta/ gamma/', `${prompt}ls /tmp/d/${'a'.repeat(55 + 4 * 80)}`, '']);
     });
 
     test('a saved session leaves out the prompt redrawn at the top of a cleared screen', async () => {
