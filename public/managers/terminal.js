@@ -796,6 +796,8 @@ export default class TerminalManager {
         let outageReported = false;
         // Whether the tab has been connected before, so that its next connection is a reconnect
         let connectedBefore = false;
+        // Whether the tab's last shell failed to start (1011), so that coming back to the page leaves it be
+        let shellFailedToStart = false;
         const self = this; // Store reference to 'this' for use in callbacks
 
         function connectionUnderway() {
@@ -832,6 +834,7 @@ export default class TerminalManager {
                 clearTimeout(connectionTimeout);
                 reconnectAttempts = 0;
                 outageReported = false;
+                shellFailedToStart = false;
 
                 // Each connection gets a new shell, so an editor open on the old one is gone with it, and so are
                 // the modes the old shell's programs set, in either buffer (a picker drawn under the prompt sets
@@ -938,6 +941,7 @@ export default class TerminalManager {
             // after a dropped connection. A shell that failed to start (1011) says why, as retrying would fail
             // the same way
             if (event.wasClean && event.code === 1011) {
+                shellFailedToStart = true;
                 terminal.writeln(`\r\nThe server could not start a shell: ${event.reason || 'Failed to start terminal'}.`);
                 return;
             }
@@ -1018,9 +1022,10 @@ export default class TerminalManager {
 
         // Handle page visibility changes: coming back to the page reconnects a tab whose connection ended, with
         // its retries renewed. A retry waiting out its backoff is called off for it, as the page may have been
-        // away (a laptop asleep) for longer than the wait; a socket connecting or open is left to finish
+        // away (a laptop asleep) for longer than the wait; a socket connecting or open is left to finish. A tab
+        // whose shell failed to start is left for a key, as each return would fail the same way
         const onVisibilityChange = () => {
-            if (document.visibilityState !== 'visible') {
+            if (document.visibilityState !== 'visible' || shellFailedToStart) {
                 return;
             }
             clearTimeout(reconnectTimer);

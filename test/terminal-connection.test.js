@@ -388,6 +388,54 @@ describe('terminal connection', () => {
         assert.equal(linesSaying(CLOSED_NORMALLY), 0);
     });
 
+    // Coming back to the page reconnects a tab whose shell exited, but not one whose shell failed to start (#46):
+    // each return would start the broken shell again and print why once more
+    test('coming back to the page after a shell failed to start does not try again', () => {
+        const first = FakeWebSocket.last;
+        first.closes({ code: 1011, reason: 'Shell exited with code 1', wasClean: true });
+        for (let visit = 0; visit < 3; visit++) {
+            wait(1000);
+            document.visibilityState = 'hidden';
+            document.fire('visibilitychange');
+            wait(1000);
+            document.visibilityState = 'visible';
+            document.fire('visibilitychange');
+        }
+        wait(60000);
+
+        assert.equal(FakeWebSocket.last, first, 'no new socket');
+        assert.equal(linesSaying('The server could not start a shell: Shell exited with code 1.'), 1);
+    });
+
+    test('a key after a shell failed to start still tries once, after the page was left and came back', () => {
+        const first = FakeWebSocket.last;
+        first.closes({ code: 1011, reason: 'Shell exited with code 1', wasClean: true });
+        wait(1000);
+        document.fire('visibilitychange');
+        wait(1000);
+        type('a');
+        wait(60000);
+
+        assert.equal(socketsSince(first).length, 1, 'one new attempt');
+    });
+
+    test('once a shell starts after one that failed to, coming back to the page reconnects when it exits', () => {
+        const first = FakeWebSocket.last;
+        first.closes({ code: 1011, reason: 'Shell exited with code 1', wasClean: true });
+        wait(1000);
+        type('a');
+        wait(1000);
+        const started = FakeWebSocket.last;
+        assert.equal(started.readyState, FakeWebSocket.OPEN);
+        started.closes({ code: 1005, wasClean: true });
+        wait(1000);
+        document.fire('visibilitychange');
+        wait(1000);
+
+        assert.equal(socketsSince(started).length, 1, 'reconnected as after any exit');
+        assert.equal(FakeWebSocket.last.readyState, FakeWebSocket.OPEN);
+    });
+
     // Guard: only a close the server reports as failed (1011) says the shell could not start, whatever its reason
     test('a shell that exits (1005) with a reason still says it closed normally', () => {
         FakeWebSocket.last.closes({ code: 1005, reason: 'Shell exited with code 1', wasClean: true });
