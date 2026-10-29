@@ -129,12 +129,20 @@ class FakeWebSocket {
     count(type) { return this.sent.filter((message) => message.type === type).length; }
 }
 
-// window and document, keeping the listeners the page adds so a test can fire them and see which are left
+// window and document, keeping the listeners the page adds so a test can fire them and see which are left, and
+// the events the page dispatches
 function listeningTarget(properties) {
     const listeners = new Map();
+    const dispatched = [];
     return {
         ...properties,
         listeners,
+        dispatched,
+        dispatchEvent(event) {
+            dispatched.push(event.type);
+            [...(listeners.get(event.type) ?? [])].forEach((listener) => listener(event));
+            return true;
+        },
         addEventListener(type, listener) {
             if (!listeners.has(type)) listeners.set(type, new Set());
             listeners.get(type).add(listener);
@@ -307,6 +315,33 @@ describe('terminal connection', () => {
             assert.equal(linesSaying(LOST), 1, 'said so once');
         });
     }
+
+    // The page checks the server's version when a tab reconnects, as an upgrade restarts the server (#50)
+    test('a tab reconnecting after the server went away tells the page once', () => {
+        const first = FakeWebSocket.last;
+        server.up = false;
+        first.closes({ code: 1001, wasClean: true });
+        wait(3000);
+        server.up = true;
+        wait(10000);
+
+        assert.equal(FakeWebSocket.last.readyState, FakeWebSocket.OPEN, 'the tab reconnected');
+        assert.ok(socketsSince(first).length > 1, 'after attempts that were refused');
+        assert.deepEqual(window.dispatched, ['dumbterm:reconnected']);
+    });
+
+    test('a tab\'s first connection does not count as reconnecting', () => {
+        assert.deepEqual(window.dispatched, []);
+    });
+
+    test('a tab whose shell exited tells the page when a key gets it a new one', () => {
+        FakeWebSocket.last.closes({ code: 1005, wasClean: true });
+        wait(1000);
+        assert.deepEqual(window.dispatched, [], 'not while it waits for a key');
+        type('a');
+        wait(1000);
+        assert.deepEqual(window.dispatched, ['dumbterm:reconnected']);
+    });
 
     // Guards: these closes were final before, and stay final
     for (const [code, what] of [[1005, 'the shell exits'], [1000, 'the server closes normally'],
