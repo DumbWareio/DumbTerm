@@ -17,7 +17,8 @@ function fakeResponse(body, { status = 200, type = 'basic', redirected = false }
 }
 
 // Load the worker as the browser would register it (service-worker.js?v=<version>) for the install at `scope`.
-// `store` is the origin's Cache Storage, which two workers can share; `config` adds fields to config.js.
+// `store` is the origin's Cache Storage, which two workers can share; `config` adds fields to config.js, and null
+// makes config.js fail.
 // `server.manifest` is what assets/asset-manifest.json lists, and `server.manifestStatus` its HTTP status;
 // tests can change either between steps, and hold the manifest's answer back by setting `server.manifestHeld`
 // to a promise. Messages the worker posts to its one page land in `messages`.
@@ -31,7 +32,9 @@ function loadWorker({ version = '1.3.0', scope = '/', store = new Map(), config 
     const fetch = async (request) => {
         const url = typeof request === 'string' ? request : request.url;
         fetchCalls.push(url);
-        if (url.endsWith('config.js')) return fakeResponse(`window.appConfig = ${JSON.stringify({ version, ...config })};`);
+        if (url.endsWith('config.js')) {
+            return config ? fakeResponse(`window.appConfig = ${JSON.stringify({ version, ...config })};`) : fakeResponse('error', { status: 500 });
+        }
         if (url.endsWith('asset-manifest.json')) {
             await server.manifestHeld;
             return fakeResponse(JSON.stringify(server.manifest), { status: server.manifestStatus });
@@ -201,7 +204,7 @@ describe('service worker activation', () => {
 
     test('deletes nothing when registered without a release version', async () => {
         // The page falls back to ?v=<timestamp> when config.js could not be read
-        const worker = loadWorker({ version: '1730000000000', cacheNames: ['DUMBTERM_CACHE_/_V1.2.0'] });
+        const worker = loadWorker({ version: '1730000000000', config: null, cacheNames: ['DUMBTERM_CACHE_/_V1.2.0'] });
         const pending = [];
         worker.listeners.activate({ waitUntil(promise) { pending.push(promise); } });
         await Promise.all(pending);
