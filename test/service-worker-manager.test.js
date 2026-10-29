@@ -415,6 +415,20 @@ describe('service worker manager update prompt', () => {
         assert.deepEqual(prompts(), []);
     });
 
+    // A worker's word for other versions can replace the prompt while its Update Now waits for the server
+    test('Update Now on a prompt that replaced a waiting one calls the waiting one off', async () => {
+        const { fromWorker } = await loneTabAcrossUpgrade({ controlled: false });
+        await reconnect();
+        server.held = true;
+        await click('update-now');
+        fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.2' });
+        await click('update-now');
+        assert.equal(signals.at(-2)?.aborted, true, 'the first request was called off');
+        releaseHeld();
+        await settle();
+        assert.equal(window.location.reloads, 1);
+    });
+
     test('a new Update Now after one called off with Later still reloads', async () => {
         await loneTabAcrossUpgrade();
         await reconnect();
