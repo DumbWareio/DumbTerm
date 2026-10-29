@@ -13,7 +13,8 @@ export default class ServiceWorkerManager {
         this._receivedCacheName = null;
         // The version the user put off with Later
         this.dismissedVersion = null;
-        // The Update Now under way, which the update timeout and Later call off
+        // The Update Now under way, which the update timeout, Later, a prompt that replaces it and a failure of its
+        // own request call off
         this.updateAttempt = null;
         
         // Initialize with basePath from config
