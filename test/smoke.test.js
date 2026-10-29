@@ -424,6 +424,25 @@ for (const [what, env, nodePtyLine] of [
     });
 }
 
+// Any shell that ends within a second of its spawn without exiting cleanly never started, including one that fails
+// late in that second
+for (const [what, fixture, reason] of [
+    ['fails 0.6 s after it starts', 'slow-failing-shell.sh', 'Shell exited with code 2'],
+]) {
+    describe(`DumbTerm server when the shell ${what}`, () => {
+        let server;
+
+        before(async () => { server = await startServer(() => ({ SHELL: path.join(__dirname, 'fixtures', fixture) })); });
+        after(async () => { await server.stop(); });
+
+        test('closes the terminal WebSocket with 1011, saying why', async () => {
+            const terminal = openTerminal(server, { Cookie: PIN_COOKIE, Origin: server.baseUrl });
+            assert.equal(await closeCodeWithin(terminal), 1011);
+            assert.equal(terminal.state.closeReason, reason);
+        });
+    });
+}
+
 // A shell the user ends closes as it always has, without a status (1005), whatever its exit code once it has been
 // up a while (#46)
 describe('DumbTerm server when the shell exits', () => {
