@@ -421,6 +421,18 @@ describe('service worker manager update prompt', () => {
         assert.equal(window.location.reloads, 0);
     });
 
+    // The same versions from the worker while the server's prompt is up leave that prompt as it is, so its
+    // Update Now still reloads
+    test('the new worker\'s word while the server\'s prompt is up leaves that prompt', async () => {
+        const { fromWorker } = await loneTabAcrossUpgrade();
+        await reconnect();
+        fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
+        assert.deepEqual(prompts(), [PROMPT_1_3_1]);
+        await click('update-now');
+        assert.equal(window.location.reloads, 1);
+        assert.equal(performUpdates(), 0);
+    });
+
     test('a worker reporting no change shows no prompt', async () => {
         const { fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
         fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.1', newVersion: '1.3.1' });
