@@ -402,6 +402,24 @@ describe('service worker manager update prompt', () => {
         assert.deepEqual(prompts(), ['Update timed out. Please try again. Dismiss']);
     });
 
+    // The prompt that replaces the timeout notice is not taken down by that notice's own 5 s timer
+    test('Update Now that timed out leaves a prompt shown in the next 5 seconds up', async () => {
+        await loneTabAcrossUpgrade();
+        await reconnect();
+        server.held = true;
+        await click('update-now');
+        mock.timers.tick(30000);
+        server.held = false;
+        mock.timers.tick(1000);
+        await reconnect();
+        assert.deepEqual(prompts(), [PROMPT_1_3_1], 'the next check offers the update again');
+        mock.timers.tick(5000);
+        assert.deepEqual(prompts(), [PROMPT_1_3_1]);
+        const requests = fetched.length;
+        await reconnect();
+        assert.equal(fetched.length, requests, 'no second request while the prompt is up');
+    });
+
     test('Later while Update Now waits for the server calls the update off, with no error then or later', async () => {
         const { displayed } = await loneTabAcrossUpgrade();
         await reconnect();

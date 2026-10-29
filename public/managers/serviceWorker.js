@@ -477,28 +477,7 @@ export default class ServiceWorkerManager {
         this.updateTimeout = setTimeout(() => {
             attempt.abort();
             this.updateAttempt = null;
-            
-            // Remove any notifications
-            const existingNotifications = document.querySelectorAll('.update-notification');
-            existingNotifications.forEach(notification => notification.remove());
-            
-            // Show timeout error
-            const errorNotification = document.createElement('div');
-            errorNotification.className = 'update-notification error';
-            errorNotification.innerHTML = `
-                <p>Update timed out. Please try again.</p>
-                <button onclick="this.parentElement.remove()">Dismiss</button>
-            `;
-            document.body.appendChild(errorNotification);
-            setTimeout(() => {
-                errorNotification.remove();
-                this.updateNotificationActive = false;
-            }, 5000);
-            
-            // Restore version display
-            if (this.updateVersionDisplayCallback) {
-                this.updateVersionDisplayCallback();
-            }
+            this.showUpdateError('Update timed out. Please try again.');
         }, 30000); // 30 second timeout
         
         // The worker controlling the page caches the release it was registered with, so only a newer worker can
