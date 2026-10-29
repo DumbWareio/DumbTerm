@@ -18,7 +18,8 @@ function fakeResponse(body, { status = 200, type = 'basic', redirected = false }
 
 // Load the worker as the browser would register it (service-worker.js?v=<version>).
 // `server.manifest` is what assets/asset-manifest.json lists, and `server.manifestStatus` its HTTP status;
-// tests can change either between steps. Messages the worker posts to its one page land in `messages`.
+// tests can change either between steps, and hold the manifest's answer back by setting `server.manifestHeld`
+// to a promise. Messages the worker posts to its one page land in `messages`.
 function loadWorker({ version = '1.3.0', network = async () => fakeResponse('network'), cacheNames = [], manifest = [], manifestStatus = 200 } = {}) {
     const store = new Map(cacheNames.map((name) => [name, new Map()]));
     const listeners = {};
@@ -29,7 +30,10 @@ function loadWorker({ version = '1.3.0', network = async () => fakeResponse('net
         const url = typeof request === 'string' ? request : request.url;
         fetchCalls.push(url);
         if (url.endsWith('config.js')) return fakeResponse(`window.appConfig = {"version":"${version}"};`);
-        if (url.endsWith('asset-manifest.json')) return fakeResponse(JSON.stringify(server.manifest), { status: server.manifestStatus });
+        if (url.endsWith('asset-manifest.json')) {
+            await server.manifestHeld;
+            return fakeResponse(JSON.stringify(server.manifest), { status: server.manifestStatus });
+        }
         return network(request);
     };
     const openCache = (name) => {
@@ -193,6 +197,7 @@ describe('service worker activation', () => {
         const worker = loadWorker({ version: '1.3.0', manifest: ['index.html', 'index.js'] });
         await activate(worker);
         assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_V1.3.0': 2 });
+        assert.ok(worker.messages.some((message) => message.type === 'CACHE_VERSION_INFO' && message.currentVersion === '1.3.0'));
     });
 
     test('an upgrade whose manifest request fails keeps the old cache and tells no page', async () => {
@@ -201,6 +206,8 @@ describe('service worker activation', () => {
         await activate(worker);
         assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_V1.3.0': 1 });
         assert.deepEqual(failures(worker), []);
+        // The page still learns which version it runs
+        assert.ok(worker.messages.some((message) => message.type === 'CACHE_VERSION_INFO' && message.currentVersion === '1.3.1'));
     });
 
     test('an upgrade whose asset requests fail keeps the old cache and tells no page', async () => {
@@ -237,21 +244,17 @@ describe('service worker activation', () => {
         const worker = loadWorker({ version: '1.3.0', cacheNames: ['DUMBTERM_CACHE_V1.3.0'], manifest: ['index.html'] });
         await activate(worker);
         assert.ok(!worker.fetchCalls.some((url) => url.endsWith('asset-manifest.json')));
+        assert.ok(worker.messages.some((message) => message.type === 'CACHE_VERSION_INFO' && message.currentVersion === '1.3.0'));
     });
 
     test('keeps the cache it filled when a page sends another version during the fill', async () => {
         // A second tab loading the offline copy of 1.3.2 while 1.3.3 activates
         let release;
-        const held = new Promise((resolve) => { release = resolve; });
-        const worker = loadWorker({
-            version: '1.3.3',
-            cacheNames: ['DUMBTERM_CACHE_V1.3.2'],
-            manifest: ['index.html', 'index.js'],
-            network: async () => { await held; return fakeResponse('network'); },
-        });
+        const worker = loadWorker({ version: '1.3.3', cacheNames: ['DUMBTERM_CACHE_V1.3.2'], manifest: ['index.html', 'index.js'] });
+        worker.server.manifestHeld = new Promise((resolve) => { release = resolve; });
         const pending = [];
         worker.listeners.activate({ waitUntil(promise) { pending.push(promise); } });
-        while (!worker.fetchCalls.some((url) => url.endsWith('index.js'))) await settle();
+        for (let i = 0; i < 100 && !worker.fetchCalls.some((url) => url.endsWith('asset-manifest.json')); i++) await settle();
         await worker.listeners.message({ data: { type: 'SET_VERSION', version: '1.3.2', cacheName: 'DUMBTERM_CACHE_V1.3.2' } });
         release();
         await Promise.all(pending);
