@@ -98,6 +98,14 @@ async function performUpdate(worker) {
 const cacheSizes = (worker) => Object.fromEntries([...worker.store].map(([name, entries]) => [name, entries.size]));
 const failures = (worker) => worker.messages.filter((message) => message.type === 'UPDATE_COMPLETE' && message.success === false);
 
+// Wait until the worker has asked for the manifest `count` times
+async function manifestRequested(worker, count = 1) {
+    for (let i = 0; i < 100 && worker.fetchCalls.filter((url) => url.endsWith('asset-manifest.json')).length < count; i++) await settle();
+}
+
+// The URLs a cache holds, in a stable order
+const cachedUrls = (worker, name) => [...(worker.store.get(name)?.keys() ?? [])].sort();
+
 // Dispatch a fetch event; resolves with the response the worker chose, or null if it did not respond
 async function dispatchFetch(worker, request) {
     let responded = null;
@@ -261,6 +269,23 @@ describe('service worker activation', () => {
         assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_V1.3.3': 2 });
     });
 
+    test('two fills for different versions at once leave a filled cache', async () => {
+        // A first visit: 1.3.3 activates while a page still running 1.3.2 starts a fill of its own
+        let release;
+        const worker = loadWorker({ version: '1.3.3', manifest: ['index.html', 'index.js'] });
+        worker.server.manifestHeld = new Promise((resolve) => { release = resolve; });
+        const pending = [];
+        worker.listeners.activate({ waitUntil(promise) { pending.push(promise); } });
+        await manifestRequested(worker);
+        pending.push(worker.listeners.message({ data: { type: 'SET_VERSION', version: '1.3.2', cacheName: 'DUMBTERM_CACHE_V1.3.2' } }));
+        await manifestRequested(worker, 2);
+        release();
+        await Promise.all(pending);
+        const names = [...worker.store.keys()];
+        assert.ok(names.length > 0, 'no cache left');
+        for (const name of names) assert.deepEqual(cachedUrls(worker, name), [ORIGIN + 'index.html', ORIGIN + 'index.js'], name);
+    });
+
     test('deletes an older cache whatever its DumbTerm name looks like', async () => {
         // Builds from May 2025 named their cache without the V
         const worker = loadWorker({ version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_1.2.0', 'unrelated-cache'], manifest: ['index.html'] });
@@ -284,6 +309,26 @@ describe('service worker Update Now', () => {
         assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_V1.3.0': 1 });
         assert.equal(failures(worker).length, 1);
         assert.match(failures(worker)[0].error, /500/);
+    });
+
+    test('overlapping an activation fill of another version leaves a filled cache and reports success', async () => {
+        // 1.3.3 activates; meanwhile a page running 1.3.2 sends its version, then the user picks Update Now
+        let release;
+        const worker = loadWorker({ version: '1.3.3', cacheNames: ['DUMBTERM_CACHE_V1.3.1'], manifest: ['index.html', 'index.js'] });
+        worker.server.manifestHeld = new Promise((resolve) => { release = resolve; });
+        const pending = [];
+        worker.listeners.activate({ waitUntil(promise) { pending.push(promise); } });
+        await manifestRequested(worker);
+        await worker.listeners.message({ data: { type: 'SET_VERSION', version: '1.3.2', cacheName: 'DUMBTERM_CACHE_V1.3.2' } });
+        pending.push(worker.listeners.message({ data: { type: 'PERFORM_UPDATE' } }));
+        await manifestRequested(worker, 2);
+        release();
+        await Promise.all(pending);
+        await settle();
+        const names = [...worker.store.keys()];
+        assert.ok(names.length > 0, 'no cache left');
+        for (const name of names) assert.deepEqual(cachedUrls(worker, name), [ORIGIN + 'index.html', ORIGIN + 'index.js'], name);
+        assert.ok(worker.messages.some((message) => message.type === 'UPDATE_COMPLETE' && message.success === true));
     });
 
     test('works after the same worker already filled its cache at activation', async () => {

@@ -5,6 +5,8 @@ const REGISTERED_VERSION = new URL(self.location.href).searchParams.get('v');
 let CACHE_VERSION = /^\d+\.\d+\.\d+/.test(REGISTERED_VERSION || '') ? REGISTERED_VERSION : "1.0.0"; // Default fallback version
 let CACHE_NAME = `DUMBTERM_CACHE_V${CACHE_VERSION}`; // Default format, will be overridden
 const BASE_PATH = self.registration.scope;
+// Names of the caches fills are still filling (a name appears once per fill), so no fill deletes another's cache
+const CACHES_BEING_FILLED = [];
 
 /**
  * Gets app configuration from config.js
@@ -264,6 +266,7 @@ async function installCache(isFirstInstall = false) {
     // A page's SET_VERSION can change CACHE_NAME while this fill waits on the network, so fill and keep the cache
     // this fill started with
     const cacheName = CACHE_NAME;
+    CACHES_BEING_FILLED.push(cacheName);
     
     try {
         // Fetch and cache assets. The manifest comes first so that a failed request leaves no empty cache behind.
@@ -281,9 +284,10 @@ async function installCache(isFirstInstall = false) {
         await cache.addAll(assetsToCache);
         console.log("Assets cached successfully");
         
-        // Clear old caches only now that the new one is filled: until then they are what works offline
+        // Clear old caches only now that the new one is filled: until then they are what works offline.
+        // A cache another fill is still filling is left for the next activation to clear.
         const oldCaches = (await caches.keys())
-            .filter(key => key.startsWith('DUMBTERM_') && key !== cacheName);
+            .filter(key => key.startsWith('DUMBTERM_') && key !== cacheName && !CACHES_BEING_FILLED.includes(key));
         if (oldCaches.length > 0) {
             console.log(`Deleting old caches: ${oldCaches}`);
             await Promise.all(
@@ -344,6 +348,8 @@ async function installCache(isFirstInstall = false) {
                 });
             });
         });
+    } finally {
+        CACHES_BEING_FILLED.splice(CACHES_BEING_FILLED.indexOf(cacheName), 1);
     }
 }
 
