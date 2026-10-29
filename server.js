@@ -523,6 +523,7 @@ function createTerminal(ws) {
     }
 
     debugLog(`Terminal created with PID: ${term.pid}${DEMO_MODE ? ' (Demo Mode)' : ''}`);
+    const spawnedAt = Date.now();
 
     // Handle incoming data from client
     ws.on('message', (data) => {
@@ -558,11 +559,16 @@ function createTerminal(ws) {
         term.kill();
     });
 
-    // Handle terminal exit
+    // Handle terminal exit. A shell that exits non-zero within a second of its spawn never started (a bad SHELL or
+    // HOME: node-pty prints why and the shell exits with 1), which the page tells from a shell the user ended
     term.on('exit', (code) => {
         debugLog('Terminal process exited with code:', code);
         if (ws.readyState === ws.OPEN) {
-            ws.close();
+            if (code !== 0 && Date.now() - spawnedAt < 1000) {
+                ws.close(1011, `Shell exited with code ${code}`);
+            } else {
+                ws.close();
+            }
         }
     });
 }
