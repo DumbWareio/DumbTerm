@@ -201,6 +201,15 @@ describe('DumbTerm server', () => {
         assert.equal(res.headers.get('x-dumbterm-version'), require('../package.json').version);
     });
 
+    // Cache Storage is shared by every install on the origin, and only the service worker knows the path it was
+    // registered under, so it names its caches itself
+    test('serves config.js without a cache name', async () => {
+        const res = await fetch(`${server.baseUrl}/config.js`, { headers: { Cookie: PIN_COOKIE } });
+        const appConfig = JSON.parse((await res.text()).match(/window\.appConfig = ({.*});/)[1]);
+        assert.equal(appConfig.version, require('../package.json').version);
+        assert.equal('cacheName' in appConfig, false);
+    });
+
     test('serves the login page when a PIN is configured', async () => {
         const res = await fetch(`${server.baseUrl}/login`);
         assert.equal(res.status, 200);

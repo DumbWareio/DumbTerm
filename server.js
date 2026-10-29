@@ -25,7 +25,6 @@ const APP_VERSION = require('./package.json').version;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const ptyModule = DEMO_MODE ? require('./scripts/demo/terminal') : pty;
 const ASSETS_DIR = path.join(PUBLIC_DIR, 'assets');
-const CACHE_NAME = `DUMBTERM_CACHE_V${APP_VERSION}`;
 
 generatePWAManifest(SITE_TITLE);
 
@@ -235,8 +234,7 @@ app.get(BASE_PATH + '/config.js', (req, res) => {
         siteTitle: SITE_TITLE,
         isPinRequired: isPinRequired,
         isDemoMode: DEMO_MODE,
-        version: APP_VERSION,
-        cacheName: CACHE_NAME
+        version: APP_VERSION
     }
 
     // An open page asks for this header with a HEAD request to learn whether the server was upgraded under it:
@@ -600,8 +598,7 @@ server.listen(PORT, () => {
         nodeEnv: NODE_ENV,
         debug: DEBUG,
         demoMode: DEMO_MODE,
-        version: APP_VERSION,
-        cacheName: CACHE_NAME
+        version: APP_VERSION
     });
     console.log(`Server running on: ${BASE_URL}`);
 });
