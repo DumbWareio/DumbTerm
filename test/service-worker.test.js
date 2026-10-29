@@ -197,6 +197,9 @@ describe('service worker activation', () => {
         worker.store.get('DUMBTERM_CACHE_V1.3.0').set(ORIGIN + 'index.js', fakeResponse('old'));
         await activate(worker);
         assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_V1.3.1': 2 });
+        assert.deepEqual(cachedUrls(worker, 'DUMBTERM_CACHE_V1.3.1'), [ORIGIN + 'index.html', ORIGIN + 'index.js']);
+        assert.ok(worker.messages.some((message) => message.type === 'CACHE_VERSION_INFO'
+            && message.currentVersion === '1.3.1' && message.cacheName === 'DUMBTERM_CACHE_V1.3.1'));
         // UPDATE_COMPLETE is for Update Now: the page reloads on success and shows a notice on failure
         assert.deepEqual(worker.messages.filter((message) => message.type === 'UPDATE_COMPLETE'), []);
     });
@@ -266,7 +269,14 @@ describe('service worker activation', () => {
         await worker.listeners.message({ data: { type: 'SET_VERSION', version: '1.3.2', cacheName: 'DUMBTERM_CACHE_V1.3.2' } });
         release();
         await Promise.all(pending);
+        await settle();
         assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_V1.3.3': 2 });
+        // What the fill tells the page describes the cache it filled
+        const fillMessages = worker.messages.filter((message) => message.cacheName);
+        assert.ok(fillMessages.length > 0);
+        for (const message of fillMessages) {
+            assert.deepEqual([message.currentVersion, message.cacheName], ['1.3.3', 'DUMBTERM_CACHE_V1.3.3']);
+        }
     });
 
     test('two fills for different versions at once leave a filled cache', async () => {
@@ -310,7 +320,9 @@ describe('service worker Update Now', () => {
         const worker = loadWorker({ version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_V1.3.0'], manifest: ['index.html'] });
         await performUpdate(worker);
         assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_V1.3.1': 1 });
-        assert.ok(worker.messages.some((message) => message.type === 'UPDATE_COMPLETE' && message.success === true));
+        assert.deepEqual(cachedUrls(worker, 'DUMBTERM_CACHE_V1.3.1'), [ORIGIN + 'index.html']);
+        assert.ok(worker.messages.some((message) => message.type === 'UPDATE_COMPLETE' && message.success === true
+            && message.version === '1.3.1' && message.cacheName === 'DUMBTERM_CACHE_V1.3.1'));
     });
 
     test('reports a failed manifest request and keeps the old cache', async () => {

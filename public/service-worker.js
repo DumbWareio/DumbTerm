@@ -273,10 +273,11 @@ async function preload() {
  * @returns {Promise<void>}
  */
 async function installCache(isFirstInstall = false) {
-    console.log(`${isFirstInstall ? 'First-time installation' : 'Updating'} cache to version ${CACHE_VERSION}`);
-    // A page's SET_VERSION can change CACHE_NAME while this fill waits on the network, so fill and keep the cache
-    // this fill started with
+    // A page's SET_VERSION can change CACHE_VERSION and CACHE_NAME while this fill waits on the network, so fill,
+    // keep and report the version this fill started with
+    const version = CACHE_VERSION;
     const cacheName = CACHE_NAME;
+    console.log(`${isFirstInstall ? 'First-time installation' : 'Updating'} cache to version ${version}`);
     CACHES_BEING_FILLED.push(cacheName);
     
     try {
@@ -313,23 +314,23 @@ async function installCache(isFirstInstall = false) {
                     // For first-time installations, just update the version display
                     client.postMessage({
                         type: 'CACHE_VERSION_INFO',
-                        currentVersion: CACHE_VERSION,
-                        cacheName: CACHE_NAME
+                        currentVersion: version,
+                        cacheName
                     });
                 } else {
                     // For updates, notify about completion and update version display
                     client.postMessage({
                         type: 'UPDATE_COMPLETE',
-                        version: CACHE_VERSION,
-                        cacheName: CACHE_NAME,
+                        version,
+                        cacheName,
                         success: true
                     });
                     
                     // Also send specific version info message to maintain compatibility
                     client.postMessage({
                         type: 'CACHE_VERSION_INFO',
-                        currentVersion: CACHE_VERSION,
-                        cacheName: CACHE_NAME
+                        currentVersion: version,
+                        cacheName
                     });
                 }
             });
@@ -344,8 +345,8 @@ async function installCache(isFirstInstall = false) {
                 if (!isFirstInstall) {
                     client.postMessage({
                         type: 'UPDATE_COMPLETE',
-                        version: CACHE_VERSION,
-                        cacheName: CACHE_NAME,
+                        version,
+                        cacheName,
                         success: false,
                         error: error.message
                     });
@@ -354,8 +355,8 @@ async function installCache(isFirstInstall = false) {
                 // Still send version info for UI consistency
                 client.postMessage({
                     type: 'CACHE_VERSION_INFO',
-                    currentVersion: CACHE_VERSION,
-                    cacheName: CACHE_NAME
+                    currentVersion: version,
+                    cacheName
                 });
             });
         });
