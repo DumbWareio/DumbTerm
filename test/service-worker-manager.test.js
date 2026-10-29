@@ -271,8 +271,10 @@ describe('service worker manager update prompt', () => {
         return navigator.serviceWorker.controller.messages.filter((message) => message.type === 'PERFORM_UPDATE').length;
     }
 
-    // The checks don't go through the worker, so a page no worker controls yet asks the server too
-    for (const [page, options] of [['a lone tab', {}], ['a page no worker controls yet', { controlled: false }]]) {
+    // The checks don't go through the worker, so a page no worker controls yet, or a browser without service
+    // workers, asks the server too
+    for (const [page, options] of [['a lone tab', {}], ['a page no worker controls yet', { controlled: false }],
+        ['a page in a browser without service workers', { worker: false }]]) {
         for (const [when, check] of [['when a terminal tab reconnects', reconnect],
             ['when the page becomes visible', becomeVisible], ['on the hourly check', hourPasses]]) {
             test(`${page} offers the server's new version ${when}`, async () => {
@@ -322,6 +324,13 @@ describe('service worker manager update prompt', () => {
         server.down = false;
         await reconnect();
         assert.deepEqual(prompts(), [PROMPT_1_3_1], 'the next check offers the update again');
+        await click('update-now');
+        assert.equal(window.location.reloads, 1);
+    });
+
+    test('Update Now in a browser without service workers reloads the page', async () => {
+        await loneTabAcrossUpgrade({ worker: false });
+        await reconnect();
         await click('update-now');
         assert.equal(window.location.reloads, 1);
     });

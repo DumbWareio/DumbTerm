@@ -26,6 +26,9 @@ export default class ServiceWorkerManager {
             if (updateVersionDisplayCallback && window.appConfig?.version) {
                 updateVersionDisplayCallback(window.appConfig.version);
             }
+            // The page can still ask the server whether it was upgraded, e.g. on plain http to a LAN address,
+            // where browsers offer no service workers
+            this.setupPeriodicVersionCheck();
             return;
         }
         
@@ -481,7 +484,7 @@ export default class ServiceWorkerManager {
         // The worker controlling the page caches the release it was registered with, so only a newer worker can
         // install a new version. When the server reported it, or no worker controls the page, a reload loads it
         // (pages are fetched network-first) and registers the new version's worker
-        const controller = navigator.serviceWorker.controller;
+        const controller = navigator.serviceWorker?.controller;
         if (controller && !fromServer) {
             // Request the update via service worker
             controller.postMessage({ type: 'PERFORM_UPDATE' });
