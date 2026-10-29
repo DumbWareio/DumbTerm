@@ -424,8 +424,8 @@ for (const [what, env, nodePtyLine] of [
     });
 }
 
-// Guards (#46): a shell the user ends closes as it always has, without a status (1005), whatever its exit code once
-// it has been up a while
+// A shell the user ends closes as it always has, without a status (1005), whatever its exit code once it has been
+// up a while (#46)
 describe('DumbTerm server when the shell exits', () => {
     let server;
 
@@ -446,6 +446,15 @@ describe('DumbTerm server when the shell exits', () => {
 
     test('closes without a status on a non-zero exit after the shell has been up a while', async () => {
         assert.equal(await shellEndedWith('exit 3', 1500), 1005);
+    });
+
+    // The rule is any non-zero code within a second of the spawn, not only node-pty's 1
+    test('closes with 1011 and the exit code on a non-zero exit as the shell starts', async () => {
+        const terminal = openTerminal(server, { Cookie: PIN_COOKIE, Origin: server.baseUrl });
+        await new Promise((resolve) => terminal.ws.once('open', resolve));
+        terminal.ws.send(JSON.stringify({ type: 'input', data: 'exit 3\r' }));
+        assert.equal(await closeCodeWithin(terminal), 1011);
+        assert.equal(terminal.state.closeReason, 'Shell exited with code 3');
     });
 });
 
