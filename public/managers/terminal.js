@@ -1006,6 +1006,18 @@ export default class TerminalManager {
             this.saveSessionState();
         });
 
+        // Mouse reports in xterm's default encoding (a program that turns them on without ?1006h) come as binary
+        // data, a character per byte, which the server writes to the shell as those bytes. They are no keys: with
+        // no connection they are dropped, and never start one
+        terminal.onBinary(data => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'binary',
+                    data: data
+                }));
+            }
+        });
+
         // Handle terminal resize with connection check
         terminal.onResize(size => {
             if (ws && ws.readyState === WebSocket.OPEN) {

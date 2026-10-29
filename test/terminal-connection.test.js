@@ -126,6 +126,7 @@ class FakeWebSocket {
     }
 
     inputs() { return this.sent.filter((message) => message.type === 'input').map((message) => message.data); }
+    binaries() { return this.sent.filter((message) => message.type === 'binary').map((message) => message.data); }
     count(type) { return this.sent.filter((message) => message.type === type).length; }
 }
 
@@ -278,11 +279,26 @@ describe('terminal connection', () => {
             .filter((line) => line.includes(text)).length;
     }
 
-    // A click in the terminal, which xterm reports to the shell as input while a program has mouse reports on
-    // in SGR encoding (in the default one it reports them as binary data, which the page does not send)
-    function click() {
-        terminal._core.coreMouseService.triggerMouseEvent({ col: 0, row: 0, x: 0, y: 0, button: 0, action: 1,
-            ctrl: false, alt: false, shift: false });
+    // A click in the terminal's first row, at a column counted from 0, which xterm reports to the shell while a
+    // program has mouse reports on: as input in SGR encoding, and as binary data, a character per byte, in the
+    // default one. A press, or with `release` the button coming back up
+    function click(col = 0, { release = false } = {}) {
+        terminal._core.coreMouseService.triggerMouseEvent({ col, row: 0, x: 0, y: 0, button: 0,
+            action: release ? 0 : 1, ctrl: false, alt: false, shift: false });
+    }
+
+    // A mouse report in the default encoding while the tab has no connection. The page turns the reports off
+    // when a connection closes, and they stay off until a program turns them on again, so this stands in for one
+    // made before xterm applied that
+    function binaryReport() {
+        terminal._core.coreService.triggerBinaryEvent('\x1b[M !!');
+    }
+
+    // A program that turns mouse reports on in xterm's default encoding (#45)
+    function openMouseProgram() {
+        FakeWebSocket.last.onmessage({ data: JSON.stringify({ type: 'output', data: '\x1b[?1000h' }) });
+        wait(1);
+        assert.equal(terminal.modes.mouseTrackingMode, 'vt200');
     }
 
     // vim turns focus reports and mouse reports on
@@ -717,6 +733,95 @@ describe('terminal connection', () => {
         wait(1000);
         assert.equal(socketsSince(first).length, 1, 'a key still reconnects');
         assert.equal(FakeWebSocket.last.readyState, FakeWebSocket.OPEN);
+    });
+
+    // In the default encoding (no ?1006h) xterm sends mouse reports as binary data, a character per byte, which the
+    // page passes on as they are: a coordinate past column 95 is one byte of 0x80 or more (#45)
+    test('clicks in the default mouse encoding reach the shell as their bytes, past column 95 too', () => {
+        terminal.resize(120, 30);
+        openMouseProgram();
+        click(9);
+        click(9, { release: true });
+        click(100);
+        click(100, { release: true });
+
+        assert.deepEqual(FakeWebSocket.last.binaries(),
+            ['\x1b[M *!', '\x1b[M#*!', '\x1b[M \x85!', '\x1b[M#\x85!']);
+        assert.deepEqual(FakeWebSocket.last.inputs(), [], 'not as typed input');
+    });
+
+    test('a click in the default mouse encoding just after the shell exits is dropped, and gets no new shell', () => {
+        openMouseProgram();
+        const reports = [];
+        terminal.onBinary((data) => reports.push(data));
+        const first = FakeWebSocket.last;
+        first.closes({ code: 1005, wasClean: true });
+        // Before xterm applies the page's turning the reports off
+        click();
+        wait(1000);
+
+        assert.equal(reports.length, 1, 'xterm reported the click');
+        assert.equal(first.sentWhileClosed, 0, 'not sent');
+        assert.equal(FakeWebSocket.last, first, 'no socket');
+        assert.equal(linesSaying(NOT_AVAILABLE), 0);
+        assert.equal(linesSaying(CLOSED_NORMALLY), 1);
+    });
+
+    test('a click in the default mouse encoding after a shell failed to start leaves the tab as it was', () => {
+        openMouseProgram();
+        const first = FakeWebSocket.last;
+        first.closes({ code: 1011, reason: 'Shell exited with code 1', wasClean: true });
+        click();
+        wait(1000);
+        assert.equal(FakeWebSocket.last, first, 'no socket');
+        assert.equal(linesSaying(NOT_AVAILABLE), 0);
+
+        // Still a tab whose shell failed to start: coming back to the page leaves it for a key
+        document.visibilityState = 'hidden';
+        document.fire('visibilitychange');
+        document.visibilityState = 'visible';
+        document.fire('visibilitychange');
+        wait(60000);
+        assert.equal(FakeWebSocket.last, first, 'no socket on coming back');
+        assert.equal(linesSaying(LOST), 0);
+    });
+
+    test('a mouse report in the default encoding while the tab reconnects is dropped, and opens no socket', () => {
+        const first = FakeWebSocket.last;
+        server.up = false;
+        first.closes({ code: 1006, wasClean: false });
+        wait(1000);
+        const connecting = FakeWebSocket.last;
+        assert.equal(connecting.readyState, FakeWebSocket.CONNECTING);
+        binaryReport();
+        wait(100);
+        // and while the next retry waits
+        binaryReport();
+        server.up = true;
+        wait(5000);
+
+        assert.equal(socketsSince(first).length, 2, 'refused once, then opened, as without the reports');
+        assert.equal(FakeWebSocket.mostConnecting, 1);
+        assert.deepEqual(FakeWebSocket.last.binaries(), [], 'not sent to the new shell');
+        assert.equal(linesSaying(LOST), 1);
+        assert.equal(linesSaying(NOT_AVAILABLE), 0);
+    });
+
+    test('once the retries run out, a mouse report in the default encoding is no key', () => {
+        const first = FakeWebSocket.last;
+        server.up = false;
+        first.closes({ code: 1006, wasClean: false });
+        wait(60000);
+        assert.equal(linesSaying(RAN_OUT), 1);
+        const sockets = FakeWebSocket.all.length;
+        binaryReport();
+        wait(1000);
+        assert.equal(FakeWebSocket.all.length, sockets, 'no socket');
+        assert.equal(FakeWebSocket.last.sentWhileClosed, 0, 'not sent');
+        assert.equal(linesSaying(NOT_AVAILABLE), 0);
+
+        type('a');
+        assert.equal(FakeWebSocket.all.length, sockets + 1, 'a key still reconnects');
     });
 
     test('a key typed after a retry is refused opens one socket, and a late close of the old one starts nothing', () => {
