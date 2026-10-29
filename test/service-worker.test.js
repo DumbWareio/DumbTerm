@@ -511,6 +511,24 @@ describe('service worker caches on an origin shared by two installs', () => {
         assert.equal(answer.currentVersion, '1.3.1');
     });
 
+    test('reads the version it runs from its newest cache when an older version\'s name sorts after it', async () => {
+        const worker = loadWorker({ scope: '/a/', version: '1.11.0', cacheNames: ['DUMBTERM_CACHE_/a/_V1.9.0', 'DUMBTERM_CACHE_/a/_V1.10.0'] });
+        const answer = await getVersion(worker);
+        assert.equal(answer.currentVersion, '1.10.0');
+    });
+
+    test('reads the version it runs from its own cache before one an earlier build named without the install\'s path', async () => {
+        const worker = loadWorker({ scope: '/a/', version: '1.3.2', cacheNames: ['DUMBTERM_CACHE_/a/_V1.3.1', 'DUMBTERM_CACHE_V1.3.0'] });
+        const answer = await getVersion(worker);
+        assert.equal(answer.currentVersion, '1.3.1');
+    });
+
+    test('reads the version it runs from its current cache when an older version\'s cache was made after it', async () => {
+        const worker = loadWorker({ scope: '/a/', version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_/a/_V1.3.1', 'DUMBTERM_CACHE_/a/_V1.3.0'] });
+        const answer = await getVersion(worker);
+        assert.equal(answer.currentVersion, '1.3.1');
+    });
+
     test('reads the version of a cache whose path holds a _V', async () => {
         const worker = loadWorker({ scope: '/tools_V2/', version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_/tools_V2/_V1.3.0'] });
         const answer = await getVersion(worker);
