@@ -56,19 +56,16 @@ function redrawnPromptRow(buffer, markedRow, cursorRow) {
         while (buffer.getLine(row + 1)?.isWrapped) row++;
         return filled(row);
     };
-    // The command from the row it starts on to the cursor's, and on over the rows the cursor's wraps onto
-    const typedFrom = (start) => {
-        let typed = '';
-        for (let row = start; row < cursorRow; row++) typed += text(row);
-        return typed + line(cursorRow);
-    };
     // The redrawn prompt's rows lie wholly below the marked command's first row. A row not marked as wrapped runs
-    // on from a filled one only where the command was typed on: the marked one ended short of the last column
-    for (let start = cursorRow, unmarked = false; first > markedRow && start > first + 2; start--) {
+    // on from a filled one only where the command was typed on: the marked one ended short of the last column. The
+    // command, from the row it starts on to the cursor's and on over the rows the cursor's wraps onto, grows a row
+    // at a time as the search moves up
+    for (let start = cursorRow, unmarked = false, typed = line(cursorRow); first > markedRow && start > first + 2;
+        typed = text(--start) + typed) {
         for (let above = 1; above < PROMPT_MAX_ROWS_BELOW_MARK && start - above > first + above; above++) {
             let same = text(start - above - 1) === '';
             for (let row = 0; same && row < above; row++) same = text(first + row) === text(start - above + row);
-            if (same && !(unmarked && lineFilled(first + above)) && sameCommand(line(first + above), typedFrom(start))) {
+            if (same && !(unmarked && lineFilled(first + above)) && sameCommand(line(first + above), typed)) {
                 return markedRow;
             }
         }

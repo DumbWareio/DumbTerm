@@ -968,6 +968,30 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)).slice(0, 6), ['$ app', '', 'A', '', 'A', '']);
     });
 
+    test('a save reads a long wrapped line\'s rows a few times each, not once for each row below them', async () => {
+        // An app's line wrapped onto 2,000 rows, every other one erased back to blank (EL 1 keeps the wrap) and the
+        // rest repeating the marked prompt's top line: each row there starts a redrawn prompt's command to compare.
+        // Building that command afresh at each row would read ~500 rows per row; counted, not timed
+        const saves = recordSavedSessions();
+        const top = 'H'.repeat(80);
+        await receiveOutput(`$ app\r\n\x1b[?2004h\r\n${top}\r\n> \r\n${`${'x'.repeat(80)}\x1b[1K${top}`.repeat(1000)}`);
+        const buffer = terminal.buffer.active;
+        const getLine = buffer.getLine.bind(buffer);
+        let reads = 0;
+        buffer.getLine = (row) => {
+            reads++;
+            return getLine(row);
+        };
+        try {
+            manager.saveSessionState();
+        } finally {
+            delete buffer.getLine;
+        }
+
+        assert.ok(savedLines(saves.at(-1)).includes(top), 'the app\'s output is kept');
+        assert.ok(reads < 50 * buffer.length, `${reads} row reads for ${buffer.length} rows`);
+    });
+
     // The save at the prompt after `echo out`, before the listing: what each later save should equal
     const savedBeforeListing = (saved) => saved[1];
 
