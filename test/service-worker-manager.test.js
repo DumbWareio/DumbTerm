@@ -661,6 +661,26 @@ describe('service worker manager update prompt', () => {
         assert.equal(displayed.at(-1), '1.3.0');
     });
 
+    test('Update Now on the new worker\'s word shows the worker\'s error as text', async () => {
+        const { fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
+        fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
+        await click('update-now');
+        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', success: false, error: '<b>x</b>' });
+        assert.deepEqual(prompts(), ['Update failed: <b>x</b> Dismiss']);
+    });
+
+    // The worker's word for the versions already offered leaves the prompt and its waiting Update Now as they are
+    test('Update Now on the new worker\'s word goes on waiting when the worker offers the same versions again', async () => {
+        const { manager, displayed, fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
+        fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
+        await click('update-now');
+        fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
+        assert.notEqual(manager.updateAttempt, null, 'the attempt still waits');
+        assert.equal(displayed.at(-1), 'loading');
+        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', success: false, error: 'boom' });
+        assert.deepEqual(prompts(), ['Update failed: boom Dismiss']);
+    });
+
     test('Update Now on the new worker\'s word that fails after the update timed out shows no second error', async () => {
         const { fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
         fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
