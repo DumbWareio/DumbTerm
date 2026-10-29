@@ -44,7 +44,7 @@ export default class ServiceWorkerManager {
             if (cacheInfo.version && this.updateVersionDisplayCallback) {
                 this.updateVersionDisplayCallback(cacheInfo.version);
             } else {
-                // Do a more comprehensive check through the service worker
+                // Otherwise see whether the server runs another version
                 this.checkVersion();
             }
         }).catch(() => {
@@ -161,17 +161,16 @@ export default class ServiceWorkerManager {
     setupPeriodicVersionCheck() {
         // Check for updates when the page becomes visible
         document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible' && navigator.serviceWorker.controller) {
+            if (document.visibilityState === 'visible') {
                 this.checkVersion();
             }
         });
         
+        // An upgrade restarts the server, so a terminal tab reconnecting is when a page left open can find out
+        window.addEventListener('dumbterm:reconnected', () => this.checkVersion());
+        
         // Also check periodically for version updates (every hour)
-        setInterval(() => {
-            if (navigator.serviceWorker.controller) {
-                this.checkVersion();
-            }
-        }, 60 * 60 * 1000);
+        setInterval(() => this.checkVersion(), 60 * 60 * 1000);
     }
 
     /**
@@ -210,52 +209,38 @@ export default class ServiceWorkerManager {
     }
 
     /**
-     * Checks for version updates by querying the service worker
-     * Uses direct cache access first, then falls back to service worker messaging
+     * Asks the server which version it runs, and offers the update when it is not the page's.
+     * The worker can't tell: it was registered as service-worker.js?v=<page version> and goes on reporting that
+     * version after the server is upgraded, until another page load registers the new one
+     * @returns {Promise<void>}
      */
-    checkVersion() {
+    async checkVersion() {
         // Skip check if an update notification is already active
         if (this.updateNotificationActive) {
             console.log("Update notification already active, skipping version check");
             return;
         }
         
-        // First try to get the version directly from cache
-        this.getCurrentCacheVersion().then(cacheInfo => {
-            // Check for update directly if we have version info from cache
-            const configVersion = window.appConfig?.version;
+        const pageVersion = window.appConfig?.version;
+        try {
+            // From the network: the browser's HTTP cache could hold the config.js this page loaded with
+            const response = await fetch(this.joinPath('config.js'), { cache: 'no-store' });
+            if (!response.ok) throw new Error(`Failed to fetch config: ${response.status}`);
             
-            if (cacheInfo.version && configVersion && 
-                !cacheInfo.isFirstInstall && 
-                this.shouldShowUpdateNotification(cacheInfo.version, configVersion)) {
-                
-                this.showUpdateNotification(cacheInfo.version, configVersion);
-                return;
-            }
+            // config.js sets window.appConfig; read it the way the worker does
+            const configText = await response.text();
+            const configJson = configText.match(/window\.appConfig\s*=\s*({[\s\S]*?});/);
+            if (!configJson || !configJson[1]) throw new Error('Could not extract config from config.js');
+            const serverVersion = JSON.parse(configJson[1]).version;
             
-            // Only query service worker if we have an active controller
-            if (navigator.serviceWorker.controller) {
-                const messageChannel = new MessageChannel();
-                
-                messageChannel.port1.onmessage = event => {
-                    console.log("Received version info from service worker:", event.data);
-                    
-                    const currentVersion = cacheInfo.version || event.data.currentVersion;
-                    const newVersion = configVersion || event.data.newVersion;
-                    
-                    if (this.shouldShowUpdateNotification(currentVersion, newVersion) && !cacheInfo.isFirstInstall) {
-                        this.showUpdateNotification(currentVersion, newVersion);
-                    }
-                };
-                
-                navigator.serviceWorker.controller.postMessage(
-                    { type: 'GET_VERSION' },
-                    [messageChannel.port2]
-                );
+            console.log(`Version check: page=${pageVersion}, server=${serverVersion}`);
+            if (this.shouldShowUpdateNotification(pageVersion, serverVersion)) {
+                this.showUpdateNotification(pageVersion, serverVersion);
             }
-        }).catch(error => {
-            console.error("Error checking version:", error);
-        });
+        } catch (error) {
+            // Offline, or the server is restarting: say nothing, the next check asks again
+            console.log("Could not check the server's version:", error);
+        }
     }
 
     /**
@@ -371,6 +356,8 @@ export default class ServiceWorkerManager {
             currentVersion !== newVersion &&
             // New version shouldn't be default
             newVersion !== "1.0.0" &&
+            // and must look like a version, as the worker requires of the one it is registered with
+            /^\d+\.\d+\.\d+/.test(newVersion) &&
             // The service worker fetches network-first, so a page already running the new version
             // (config.js is always fresh) has nothing left to update
             newVersion !== window.appConfig?.version
