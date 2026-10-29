@@ -13,7 +13,14 @@ const PROMPT_MAX_ROWS_BELOW_MARK = 4;
 // row: look for it, from its first line (after a blank one, Starship's) down to the command, starting in the
 // rows a prompt reaches above, and on, the cursor's row. The command is the cursor's whole line, wrapped onto
 // as many rows as it takes (one that starts above those rows is no command), and may have been typed on (or
-// erased back) since the listing, so there one line need only start like the other
+// erased back) since the listing, so there one line need only start like the other.
+// Under rows that repeat the marked prompt's rows above its command (Starship's top line), the command may start
+// higher, as long as it is, and, where it was typed on past the marked one's end, run on from a row filled to its
+// last column into one not marked as wrapped: readline moves the cursor down a wrapped command with a newline,
+// which unmarks the row it moves to. A prompt of one row has no rows to anchor that on, and an app's rows would
+// pass for one (a full-width rule above its input line), so known limits: a plain prompt redrawn with a command
+// more than four rows long, or after the cursor moved down across its command's wrap (Ctrl-E, End, →), stays in
+// the save
 function redrawnPromptRow(buffer, markedRow, cursorRow) {
     const text = (row) => buffer.getLine(row)?.translateToString(true) ?? '';
     const line = (row) => {
@@ -35,6 +42,38 @@ function redrawnPromptRow(buffer, markedRow, cursorRow) {
             same = row === commandRow ? sameCommand(line(marked), command) : text(marked) === text(row);
         }
         if (same) return markedRow;
+    }
+    // Whether a row's last cell holds text, or the right half of a wide character (which has none of its own)
+    const filled = (row) => {
+        const cells = buffer.getLine(row);
+        const last = cells?.getCell(cells.length - 1);
+        return !!last && (last.getWidth() === 0 || last.getChars().trim() !== '');
+    };
+    // The command from the row it starts on to the cursor's, and on over the rows the cursor's wraps onto
+    const typedFrom = (start) => {
+        let typed = '';
+        for (let row = start; row < cursorRow; row++) typed += text(row);
+        return typed + line(cursorRow);
+    };
+    // Whether the line starting on a row ends at its last row's last column
+    const lineFilled = (row) => {
+        while (buffer.getLine(row + 1)?.isWrapped) row++;
+        return filled(row);
+    };
+    // The redrawn prompt's rows lie wholly below the marked command's first row. A row not marked as wrapped runs
+    // on from a filled one only where the command was typed on: the marked one ended short of the last column
+    for (let start = cursorRow, unmarked = false; start > first + 2; start--) {
+        for (let above = 1; above < PROMPT_MAX_ROWS_BELOW_MARK && start - above > first + above; above++) {
+            let same = true;
+            for (let row = 0; same && row < above; row++) same = text(first + row) === text(start - above + row);
+            if (same && !(unmarked && lineFilled(first + above)) && sameCommand(line(first + above), typedFrom(start))) {
+                return markedRow;
+            }
+        }
+        if (!buffer.getLine(start)?.isWrapped) {
+            if (!filled(start - 1)) break;
+            unmarked = true;
+        }
     }
     return null;
 }

@@ -807,6 +807,34 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'Title', '>', 'r1', 'r2', 'r3', 'Title', '> hi', '']);
     });
 
+    test('a saved session keeps the output of an app that draws its first line and a rule again above a different row', async () => {
+        // A command that fills its row to the last column may run on into the next row only where it was typed on
+        // since the listing: the marked one ended short of its row's last column
+        const saves = recordSavedSessions();
+        const rule = '─'.repeat(80);
+        await receiveOutput(`$ app\r\n\x1b[?2004hTitle\r\n${rule}\r\npage 1\r\nr1\r\nr2\r\nTitle\r\n${rule}\r\npage 2`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'Title', rule, 'page 1', 'r1', 'r2', 'Title', rule, '']);
+    });
+
+    test('a saved session keeps the output of an app that draws its first line and input line again above a status row, padded to the last column', async () => {
+        // Only text in the very last column fills a row; a space written there does not
+        const saves = recordSavedSessions();
+        const input = `> ${'x'.repeat(77)}`;
+        await receiveOutput(`$ app\r\n\x1b[?2004hTitle\r\n> \r\nr1\r\nr2\r\nr3\r\nTitle\r\n${input} \r\nstatus`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'Title', '>', 'r1', 'r2', 'r3', 'Title', input, '']);
+    });
+
+    test('a saved session keeps the output of an app that draws its first line and a wrapped line again, ending differently on a row of its own', async () => {
+        // A command that runs on into a row not marked as wrapped is compared whole, with that row
+        const saves = recordSavedSessions();
+        const wide = 'x'.repeat(80);
+        await receiveOutput(`$ app\r\n\x1b[?2004hTitle\r\n${wide}abc\r\nr1\r\nr2\r\nr3\r\nTitle\r\n${wide}\r\nzzz`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'Title', `${wide}abc`, 'r1', 'r2', 'r3', 'Title', wide, '']);
+    });
+
     // bash 5.2's output at each keystroke (test/fixtures/bash-completion-listings.json); the terminal takes the
     // width it was captured at. Returns the content saved after each step
     const LISTINGS = require('./fixtures/bash-completion-listings.json');
@@ -821,6 +849,98 @@ describe('terminal control sequences', () => {
         }
         return savedAfter;
     }
+
+    // The save at the prompt after `echo out`, before the listing: what each later save should equal
+    const savedBeforeListing = (saved) => saved[1];
+
+    test('a saved session leaves out a Starship prompt redrawn below a completion listing once the cursor moved down across the command\'s wrap', async () => {
+        // Ctrl-A moves the cursor up the command, Ctrl-E back down with a newline, which leaves the row it moves to
+        // unmarked as a wrapped one
+        const saved = await replayCapture('starshipCtrlE', 6);
+
+        assert.deepEqual(savedLines(savedBeforeListing(saved)).slice(2), ['\u276f echo out', 'out', '']);
+        assert.deepEqual(saved.slice(3), [3, 4, 5].map(() => savedBeforeListing(saved)),
+            'typed until it wraps, after Ctrl-A and after Ctrl-E');
+    });
+
+    test('a saved session leaves out a Starship prompt redrawn below a completion listing once the arrow keys moved the cursor back down across the command\'s wrap', async () => {
+        const saved = await replayCapture('starshipArrows', 6);
+
+        assert.equal(saved.at(-1), savedBeforeListing(saved));
+    });
+
+    test('a saved session leaves out a Starship prompt redrawn below a completion listing for a command four rows long', async () => {
+        // The redrawn prompt's top line is five rows above the cursor
+        const saved = await replayCapture('starshipFourRows', 4);
+
+        assert.equal(saved.at(-1), savedBeforeListing(saved));
+    });
+
+    test('a saved session leaves out a Starship prompt redrawn below a completion listing for a command three rows long at 40 columns', async () => {
+        // At 40 columns the prompt's top line wraps its last space onto a row of its own, so the redrawn prompt's top
+        // line is five rows above the cursor
+        const saved = await replayCapture('starshipNarrow', 4);
+
+        assert.deepEqual(savedLines(savedBeforeListing(saved)).slice(2), ['\u276f echo out', 'out', '']);
+        assert.equal(saved.at(-1), savedBeforeListing(saved));
+    });
+
+    test('a saved session leaves out a Starship prompt redrawn below a completion listing at 40 columns after Ctrl-E and erasing back', async () => {
+        const saved = await replayCapture('starshipNarrow', 6);
+
+        assert.equal(saved.at(-1), savedBeforeListing(saved));
+    });
+
+    test('a saved session leaves out a Starship prompt redrawn below a completion listing for a command that wrapped before it, after Ctrl-A and Ctrl-E', async () => {
+        const saved = await replayCapture('starshipWrappedCtrlE', 6);
+
+        assert.equal(saved.at(-1), savedBeforeListing(saved));
+    });
+
+    // readline's cursor moves over a wrapped command, as in the captures: Ctrl-A goes up a row at a time, then to
+    // the command's first column; Ctrl-E down a row at a time with a newline, then on to the command's end
+    const ctrlA = (rows, column) => `${'\x1b[A'.repeat(rows)}\r${'\x1b[C'.repeat(column)}`;
+    const ctrlE = (rows, column) => `${'\r\n'.repeat(rows)}\r${'\x1b[C'.repeat(column)}`;
+
+    test('a saved session leaves out a Starship prompt redrawn below a completion listing for a command four rows long, after Ctrl-A and Ctrl-E', async () => {
+        // The marked command wraps onto four rows; the redrawn one, typed on, is compared whole
+        const saves = recordSavedSessions();
+        await receiveOutput(`${starshipCompletion(`ls /tmp/${'x'.repeat(240)}/`)}${'a'.repeat(10)}`);
+        await receiveOutput(ctrlA(3, 2));
+        await receiveOutput(ctrlE(3, 21));
+
+        assert.equal(saves.at(-1), '');
+    });
+
+    test('a saved session leaves out a Starship prompt redrawn below a completion listing for a command that filled its row, typed on to four rows', async () => {
+        // Rows marked as wrapped are the command's own, however the marked one ended
+        const saves = recordSavedSessions();
+        await receiveOutput(`${starshipCompletion(`ls /tmp/${'x'.repeat(69)}/`)}${'a'.repeat(200)}`);
+
+        assert.equal(saves.at(-1), '');
+    });
+
+    test('a saved session leaves out a Starship prompt redrawn below a completion listing once the cursor moved down across a wide character at the wrap', async () => {
+        // The wide character fills the row's last two columns: its right half has no text of its own
+        const saves = recordSavedSessions();
+        await receiveOutput(`${starshipCompletion('ls /tmp/d/')}${'a'.repeat(66)}日bb`);
+        await receiveOutput(ctrlA(1, 2));
+        await receiveOutput(ctrlE(1, 2));
+
+        assert.equal(saves.at(-1), '');
+    });
+
+    test('a saved session leaves out a three-line prompt redrawn below a completion listing once the cursor moved down across the command\'s wrap', async () => {
+        // Three rows above the command, the most a prompt has
+        const saves = recordSavedSessions();
+        const prompt = 'context\r\nuser@box\r\n/app\r\n$ ';
+        await receiveOutput(`\x1b[?2004h${prompt}echo out\r\n\x1b[?2004l\rout\r\n`);
+        await receiveOutput(`\x1b[?2004h${prompt}ls /tmp/d/\x07\r\n${COMPLETIONS}${prompt}ls /tmp/d/${'a'.repeat(70)}`);
+        await receiveOutput(ctrlA(1, 2));
+        await receiveOutput(ctrlE(1, 2));
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['context', 'user@box', '/app', '$ echo out', 'out', '']);
+    });
 
     test('a saved session keeps a plain prompt redrawn below a completion listing once the cursor moved down across the command\'s wrap', async () => {
         // Known limit: readline moves the cursor down a wrapped command with a newline, which leaves the row it
