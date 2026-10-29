@@ -188,12 +188,42 @@ describe('service worker activation', () => {
         assert.deepEqual(failures(worker), []);
     });
 
+    test('an upgrade whose manifest request fails keeps the old cache and tells no page', async () => {
+        const worker = loadWorker({ version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_V1.3.0'], manifestStatus: 500 });
+        worker.store.get('DUMBTERM_CACHE_V1.3.0').set(ORIGIN + 'index.js', fakeResponse('old'));
+        await activate(worker);
+        assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_V1.3.0': 1 });
+        assert.deepEqual(failures(worker), []);
+    });
+
+    test('an upgrade whose asset requests fail keeps the old cache and tells no page', async () => {
+        const worker = loadWorker({
+            version: '1.3.1',
+            cacheNames: ['DUMBTERM_CACHE_V1.3.0'],
+            manifest: ['index.html', 'index.js'],
+            network: async () => fakeResponse('error', { status: 503 }),
+        });
+        worker.store.get('DUMBTERM_CACHE_V1.3.0').set(ORIGIN + 'index.js', fakeResponse('old'));
+        await activate(worker);
+        assert.equal(worker.store.get('DUMBTERM_CACHE_V1.3.0')?.get(ORIGIN + 'index.js')?.body, 'old');
+        assert.deepEqual(failures(worker), []);
+    });
+
     test('a later version deletes every older cache, including one a failed upgrade left behind', async () => {
         // A failed 1.3.1 upgrade kept 1.3.0's cache, and the pages it served started a 1.3.1 cache
         const worker = loadWorker({ version: '1.3.2', cacheNames: ['DUMBTERM_CACHE_V1.3.0', 'DUMBTERM_CACHE_V1.3.1'], manifest: ['index.html'] });
         worker.store.get('DUMBTERM_CACHE_V1.3.1').set(ORIGIN + 'index.js', fakeResponse('partial'));
         await activate(worker);
         assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_V1.3.2': 1 });
+    });
+
+    test('fills the current version\'s cache when older caches show its last fill failed', async () => {
+        // The same release activating again (a new worker script) after a failed fill, with the
+        // pages having started the current cache since
+        const worker = loadWorker({ version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_V1.3.0', 'DUMBTERM_CACHE_V1.3.1'], manifest: ['index.html', 'styles.css'] });
+        worker.store.get('DUMBTERM_CACHE_V1.3.1').set(ORIGIN + 'index.js', fakeResponse('fetched'));
+        await activate(worker);
+        assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_V1.3.1': 3 });
     });
 
     test('does not refill a current cache that is the only one', async () => {
@@ -209,5 +239,14 @@ describe('service worker Update Now', () => {
         await performUpdate(worker);
         assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_V1.3.1': 1 });
         assert.ok(worker.messages.some((message) => message.type === 'UPDATE_COMPLETE' && message.success === true));
+    });
+
+    test('reports a failed manifest request and keeps the old cache', async () => {
+        const worker = loadWorker({ version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_V1.3.0'], manifestStatus: 500 });
+        worker.store.get('DUMBTERM_CACHE_V1.3.0').set(ORIGIN + 'index.js', fakeResponse('old'));
+        await performUpdate(worker);
+        assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_V1.3.0': 1 });
+        assert.equal(failures(worker).length, 1);
+        assert.match(failures(worker)[0].error, /500/);
     });
 });

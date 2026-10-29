@@ -255,24 +255,15 @@ async function preload() {
 
 /**
  * Installs or updates the service worker cache
- * @param {boolean} isFirstInstall - Whether this is a first-time installation
+ * @param {boolean} isFirstInstall - True for a fill the worker starts itself (installing or activating a version),
+ * false for one the user asked for with Update Now
  * @returns {Promise<void>}
  */
 async function installCache(isFirstInstall = false) {
     console.log(`${isFirstInstall ? 'First-time installation' : 'Updating'} cache to version ${CACHE_VERSION}`);
-    const cache = await caches.open(CACHE_NAME);
     
     try {
-        // Clear old caches
-        const { oldCaches } = await checkCacheVersion();
-        if (oldCaches.length > 0) {
-            console.log(`Deleting old caches: ${oldCaches}`);
-            await Promise.all(
-                oldCaches.map(key => caches.delete(key))
-            );
-        }
-
-        // Fetch and cache assets
+        // Fetch and cache assets. The manifest comes first so that a failed request leaves no empty cache behind.
         console.log("Fetching asset manifest...");
         const response = await fetch(getAssetPath("assets/asset-manifest.json"));
         if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
@@ -282,8 +273,18 @@ async function installCache(isFirstInstall = false) {
         ASSETS_TO_CACHE.push(...processedAssets);
         
         console.log("Caching assets:", ASSETS_TO_CACHE);
+        const cache = await caches.open(CACHE_NAME);
         await cache.addAll(ASSETS_TO_CACHE);
         console.log("Assets cached successfully");
+        
+        // Clear old caches only now that the new one is filled: until then they are what works offline
+        const { oldCaches } = await checkCacheVersion();
+        if (oldCaches.length > 0) {
+            console.log(`Deleting old caches: ${oldCaches}`);
+            await Promise.all(
+                oldCaches.map(key => caches.delete(key))
+            );
+        }
         
         // Notify clients
         self.clients.matchAll().then(clients => {
@@ -316,16 +317,19 @@ async function installCache(isFirstInstall = false) {
     } catch (error) {
         console.error("Failed to cache assets:", error);
         
-        // Notify clients of failure
+        // Notify clients of failure, but only when the user asked for the update: nobody is waiting on a fill
+        // the worker started itself, and the previous version's cache is still there to fall back on
         self.clients.matchAll().then(clients => {
             clients.forEach(client => {
-                client.postMessage({
-                    type: 'UPDATE_COMPLETE',
-                    version: CACHE_VERSION,
-                    cacheName: CACHE_NAME,
-                    success: false,
-                    error: error.message
-                });
+                if (!isFirstInstall) {
+                    client.postMessage({
+                        type: 'UPDATE_COMPLETE',
+                        version: CACHE_VERSION,
+                        cacheName: CACHE_NAME,
+                        success: false,
+                        error: error.message
+                    });
+                }
                 
                 // Still send version info for UI consistency
                 client.postMessage({
@@ -362,17 +366,19 @@ self.addEventListener("activate", event => {
                 await self.clients.claim();
                 console.log("Service worker has claimed clients");
 
-                // Fetches are network-first, so pages already run this version and older caches are only
-                // dead weight; removing them also stops them being reported as the installed version
+                // Fetches are network-first, so pages already run this version: fill its cache now, which also
+                // deletes the older caches once it succeeds. A successful fill leaves no other cache, so one still
+                // there means this version's last fill failed (or never ran) and is worth another try.
                 if (CACHE_VERSION !== "1.0.0") {
-                    const staleCaches = (await caches.keys())
-                        .filter(key => key.startsWith('DUMBTERM_') && key !== CACHE_NAME);
-                    await Promise.all(staleCaches.map(key => caches.delete(key)));
-                    if (staleCaches.length > 0) {
-                        console.log(`Deleted old caches: ${staleCaches}`);
+                    const { currentCacheExists, oldCaches } = await checkCacheVersion();
+                    if (!currentCacheExists || oldCaches.length > 0) {
+                        await installCache(true);
+                    } else {
+                        await notifyClients();
                     }
+                    return;
                 }
-                
+
                 // Check cache status
                 const { isFirstInstall, existingVersion } = await checkCacheVersion();
                 
