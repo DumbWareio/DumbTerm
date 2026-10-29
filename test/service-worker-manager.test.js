@@ -471,6 +471,22 @@ describe('service worker manager update prompt', () => {
         });
     }
 
+    // The worker tells every tab when an update another tab asked it for fails; this tab's Update Now asked the
+    // server, not the worker, so it goes on waiting for the server
+    test('Update Now waiting for the server is left alone when the worker\'s update fails in another tab', async () => {
+        const { displayed, fromWorker } = await loneTabAcrossUpgrade();
+        await reconnect();
+        server.held = true;
+        await click('update-now');
+        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', success: false, error: 'boom' });
+        assert.deepEqual(prompts(), ['New version v1.3.1 available! Current: v1.3.0 Updating... Later']);
+        assert.equal(displayed.at(-1), 'loading');
+        assert.equal(signals.at(-1)?.aborted, false, 'the request goes on');
+        releaseHeld();
+        await settle();
+        assert.equal(window.location.reloads, 1);
+    });
+
     test('a new Update Now after one called off with Later still reloads', async () => {
         await loneTabAcrossUpgrade();
         await reconnect();

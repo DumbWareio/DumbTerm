@@ -485,7 +485,8 @@ export default class ServiceWorkerManager {
         // (pages are fetched network-first) and registers the new version's worker
         const controller = navigator.serviceWorker?.controller;
         if (controller && !fromServer) {
-            // Request the update via service worker
+            // Request the update via service worker, which answers every tab: this attempt is the one waiting on it
+            attempt.askedWorker = true;
             controller.postMessage({ type: 'PERFORM_UPDATE' });
             return;
         }
@@ -563,13 +564,13 @@ export default class ServiceWorkerManager {
      * @param {Object} data - Update completion data
      */
     handleUpdateComplete(data) {
-        // Whatever the outcome, the Update Now waiting on the worker is over
-        const attemptWaiting = this.updateAttempt !== null;
-        this.cancelUpdateAttempt();
+        // The worker tells every tab when an update fails, so only the tab whose Update Now waits on the worker
+        // says so. Any other leaves its page as it is: a prompt that replaced that Update Now, or one that waits on
+        // the server
+        if (data.success === false && !this.updateAttempt?.askedWorker) return;
         
-        // The worker tells every tab when an update fails, so only the tab whose Update Now still waits says so;
-        // any other leaves its page, and a prompt that replaced that Update Now, as they are
-        if (data.success === false && !attemptWaiting) return;
+        // Whatever the outcome, the Update Now waiting on the worker is over
+        this.cancelUpdateAttempt();
         
         // Reset notification tracking state
         this.updateNotificationActive = false;
