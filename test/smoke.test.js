@@ -192,6 +192,14 @@ describe('DumbTerm server', () => {
     before(async () => { server = await startServer(); });
     after(async () => { await server.stop(); });
 
+    // An open page asks for the server's version this way: the service worker passes a HEAD request to the network
+    // without caching it, and a signed-out page can ask too
+    test('answers a HEAD of config.js with the version it runs', async () => {
+        const res = await fetch(`${server.baseUrl}/config.js`, { method: 'HEAD' });
+        assert.equal(res.status, 200);
+        assert.equal(res.headers.get('x-dumbterm-version'), require('../package.json').version);
+    });
+
     test('serves the login page when a PIN is configured', async () => {
         const res = await fetch(`${server.baseUrl}/login`);
         assert.equal(res.status, 200);
@@ -315,6 +323,12 @@ describe('DumbTerm server under a BASE_URL sub-path', () => {
             ['index.html', `${server.baseUrl}/dumbterm/`],
             ['login.html', `${server.baseUrl}/dumbterm/login`],
         ]);
+    });
+
+    test('answers a HEAD of config.js under the sub-path with the version it runs', async () => {
+        const res = await fetch(`${server.baseUrl}/dumbterm/config.js`, { method: 'HEAD' });
+        assert.equal(res.status, 200);
+        assert.equal(res.headers.get('x-dumbterm-version'), require('../package.json').version);
     });
 
     test('redirects the sub-path without a trailing slash, so relative asset URLs resolve', async () => {

@@ -239,6 +239,9 @@ app.get(BASE_PATH + '/config.js', (req, res) => {
         cacheName: CACHE_NAME
     }
 
+    // An open page asks for this header with a HEAD request to learn whether the server was upgraded under it:
+    // the service worker leaves HEAD requests to the network, so nothing caches the answer
+    res.set('X-DumbTerm-Version', APP_VERSION);
     res.type('application/javascript').send(`
         window.appConfig = ${JSON.stringify(appConfig)};
     `);
