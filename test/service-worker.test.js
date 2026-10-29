@@ -127,9 +127,11 @@ async function performUpdate(worker) {
 const cacheSizes = (worker) => Object.fromEntries([...worker.store].map(([name, entries]) => [name, entries.size]));
 const failures = (worker) => worker.messages.filter((message) => message.type === 'UPDATE_COMPLETE' && message.success === false);
 
-// Wait until the worker has asked for the manifest `count` times
+// Wait until the worker has asked for the manifest `count` times, and fail if it never does
 async function manifestRequested(worker, count = 1) {
-    for (let i = 0; i < 100 && worker.fetchCalls.filter((url) => url.endsWith('asset-manifest.json')).length < count; i++) await settle();
+    const requests = () => worker.fetchCalls.filter((url) => url.endsWith('asset-manifest.json')).length;
+    for (let i = 0; i < 100 && requests() < count; i++) await settle();
+    assert.ok(requests() >= count, `the manifest was asked for ${requests()} times, not ${count}`);
 }
 
 // The URLs a cache holds, in a stable order
