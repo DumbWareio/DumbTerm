@@ -935,7 +935,12 @@ export default class TerminalManager {
 
             // A clean close is final (the shell exited, or failed to start), unless the server is going away
             // (1001, shutting down) or restarting (1012): the tab then reconnects once it is back, as it does
-            // after a dropped connection
+            // after a dropped connection. A shell that failed to start (1011) says why, as retrying would fail
+            // the same way
+            if (event.wasClean && event.code === 1011) {
+                terminal.writeln(`\r\nThe server could not start a shell: ${event.reason || 'Failed to start terminal'}.`);
+                return;
+            }
             if (event.wasClean && event.code !== 1001 && event.code !== 1012) {
                 terminal.writeln('\r\nConnection closed normally.');
                 return;

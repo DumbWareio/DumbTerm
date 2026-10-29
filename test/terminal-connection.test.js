@@ -344,8 +344,7 @@ describe('terminal connection', () => {
     });
 
     // Guards: these closes were final before, and stay final
-    for (const [code, what] of [[1005, 'the shell exits'], [1000, 'the server closes normally'],
-        [1011, 'the shell fails to start']]) {
+    for (const [code, what] of [[1005, 'the shell exits'], [1000, 'the server closes normally']]) {
         test(`when ${what} (${code}) the tab stays closed until a key is typed`, () => {
             const first = FakeWebSocket.last;
             first.closes({ code, wasClean: true });
@@ -356,6 +355,46 @@ describe('terminal connection', () => {
             assert.equal(linesSaying(LOST), 0);
         });
     }
+
+    // A shell that fails to start (#46): the server closes with 1011 and why, which the tab says instead of the line
+    // for a shell that exited, and stays closed, as retrying by itself would fail the same way
+    for (const [reason, says] of [['Shell exited with code 1', 'Shell exited with code 1'],
+        ['Failed to start terminal', 'Failed to start terminal'], ['', 'Failed to start terminal']]) {
+        test(`when the shell fails to start (1011, ${JSON.stringify(reason)}) the tab says so and stays closed until a key is typed`, () => {
+            const first = FakeWebSocket.last;
+            first.closes({ code: 1011, reason, wasClean: true });
+            wait(60000);
+
+            assert.equal(FakeWebSocket.last, first, 'no new socket');
+            assert.equal(linesSaying(`The server could not start a shell: ${says}.`), 1);
+            assert.equal(linesSaying(CLOSED_NORMALLY), 0);
+            assert.equal(linesSaying(LOST), 0);
+        });
+    }
+
+    test('a key after a shell that failed to start makes one new attempt, which ends the same way', () => {
+        const first = FakeWebSocket.last;
+        first.closes({ code: 1011, reason: 'Shell exited with code 1', wasClean: true });
+        wait(1000);
+        type('a');
+        wait(1000);
+        const retry = FakeWebSocket.last;
+        assert.deepEqual(socketsSince(first), [retry], 'one new attempt');
+        retry.closes({ code: 1011, reason: 'Shell exited with code 1', wasClean: true });
+        wait(60000);
+
+        assert.equal(FakeWebSocket.last, retry, 'and no more');
+        assert.equal(linesSaying('The server could not start a shell: Shell exited with code 1.'), 2);
+        assert.equal(linesSaying(CLOSED_NORMALLY), 0);
+    });
+
+    // Guard: only a close the server reports as failed (1011) says the shell could not start, whatever its reason
+    test('a shell that exits (1005) with a reason still says it closed normally', () => {
+        FakeWebSocket.last.closes({ code: 1005, reason: 'Shell exited with code 1', wasClean: true });
+        wait(1000);
+        assert.equal(linesSaying(CLOSED_NORMALLY), 1);
+        assert.equal(linesSaying('could not start a shell'), 0);
+    });
 
     // Guard
     test('a refused login (1008) sends the page to the login page and does not reconnect', () => {
