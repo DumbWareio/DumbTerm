@@ -254,8 +254,9 @@ async function preload() {
 
 /**
  * Installs or updates the service worker cache
- * @param {boolean} isFirstInstall - True for a fill the worker starts itself (installing or activating a version),
- * false for one the user asked for with Update Now
+ * @param {boolean} isFirstInstall - True for a fill the worker starts itself (activating a version, or the first
+ * install a page's SET_VERSION starts), false for one the user asked for with Update Now. Only a failed fill the
+ * user asked for is reported to the page.
  * @returns {Promise<void>}
  */
 async function installCache(isFirstInstall = false) {
