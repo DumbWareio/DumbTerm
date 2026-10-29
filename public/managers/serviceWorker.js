@@ -411,11 +411,8 @@ export default class ServiceWorkerManager {
             return;
         }
         
-        // Clear any existing update timeout to prevent race conditions
-        if (this.updateTimeout) {
-            clearTimeout(this.updateTimeout);
-            this.updateTimeout = null;
-        }
+        // This prompt replaces the one an Update Now may be waiting on, so that Update Now is over, as with Later
+        this.cancelUpdateAttempt();
         
         // Update tracking variables
         this.updateNotificationActive = true;

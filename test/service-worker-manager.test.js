@@ -203,6 +203,7 @@ async function click(id) {
 }
 
 const PROMPT_1_3_1 = 'New version v1.3.1 available! Current: v1.3.0 Update Now Later';
+const PROMPT_1_3_2 = 'New version v1.3.2 available! Current: v1.3.0 Update Now Later';
 
 describe('service worker manager version display', () => {
     before(() => {
@@ -429,6 +430,28 @@ describe('service worker manager update prompt', () => {
         await settle();
         assert.equal(window.location.reloads, 1);
     });
+
+    // The worker's word for other versions can replace the prompt while its Update Now waits for the server: that
+    // Update Now is over, as with Later, and whatever the server answers later changes nothing
+    for (const [outcome, answer] of [['fails', () => { server.down = true; }], ['answers', () => {}]]) {
+        test(`Update Now on a prompt the new worker's word replaced is called off, and a request that then ${outcome} changes nothing`, async () => {
+            const { displayed, fromWorker } = await loneTabAcrossUpgrade();
+            await reconnect();
+            server.held = true;
+            await click('update-now');
+            fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.2' });
+            assert.deepEqual(prompts(), [PROMPT_1_3_2]);
+            assert.equal(displayed.at(-1), '1.3.0', 'the footer is no longer loading');
+            assert.equal(signals.at(-1)?.aborted, true, 'the request was called off');
+            answer();
+            releaseHeld();
+            await settle();
+            assert.equal(window.location.reloads, 0);
+            assert.deepEqual(prompts(), [PROMPT_1_3_2], 'the new prompt stays, with no error');
+            mock.timers.tick(30000);
+            assert.deepEqual(prompts(), [PROMPT_1_3_2], 'no "Update timed out" later on');
+        });
+    }
 
     test('a new Update Now after one called off with Later still reloads', async () => {
         await loneTabAcrossUpgrade();
