@@ -942,6 +942,10 @@ describe('terminal control sequences', () => {
             `Title\r\n> \r\nr1\r\nr2\r\n\r\nTitle\r\n> ${'x'.repeat(77)} \r\nstatus`, ['Title', '>', 'r1', 'r2', '', 'Title', `> ${'x'.repeat(77)}`]],
         ['draws its first line and a rule again above a different row',
             `Title\r\n${RULE}\r\npage 1\r\nr1\r\n\r\nTitle\r\n${RULE}\r\npage 2`, ['Title', RULE, 'page 1', 'r1', '', 'Title', RULE]],
+        ['draws its first line again under a row holding a no-break space, above a filled input line',
+            `Title\r\n> \r\nr1\r\nr2\r\n \r\nTitle\r\n${filledInput}\r\nstatus`, ['Title', '>', 'r1', 'r2', '', 'Title', filledInput]],
+        ['draws its first line again under a row of spaces, above a filled input line',
+            `Title\r\n> \r\nr1\r\nr2\r\n${' '.repeat(10)}\r\nTitle\r\n${filledInput}\r\nstatus`, ['Title', '>', 'r1', 'r2', '', 'Title', filledInput]],
     ]) {
         test(`a saved session keeps the output of an app that starts with a blank row and ${shape}`, async () => {
             const saves = recordSavedSessions();
@@ -950,6 +954,17 @@ describe('terminal control sequences', () => {
             assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '', ...kept, '']);
         });
     }
+
+    test('a saved session leaves out the output of an app that starts with a blank row and draws it, its first line and a filled input line again', async () => {
+        // Known limit: under a blank row, an app's title drawn again above an input line that fills its row (or wraps)
+        // reads as Starship's prompt redrawn below a listing and typed on, so the save stops above the app's
+        // transcript. Telling the two apart would also keep Starship's redrawn prompt. Pinned so that changing it is
+        // deliberate
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n\x1b[?2004h\r\nTitle\r\n> \r\nr1\r\nr2\r\nr3\r\n\r\nTitle\r\n${filledInput}\r\nstatus`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '']);
+    });
 
     test('a saved session keeps the output of an app that starts with a blank row and draws a wrapped line again, the cursor moved up into it', async () => {
         // The cursor's line runs on below it: compared whole, the two lines differ
