@@ -468,6 +468,10 @@ describe('DumbTerm server when the shell exits', () => {
         assert.equal(await shellEndedWith('exit 3', 1500), 1005);
     });
 
+    test('closes without a status when the shell is killed by a signal after it has been up a while', async () => {
+        assert.equal(await shellEndedWith('kill -9 $$', 1500), 1005);
+    });
+
     // The rule is any non-zero code within a second of the spawn, not only node-pty's 1
     test('closes with 1011 and the exit code on a non-zero exit as the shell starts', async () => {
         const terminal = openTerminal(server, { Cookie: PIN_COOKIE, Origin: server.baseUrl });
