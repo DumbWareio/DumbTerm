@@ -395,8 +395,8 @@ describe('DumbTerm server when the pty cannot be spawned', () => {
 });
 
 // A shell that fails to start (#46) mostly does not make spawn() throw: node-pty starts it, prints why it could not
-// run it, and the shell exits with code 1. On macOS node-pty's spawn-helper may refuse it first, so spawn() throws
-// and the close says 'Failed to start terminal'; the exit path is the one Linux (and the Docker image) runs
+// run it (on Linux; on macOS it prints nothing), and the shell exits with code 1. On macOS spawn() may throw instead,
+// and the close says 'Failed to start terminal'; Linux (CI and the Docker image) runs the exit path
 for (const [what, env, nodePtyLine] of [
     ['SHELL does not exist', { SHELL: '/nonexistent' }, 'execvp(3) failed.: No such file or directory'],
     ['HOME does not exist', { HOME: '/nonexistent' }, 'chdir(2) failed.: No such file or directory'],
@@ -410,11 +410,13 @@ for (const [what, env, nodePtyLine] of [
         test('closes the terminal WebSocket with 1011, saying why, and keeps running', async () => {
             const terminal = openTerminal(server, { Cookie: PIN_COOKIE, Origin: server.baseUrl });
             assert.equal(await closeCodeWithin(terminal), 1011);
-            if (terminal.state.output.includes(nodePtyLine)) {
+            if (process.platform === 'linux') {
+                assert.ok(terminal.state.output.includes(nodePtyLine),
+                    `no "${nodePtyLine}" before the close, got: ${JSON.stringify(terminal.state.output)}`);
                 assert.equal(terminal.state.closeReason, 'Shell exited with code 1');
             } else {
-                assert.ok(process.platform !== 'linux', `no "${nodePtyLine}" before the close, got: ${JSON.stringify(terminal.state.output)}`);
-                assert.notEqual(terminal.state.closeReason, '');
+                assert.ok(['Shell exited with code 1', 'Failed to start terminal'].includes(terminal.state.closeReason),
+                    `unexpected reason ${JSON.stringify(terminal.state.closeReason)}`);
             }
             await new Promise((resolve) => setTimeout(resolve, 300));
             assert.ok(server.isRunning(), `server crashed:\n${server.output()}`);
