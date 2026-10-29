@@ -335,6 +335,18 @@ describe('service worker manager update prompt', () => {
         assert.equal(window.location.reloads, 1);
     });
 
+    test('the error goes by itself, the footer shows the page\'s version again, and the update timeout is off', async () => {
+        const { displayed } = await loneTabAcrossUpgrade();
+        await reconnect();
+        server.down = true;
+        await click('update-now');
+        assert.equal(displayed.at(-1), '1.3.0', 'no longer loading');
+        mock.timers.tick(5000);
+        assert.deepEqual(prompts(), []);
+        mock.timers.tick(30000);
+        assert.deepEqual(prompts(), [], 'no "Update timed out" later on');
+    });
+
     test('Update Now in a browser without service workers reloads the page', async () => {
         await loneTabAcrossUpgrade({ worker: false });
         await reconnect();
