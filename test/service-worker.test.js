@@ -21,7 +21,8 @@ function fakeResponse(body, { status = 200, type = 'basic', redirected = false }
 // makes config.js fail.
 // `server.manifest` is what assets/asset-manifest.json lists, and `server.manifestStatus` its HTTP status;
 // tests can change either between steps, and hold the manifest's answer back by setting `server.manifestHeld`
-// to a promise. Messages the worker posts to its one page land in `messages`.
+// to a promise. Setting `cacheStorage.nextKeysHeld` to a promise holds back the answer of the next caches.keys() only.
+// Messages the worker posts to its one page land in `messages`.
 function loadWorker({ version = '1.3.0', scope = '/', store = new Map(), config = {}, network = async () => fakeResponse('network'), cacheNames = [], manifest = [], manifestStatus = 200 } = {}) {
     cacheNames.forEach((name) => store.set(name, new Map()));
     const scopeUrl = new URL(scope, ORIGIN).href;
@@ -29,6 +30,7 @@ function loadWorker({ version = '1.3.0', scope = '/', store = new Map(), config 
     const fetchCalls = [];
     const messages = [];
     const server = { manifest, manifestStatus };
+    const cacheStorage = { nextKeysHeld: undefined };
     const fetch = async (request) => {
         const url = typeof request === 'string' ? request : request.url;
         fetchCalls.push(url);
@@ -64,7 +66,12 @@ function loadWorker({ version = '1.3.0', scope = '/', store = new Map(), config 
         fetch,
         caches: {
             open: async (name) => openCache(name),
-            keys: async () => [...store.keys()],
+            keys: async () => {
+                const held = cacheStorage.nextKeysHeld;
+                cacheStorage.nextKeysHeld = undefined;
+                await held;
+                return [...store.keys()];
+            },
             delete: async (name) => store.delete(name),
             match: async (request) => {
                 const url = typeof request === 'string' ? request : request.url;
@@ -81,7 +88,7 @@ function loadWorker({ version = '1.3.0', scope = '/', store = new Map(), config 
         },
     };
     vm.runInNewContext(WORKER_SOURCE, sandbox);
-    return { listeners, store, fetchCalls, messages, server };
+    return { listeners, store, fetchCalls, messages, server, cacheStorage };
 }
 
 // The worker posts some messages from promise callbacks it does not wait for; let those run
@@ -485,6 +492,53 @@ describe('service worker Update Now', () => {
             for (const message of fillMessages) {
                 assert.deepEqual([message.version ?? message.currentVersion, message.cacheName], ['1.3.1', 'DUMBTERM_CACHE_/_V1.3.1']);
             }
+        });
+    }
+
+    test('counts a fill as filling from its start, so another fill that finishes first keeps its cache', async () => {
+        // As below, holding Cache Storage's next answer as well as the network's: a fill that looked at Cache Storage
+        // before counting itself would leave its cache to the other fill's cleanup meanwhile
+        let releaseKeys;
+        let releaseManifest;
+        const worker = await installUnversioned('1.3.1', { cacheNames: ['DUMBTERM_CACHE_/_V1.3.1'], manifest: ['index.html'] });
+        worker.store.get('DUMBTERM_CACHE_/_V1.3.1').set(ORIGIN + 'index.js', fakeResponse('fetched'));
+        worker.cacheStorage.nextKeysHeld = new Promise((resolve) => { releaseKeys = resolve; });
+        worker.server.manifestHeld = new Promise((resolve) => { releaseManifest = resolve; });
+        const first = worker.listeners.message({ data: { type: 'PERFORM_UPDATE' } });
+        await settle();
+        worker.cacheStorage.nextKeysHeld = undefined;
+        worker.server.manifestHeld = undefined;
+        await worker.listeners.message({ data: { type: 'SET_VERSION', version: '1.3.2' } });
+        await performUpdate(worker);
+        releaseKeys();
+        releaseManifest();
+        await first;
+        await settle();
+        assert.deepEqual(cachedUrls(worker, 'DUMBTERM_CACHE_/_V1.3.1'), [ORIGIN + 'index.html', ORIGIN + 'index.js']);
+        assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_/_V1.3.1': 2 });
+    });
+
+    // Three tabs on three versions pick Update Now in turn, and the fill of the version whose cache the pages had
+    // started (1.3.1) finishes last: the cleanup of each fill that finishes before it leaves that cache alone
+    for (const finishOrder of [['1.3.2', '1.3.3', '1.3.1'], ['1.3.3', '1.3.2', '1.3.1']]) {
+        test(`keeps the cache of a fill still waiting while two other fills finish, ${finishOrder.join(' then ')}`, async () => {
+            const releases = {};
+            const fills = {};
+            const worker = await installUnversioned('1.3.2', { cacheNames: ['DUMBTERM_CACHE_/_V1.3.1'], manifest: ['index.html'] });
+            worker.store.get('DUMBTERM_CACHE_/_V1.3.1').set(ORIGIN + 'index.js', fakeResponse('fetched'));
+            for (const [i, version] of ['1.3.2', '1.3.1', '1.3.3'].entries()) {
+                await worker.listeners.message({ data: { type: 'SET_VERSION', version } });
+                worker.server.manifestHeld = new Promise((resolve) => { releases[version] = resolve; });
+                fills[version] = worker.listeners.message({ data: { type: 'PERFORM_UPDATE' } });
+                await manifestRequested(worker, i + 1);
+            }
+            for (const version of finishOrder) {
+                releases[version]();
+                await fills[version];
+            }
+            await settle();
+            assert.deepEqual(cachedUrls(worker, 'DUMBTERM_CACHE_/_V1.3.1'), [ORIGIN + 'index.html', ORIGIN + 'index.js']);
+            assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_/_V1.3.1': 2 });
         });
     }
 
