@@ -107,8 +107,8 @@ async function initializeVersion() {
                     CACHE_NAME = cacheNameFor(CACHE_VERSION);
                 }
 
-                // If we have an existing version that's different from what we just loaded,
-                // we should notify clients about an available update
+                // If the existing cache holds another version than the one this worker caches (config.js's, or
+                // the one it was registered with), notify clients about an available update
                 if (existingVersion && existingVersion !== CACHE_VERSION) {
                     console.log(`Different version detected: existing=${existingVersion}, new=${CACHE_VERSION}`);
                     setTimeout(() => notifyClients(), 1000);
