@@ -221,26 +221,34 @@ export default class ServiceWorkerManager {
             return;
         }
         
-        const pageVersion = window.appConfig?.version;
+        let serverVersion;
         try {
-            // From the network: the browser's HTTP cache could hold the config.js this page loaded with
-            const response = await fetch(this.joinPath('config.js'), { cache: 'no-store' });
-            if (!response.ok) throw new Error(`Failed to fetch config: ${response.status}`);
-            
-            // config.js sets window.appConfig; read it the way the worker does
-            const configText = await response.text();
-            const configJson = configText.match(/window\.appConfig\s*=\s*({[\s\S]*?});/);
-            if (!configJson || !configJson[1]) throw new Error('Could not extract config from config.js');
-            const serverVersion = JSON.parse(configJson[1]).version;
-            
-            console.log(`Version check: page=${pageVersion}, server=${serverVersion}`);
-            if (this.shouldShowUpdateNotification(pageVersion, serverVersion)) {
-                this.showUpdateNotification(pageVersion, serverVersion, true);
-            }
+            serverVersion = await this.getServerVersion();
         } catch (error) {
             // Offline, or the server is restarting: say nothing, the next check asks again
             console.log("Could not check the server's version:", error);
+            return;
         }
+        
+        const pageVersion = window.appConfig?.version;
+        console.log(`Version check: page=${pageVersion}, server=${serverVersion}`);
+        if (this.shouldShowUpdateNotification(pageVersion, serverVersion)) {
+            this.showUpdateNotification(pageVersion, serverVersion, true);
+        }
+    }
+
+    /**
+     * Asks the server which version it runs, from the header it sends with config.js
+     * @returns {Promise<string|null>} The server's version, or null when it doesn't say
+     * @throws When the server can't be reached or answers with an error
+     */
+    async getServerVersion() {
+        // A HEAD request: the worker leaves requests other than GET to the network, so the answer is never a copy
+        // it kept, and it keeps none (a GET would leave the new config.js in the old version's cache, for the old
+        // page to load offline). no-store keeps the browser's HTTP cache out of it too
+        const response = await fetch(this.joinPath('config.js'), { method: 'HEAD', cache: 'no-store' });
+        if (!response.ok) throw new Error(`Failed to reach the server: ${response.status}`);
+        return response.headers.get('X-DumbTerm-Version');
     }
 
     /**
@@ -433,7 +441,7 @@ export default class ServiceWorkerManager {
      * @param {HTMLElement} notification - The notification element
      * @param {boolean} [fromServer] - Whether the server reported the new version, rather than a newer worker
      */
-    handleUpdateRequest(notification, fromServer = false) {
+    async handleUpdateRequest(notification, fromServer = false) {
         // Show loading state
         const updateButton = notification.querySelector('#update-now');
         updateButton.innerHTML = 'Updating...';
@@ -473,13 +481,56 @@ export default class ServiceWorkerManager {
         // The worker controlling the page caches the release it was registered with, so only a newer worker can
         // install a new version. When the server reported it, or no worker controls the page, a reload loads it
         // (pages are fetched network-first) and registers the new version's worker
-        if (navigator.serviceWorker.controller && !fromServer) {
+        const controller = navigator.serviceWorker.controller;
+        if (controller && !fromServer) {
             // Request the update via service worker
-            navigator.serviceWorker.controller.postMessage({ type: 'PERFORM_UPDATE' });
-        } else {
-            console.log("Reloading to load the new version");
-            this.updateNotificationActive = false;
-            window.location.reload(true);
+            controller.postMessage({ type: 'PERFORM_UPDATE' });
+            return;
+        }
+        
+        // The reload needs the server: while it is down the page would come back as the worker's offline copy of
+        // the old version, or not at all
+        try {
+            await this.getServerVersion();
+        } catch (error) {
+            console.log("Not reloading, the server can't be reached:", error);
+            this.showUpdateError("Can't reach the server. Try again when it's back.");
+            return;
+        }
+        console.log("Reloading to load the new version");
+        this.updateNotificationActive = false;
+        window.location.reload(true);
+    }
+
+    /**
+     * Replaces the update prompt with an error, which goes after 5 seconds or when dismissed. The next version
+     * check can offer the update again
+     * @param {string} message - What went wrong
+     */
+    showUpdateError(message) {
+        if (this.updateTimeout) {
+            clearTimeout(this.updateTimeout);
+            this.updateTimeout = null;
+        }
+        this.updateNotificationActive = false;
+        this.lastCheckedVersionPair = null;
+        
+        const existingNotifications = document.querySelectorAll('.update-notification');
+        existingNotifications.forEach(notification => notification.remove());
+        
+        const errorNotification = document.createElement('div');
+        errorNotification.className = 'update-notification error';
+        errorNotification.innerHTML = `
+            <p></p>
+            <button onclick="this.parentElement.remove()">Dismiss</button>
+        `;
+        errorNotification.querySelector('p').textContent = message;
+        document.body.appendChild(errorNotification);
+        setTimeout(() => errorNotification.remove(), 5000);
+        
+        // Restore version display
+        if (this.updateVersionDisplayCallback) {
+            this.updateVersionDisplayCallback();
         }
     }
 
