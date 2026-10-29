@@ -260,6 +260,9 @@ async function preload() {
  */
 async function installCache(isFirstInstall = false) {
     console.log(`${isFirstInstall ? 'First-time installation' : 'Updating'} cache to version ${CACHE_VERSION}`);
+    // A page's SET_VERSION can change CACHE_NAME while this fill waits on the network, so fill and keep the cache
+    // this fill started with
+    const cacheName = CACHE_NAME;
     
     try {
         // Fetch and cache assets. The manifest comes first so that a failed request leaves no empty cache behind.
@@ -273,12 +276,13 @@ async function installCache(isFirstInstall = false) {
         const assetsToCache = assets.map(asset => getAssetPath(asset));
         
         console.log("Caching assets:", assetsToCache);
-        const cache = await caches.open(CACHE_NAME);
+        const cache = await caches.open(cacheName);
         await cache.addAll(assetsToCache);
         console.log("Assets cached successfully");
         
         // Clear old caches only now that the new one is filled: until then they are what works offline
-        const { oldCaches } = await checkCacheVersion();
+        const oldCaches = (await caches.keys())
+            .filter(key => key.startsWith('DUMBTERM_') && key !== cacheName);
         if (oldCaches.length > 0) {
             console.log(`Deleting old caches: ${oldCaches}`);
             await Promise.all(

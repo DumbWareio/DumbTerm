@@ -238,6 +238,32 @@ describe('service worker activation', () => {
         await activate(worker);
         assert.ok(!worker.fetchCalls.some((url) => url.endsWith('asset-manifest.json')));
     });
+
+    test('keeps the cache it filled when a page sends another version during the fill', async () => {
+        // A second tab loading the offline copy of 1.3.2 while 1.3.3 activates
+        let release;
+        const held = new Promise((resolve) => { release = resolve; });
+        const worker = loadWorker({
+            version: '1.3.3',
+            cacheNames: ['DUMBTERM_CACHE_V1.3.2'],
+            manifest: ['index.html', 'index.js'],
+            network: async () => { await held; return fakeResponse('network'); },
+        });
+        const pending = [];
+        worker.listeners.activate({ waitUntil(promise) { pending.push(promise); } });
+        while (!worker.fetchCalls.some((url) => url.endsWith('index.js'))) await settle();
+        await worker.listeners.message({ data: { type: 'SET_VERSION', version: '1.3.2', cacheName: 'DUMBTERM_CACHE_V1.3.2' } });
+        release();
+        await Promise.all(pending);
+        assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_V1.3.3': 2 });
+    });
+
+    test('deletes an older cache whatever its DumbTerm name looks like', async () => {
+        // Builds from May 2025 named their cache without the V
+        const worker = loadWorker({ version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_1.2.0', 'unrelated-cache'], manifest: ['index.html'] });
+        await activate(worker);
+        assert.deepEqual(cacheSizes(worker), { 'unrelated-cache': 0, 'DUMBTERM_CACHE_V1.3.1': 1 });
+    });
 });
 
 describe('service worker Update Now', () => {
