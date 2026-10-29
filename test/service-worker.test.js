@@ -211,6 +211,13 @@ describe('service worker activation', () => {
         assert.ok(worker.store.has('DUMBTERM_CACHE_/_V1.2.0'));
     });
 
+    test('an install keeps the version it was registered with while that version\'s cache exists, whatever config.js says', async () => {
+        const worker = loadWorker({ version: '1.3.1', config: { version: '1.3.2' }, cacheNames: ['DUMBTERM_CACHE_/_V1.3.1'] });
+        await install(worker);
+        const answer = await getVersion(worker);
+        assert.deepEqual([answer.newVersion, answer.cacheName], ['1.3.1', 'DUMBTERM_CACHE_/_V1.3.1']);
+    });
+
     test('an upgrade fills the new version\'s cache with the manifest\'s assets and deletes the old one', async () => {
         const worker = loadWorker({ version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_/_V1.3.0'], manifest: ['index.html', 'index.js'] });
         worker.store.get('DUMBTERM_CACHE_/_V1.3.0').set(ORIGIN + 'index.js', fakeResponse('old'));
@@ -350,6 +357,12 @@ describe('service worker activation', () => {
         worker.store.get('DUMBTERM_CACHE_/_V1.3.1').set(ORIGIN + 'index.html', fakeResponse('cached'));
         await activate(worker);
         assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_/_V1.3.1': 1 });
+    });
+
+    test('keeps a cache whose name starts with DUMBTERM_ but is no name DumbTerm gave its caches', async () => {
+        const worker = loadWorker({ version: '1.3.1', cacheNames: ['DUMBTERM_WIDGET_V2.0.0'], manifest: ['index.html'] });
+        await activate(worker);
+        assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_WIDGET_V2.0.0': 0, 'DUMBTERM_CACHE_/_V1.3.1': 1 });
     });
 });
 
@@ -498,6 +511,18 @@ describe('service worker caches on an origin shared by two installs', () => {
         const worker = loadWorker({ scope: '/a/', version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_V1.3.0'] });
         const answer = await getVersion(worker);
         assert.deepEqual([answer.currentVersion, answer.newVersion, answer.cacheName], ['1.3.0', '1.3.1', 'DUMBTERM_CACHE_/a/_V1.3.1']);
+    });
+
+    test('offers the upgrade from a cache a build from May 2025 named without the V', async () => {
+        const worker = loadWorker({ scope: '/a/', version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_1.2.0'] });
+        const answer = await getVersion(worker);
+        assert.deepEqual([answer.currentVersion, answer.newVersion], ['1.2.0', '1.3.1']);
+    });
+
+    test('keeps a cache whose name starts like its own but holds more after the version', async () => {
+        const worker = loadWorker({ scope: '/a/', version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_/a/_V1.2.0/misc'], manifest: ['index.html'] });
+        await activate(worker);
+        assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_/a/_V1.2.0/misc': 0, 'DUMBTERM_CACHE_/a/_V1.3.1': 1 });
     });
 
     test('does not take another install\'s cache for its own', async () => {
