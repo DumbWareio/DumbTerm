@@ -121,13 +121,24 @@ function headlessDocument() {
 }
 
 // The server the page asks for its version: a HEAD request for config.js, answered with the version in a header,
-// or going wrong as `server` says
-const server = { version: '1.3.0', status: 200, header: true, down: false };
+// or going wrong as `server` says. `held` keeps requests waiting until releaseHeld(), which answers them as the
+// server is then, whether or not the page has given up on them. `offlineCopy` is a server that is down while the
+// worker still answers a GET from its cache
+const server = { version: '1.3.0', status: 200, header: true, down: false, held: false, offlineCopy: false };
 const fetched = [];
+const signals = [];
+const held = [];
+
+function releaseHeld() {
+    held.splice(0).forEach((release) => release());
+}
 
 async function fetchFromServer(url, options = {}) {
-    fetched.push({ url, method: options.method ?? 'GET', cache: options.cache });
-    if (server.down) throw new TypeError('Failed to fetch');
+    const method = options.method ?? 'GET';
+    fetched.push({ url, method, cache: options.cache });
+    signals.push(options.signal);
+    if (server.held) await new Promise((resolve) => held.push(resolve));
+    if (server.down || (server.offlineCopy && method !== 'GET')) throw new TypeError('Failed to fetch');
     const headers = new Map(server.header && server.version !== undefined ? [['x-dumbterm-version', server.version]] : []);
     return {
         ok: server.status >= 200 && server.status < 300,
@@ -233,8 +244,10 @@ describe('service worker manager update prompt', () => {
     beforeEach(() => {
         mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
         for (const level of ['log', 'warn', 'error']) mock.method(console, level, () => {});
-        Object.assign(server, { version: '1.3.0', status: 200, header: true, down: false });
+        Object.assign(server, { version: '1.3.0', status: 200, header: true, down: false, held: false, offlineCopy: false });
         fetched.length = 0;
+        signals.length = 0;
+        held.length = 0;
     });
     afterEach(() => {
         mock.timers.reset();
@@ -333,6 +346,31 @@ describe('service worker manager update prompt', () => {
         assert.deepEqual(prompts(), [PROMPT_1_3_1], 'the next check offers the update again');
         await click('update-now');
         assert.equal(window.location.reloads, 1);
+    });
+
+    test('Update Now asks the server with a HEAD request for config.js, under the base path', async () => {
+        await loneTabAcrossUpgrade({ basePath: '/term' });
+        await reconnect();
+        await click('update-now');
+        assert.deepEqual(fetched.at(-1), { url: '/term/config.js', method: 'HEAD', cache: 'no-store' });
+    });
+
+    test('Update Now when the server answers with an error says so and does not reload', async () => {
+        await loneTabAcrossUpgrade();
+        await reconnect();
+        server.status = 503;
+        await click('update-now');
+        assert.equal(window.location.reloads, 0);
+        assert.deepEqual(prompts(), ['Can\'t reach the server. Try again when it\'s back. Dismiss']);
+    });
+
+    // A GET of config.js would get the worker's copy while the server is down
+    test('Update Now does not take the worker\'s offline copy for the server', async () => {
+        await loneTabAcrossUpgrade();
+        await reconnect();
+        server.offlineCopy = true;
+        await click('update-now');
+        assert.equal(window.location.reloads, 0);
     });
 
     test('the error goes by itself, the footer shows the page\'s version again, and the update timeout is off', async () => {
@@ -464,8 +502,8 @@ describe('service worker manager update prompt', () => {
 
     test('the new worker\'s versions are shown as text', async () => {
         const { fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
-        fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0<i>', newVersion: '1.3.1<b>beta</b>' });
-        assert.deepEqual(prompts(), ['New version v1.3.1<b>beta</b> available! Current: v1.3.0<i> Update Now Later']);
+        fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0<i>beta</i>', newVersion: '1.3.1<b>beta</b>' });
+        assert.deepEqual(prompts(), ['New version v1.3.1<b>beta</b> available! Current: v1.3.0<i>beta</i> Update Now Later']);
     });
 
     test('Update Now on the new worker\'s word still asks the worker to update', async () => {
