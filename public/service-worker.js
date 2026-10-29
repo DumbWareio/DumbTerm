@@ -3,10 +3,43 @@
 // a worker the browser restarts after idling would otherwise start at 1.0.0 and cache into a stray cache
 const REGISTERED_VERSION = new URL(self.location.href).searchParams.get('v');
 let CACHE_VERSION = /^\d+\.\d+\.\d+/.test(REGISTERED_VERSION || '') ? REGISTERED_VERSION : "1.0.0"; // Default fallback version
-let CACHE_NAME = `DUMBTERM_CACHE_V${CACHE_VERSION}`; // Default format, will be overridden
 const BASE_PATH = self.registration.scope;
+// Cache Storage is shared by every install on the origin, so each cache name carries the path this install is
+// served under ('/' or '/a/'), and an install deletes only its own caches
+const SCOPE_PATH = new URL(BASE_PATH).pathname;
+let CACHE_NAME = cacheNameFor(CACHE_VERSION);
 // Names of the caches fills are still filling (a name appears once per fill), so no fill deletes another's cache
 const CACHES_BEING_FILLED = [];
+
+/**
+ * Names this install's cache for a version: DUMBTERM_CACHE_<scope path>_V<version>
+ * @param {string} version - App version
+ * @returns {string} Cache name
+ */
+function cacheNameFor(version) {
+    return `DUMBTERM_CACHE_${SCOPE_PATH}_V${version}`;
+}
+
+/**
+ * Whether a cache is one of this install's. The scope path ends in / and a version holds none, so the last _V
+ * splits the name even when the path holds a _V of its own
+ * @param {string} key - Cache name
+ * @returns {boolean} True if the cache belongs to this install
+ */
+function isOwnCache(key) {
+    const match = key.match(/^DUMBTERM_CACHE_(.*)_V[^/]+$/);
+    return !!match && match[1] === SCOPE_PATH;
+}
+
+/**
+ * Whether a cache has a name DumbTerm used before names carried the install's path: DUMBTERM_CACHE_V<version>,
+ * and earlier DUMBTERM_CACHE_<version> and DUMBTERM_PWA_CACHE_V<version>. It can't tell which install made it.
+ * @param {string} key - Cache name
+ * @returns {boolean} True if the cache has an unscoped DumbTerm name
+ */
+function isLegacyCache(key) {
+    return /^DUMBTERM_(PWA_)?CACHE_V?\d/.test(key);
+}
 
 /**
  * Gets app configuration from config.js
@@ -48,7 +81,7 @@ async function initializeVersion() {
         if (currentCacheExists && existingVersion) {
             console.log(`Using existing cache version: ${existingVersion}`);
             CACHE_VERSION = existingVersion;
-            CACHE_NAME = `DUMBTERM_CACHE_V${CACHE_VERSION}`; // Fallback format
+            CACHE_NAME = cacheNameFor(CACHE_VERSION);
             
             // Send a notification to let clients know about this existing version
             setTimeout(() => notifyClients(), 1000);
@@ -61,32 +94,11 @@ async function initializeVersion() {
         if (appConfig) {
             console.log("Got app config:", JSON.stringify(appConfig, null, 2));
             
-            if (appConfig.cacheName) {
-                console.log(`Found cacheName in config.js: ${appConfig.cacheName}`);
-                CACHE_NAME = appConfig.cacheName;
-                
-                // Extract version from cacheName if possible
-                const versionMatch = CACHE_NAME.match(/.*_V(.+)$/);
-                if (versionMatch && versionMatch[1]) {
-                    CACHE_VERSION = versionMatch[1];
-                    console.log(`Extracted version from cacheName: ${CACHE_VERSION}`);
-                } else if (appConfig.version) {
-                    CACHE_VERSION = appConfig.version;
-                    console.log(`Using version from config.js: ${CACHE_VERSION}`);
-                }
-                
-                // If we have an existing version that's different from what we just loaded,
-                // we should notify clients about an available update
-                if (existingVersion && existingVersion !== CACHE_VERSION) {
-                    console.log(`Different version detected: existing=${existingVersion}, new=${CACHE_VERSION}`);
-                    setTimeout(() => notifyClients(), 1000);
-                }
-                
-                return CACHE_VERSION;
-            } else if (appConfig.version) {
+            // Take only the version: a server from before scoped names also sends a cacheName, without the path
+            if (appConfig.version) {
                 console.log(`Found version in config.js: ${appConfig.version}`);
                 CACHE_VERSION = appConfig.version;
-                CACHE_NAME = appConfig.cacheName || `DUMBTERM_CACHE_V${CACHE_VERSION}`; // Fallback format
+                CACHE_NAME = cacheNameFor(CACHE_VERSION);
                 
                 // If we have an existing version that's different from what we just loaded,
                 // we should notify clients about an available update
@@ -127,10 +139,12 @@ async function checkCacheVersion() {
     const keys = await caches.keys();
     console.log("All cache keys:", keys);
     
-    // Find any existing DumbTerm cache - support both formats: DUMBTERM_PWA_CACHE_V* and DUMBTERM_CACHE_V*
+    // Find this install's cache: the current one, else its newest (keys come in the order the caches were made),
+    // else one named before names carried the install's path, which an upgrade from it migrates. Another install's
+    // caches on this origin are not this one's.
     const existingCache = keys.find(key => key === CACHE_NAME) || 
-                          keys.find(key => key.startsWith('DUMBTERM_CACHE_V')) ||
-                          keys.find(key => key.startsWith('DUMBTERM_PWA_CACHE_V'));
+                          keys.filter(isOwnCache).pop() ||
+                          keys.find(isLegacyCache);
     
     console.log(`Found existing cache: ${existingCache || 'none'}`);
     
@@ -146,34 +160,24 @@ async function checkCacheVersion() {
     // Check if current version cache exists
     const currentCacheExists = keys.includes(CACHE_NAME);
     
-    // Check for old versions - be flexible with the cache naming format
-    const oldCaches = keys.filter(key => 
-        key !== CACHE_NAME && (key.startsWith('DUMBTERM_') && 
-        ((key.includes('_CACHE_') || key.includes('PWA_CACHE')) && key.includes('V'))) 
-    );
-    
-    console.log(
-        `Cache check: existingVersion=${existingVersion}, ` +
-        `currentCacheExists=${currentCacheExists}, hasOldVersions=${oldCaches.length > 0}`
-    );
+    console.log(`Cache check: existingVersion=${existingVersion}, currentCacheExists=${currentCacheExists}`);
     
     return {
         currentCacheExists,
-        oldCaches,
         existingVersion,
         isFirstInstall: !existingCache
     };
 }
 
 /**
- * Whether a cache is one of DumbTerm's other than the given one. Every name DumbTerm has used starts with
- * DUMBTERM_ (DUMBTERM_CACHE_V<version>, and earlier DUMBTERM_CACHE_<version> and DUMBTERM_PWA_CACHE_V<version>).
+ * Whether a cache is one this install clears: one of its own other than the given one, or one with a name from before
+ * names carried the install's path. Another install's caches on this origin are never cleared.
  * @param {string} key - Cache name
  * @param {string} cacheName - The cache to keep
- * @returns {boolean} True if the cache is another DumbTerm cache
+ * @returns {boolean} True if the cache is to be cleared
  */
-function isOtherDumbTermCache(key, cacheName) {
-    return key.startsWith('DUMBTERM_') && key !== cacheName;
+function isStaleCache(key, cacheName) {
+    return key !== cacheName && (isOwnCache(key) || isLegacyCache(key));
 }
 
 /**
@@ -301,7 +305,7 @@ async function installCache(isFirstInstall = false, requestId) {
         // Clear old caches only now that the new one is filled: until then they are what works offline.
         // A cache another fill is still filling is left for the next activation to clear.
         const oldCaches = (await caches.keys())
-            .filter(key => isOtherDumbTermCache(key, cacheName) && !CACHES_BEING_FILLED.includes(key));
+            .filter(key => isStaleCache(key, cacheName) && !CACHES_BEING_FILLED.includes(key));
         if (oldCaches.length > 0) {
             console.log(`Deleting old caches: ${oldCaches}`);
             await Promise.all(
@@ -394,12 +398,12 @@ self.addEventListener("activate", event => {
                 console.log("Service worker has claimed clients");
 
                 // Fetches are network-first, so pages already run this version: fill its cache now, which also
-                // deletes the older caches once it succeeds. A successful fill leaves no other DumbTerm cache (unless
-                // another fill was running), so one still there means this version's last fill failed or never ran
-                // and is worth another try.
+                // deletes the older caches once it succeeds. A successful fill leaves no older cache of this install
+                // (unless another fill was running), so one still there means this version's last fill failed or never
+                // ran and is worth another try.
                 if (CACHE_VERSION !== "1.0.0") {
                     const keys = await caches.keys();
-                    if (!keys.includes(CACHE_NAME) || keys.some(key => isOtherDumbTermCache(key, CACHE_NAME))) {
+                    if (!keys.includes(CACHE_NAME) || keys.some(key => isStaleCache(key, CACHE_NAME))) {
                         await installCache(true);
                     } else {
                         await notifyClients();
@@ -426,7 +430,7 @@ self.addEventListener("activate", event => {
                             const appConfig = await getAppConfig();
                             if (appConfig && appConfig.version) {
                                 CACHE_VERSION = appConfig.version;
-                                CACHE_NAME = appConfig.cacheName || `DUMBTERM_CACHE_V${CACHE_VERSION}`;
+                                CACHE_NAME = cacheNameFor(CACHE_VERSION);
                                 console.log(`Updated version from config: ${CACHE_VERSION}`);
                             }
                         } catch (error) {
@@ -498,7 +502,7 @@ self.addEventListener('message', async event => {
     
     switch (data.type) {
         case 'SET_VERSION':
-            await handleSetVersion(data.version, data.cacheName);
+            await handleSetVersion(data.version);
             break;
             
         case 'GET_VERSION':
@@ -519,13 +523,13 @@ self.addEventListener('message', async event => {
 
 /**
  * Handles SET_VERSION messages from the client
- * @param {string} version - Version sent from client
- * @param {string} cacheName - Optional cache name from client
+ * @param {string} version - Version sent from client. A cacheName beside it (pages before scoped names sent one) is
+ * ignored: this install's cache is named after its path
  */
-async function handleSetVersion(version, cacheName) {
+async function handleSetVersion(version) {
     if (!version) return;
     
-    console.log(`Received version from client: ${version}${cacheName ? `, cacheName: ${cacheName}` : ''}`);
+    console.log(`Received version from client: ${version}`);
     
     // Check current cache status
     const { existingVersion, isFirstInstall } = await checkCacheVersion();
@@ -534,22 +538,7 @@ async function handleSetVersion(version, cacheName) {
     if (version !== CACHE_VERSION) {
         const previousVersion = CACHE_VERSION;
         CACHE_VERSION = version;
-        
-        // Use cacheName if provided directly in the message
-        if (cacheName) {
-            CACHE_NAME = cacheName;
-            console.log(`Using cacheName from message: ${CACHE_NAME}`);
-        } else {
-            // Try to get cache name from config as fallback
-            try {
-                const appConfig = await getAppConfig();
-                CACHE_NAME = appConfig?.cacheName || `DUMBTERM_CACHE_V${CACHE_VERSION}`;
-            } catch (error) {
-                // Fall back to constructed cache name on error
-                CACHE_NAME = `DUMBTERM_CACHE_V${CACHE_VERSION}`;
-                console.log(`Error getting config, using constructed cache name: ${CACHE_NAME}`);
-            }
-        }
+        CACHE_NAME = cacheNameFor(CACHE_VERSION);
         
         console.log(`Updated cache version from ${previousVersion} to ${CACHE_VERSION}`);
         
@@ -586,26 +575,10 @@ async function handleGetVersion(event) {
     if (CACHE_VERSION === "1.0.0") {
         try {
             const appConfig = await getAppConfig();
-            if (appConfig) {
-                if (appConfig.cacheName) {
-                    console.log(`Using cacheName from config: ${appConfig.cacheName}`);
-                    CACHE_NAME = appConfig.cacheName;
-                    
-                    // Try to extract version from cacheName
-                    const versionMatch = CACHE_NAME.match(/.*_V(.+)$/) || CACHE_NAME.match(/DUMBTERM_CACHE_(.+)$/);
-                    if (versionMatch && versionMatch[1]) {
-                        CACHE_VERSION = versionMatch[1];
-                        console.log(`Extracted version from cacheName: ${CACHE_VERSION}`);
-                    }
-                }
-                
-                if (appConfig.version && (CACHE_VERSION === "1.0.0" || !appConfig.cacheName)) {
-                    CACHE_VERSION = appConfig.version;
-                    if (!appConfig.cacheName) {
-                        CACHE_NAME = `DUMBTERM_CACHE_V${CACHE_VERSION}`;
-                    }
-                    console.log(`Using version from config: ${CACHE_VERSION}`);
-                }
+            if (appConfig && appConfig.version) {
+                CACHE_VERSION = appConfig.version;
+                CACHE_NAME = cacheNameFor(CACHE_VERSION);
+                console.log(`Using version from config: ${CACHE_VERSION}`);
             }
         } catch (error) {
             console.error("Error getting config version:", error);
