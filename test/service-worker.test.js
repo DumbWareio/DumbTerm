@@ -525,6 +525,28 @@ describe('service worker caches on an origin shared by two installs', () => {
         assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_/a/_V1.3.1': 1 });
     });
 
+    test('installed without a version, fills a cache named after its path and config.js\'s version', async () => {
+        const worker = loadWorker({ scope: '/a/', version: '1730000000000', config: { version: '1.3.1', cacheName: 'DUMBTERM_CACHE_V1.3.1' }, manifest: ['index.html'] });
+        await install(worker);
+        await activate(worker);
+        assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_/a/_V1.3.1': 1 });
+    });
+
+    test('activated without a version, offers config.js\'s version under a cache named after its path', async () => {
+        const worker = loadWorker({
+            scope: '/a/',
+            version: '1730000000000',
+            config: { version: '1.3.1', cacheName: 'DUMBTERM_CACHE_V1.3.1' },
+            cacheNames: ['DUMBTERM_CACHE_/a/_V1.3.0'],
+        });
+        await activate(worker);
+        const offers = worker.messages.filter((message) => message.type === 'UPDATE_AVAILABLE');
+        assert.ok(offers.length > 0);
+        for (const offer of offers) {
+            assert.deepEqual([offer.currentVersion, offer.newVersion, offer.cacheName], ['1.3.0', '1.3.1', 'DUMBTERM_CACHE_/a/_V1.3.1']);
+        }
+    });
+
     test('takes only the version from config.js when registered without one', async () => {
         // The page falls back to ?v=<timestamp> when config.js could not be read; it may read it later
         const worker = loadWorker({ scope: '/a/', version: '1730000000000', config: { version: '1.3.1', cacheName: 'DUMBTERM_CACHE_V1.3.1' } });
