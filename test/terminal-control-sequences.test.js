@@ -850,6 +850,124 @@ describe('terminal control sequences', () => {
         return savedAfter;
     }
 
+    // Apps that keep bracketed paste on and draw their first lines again, with no blank row above them: a redrawn
+    // prompt is looked for higher than the cursor's rows only under Starship's blank row
+    test('a saved session keeps the output of an app that draws its first line again above an input line filled to the last column and a status row', async () => {
+        const saves = recordSavedSessions();
+        const input = `> ${'x'.repeat(78)}`;
+        await receiveOutput(`$ app\r\n\x1b[?2004hTitle\r\n> \r\nr1\r\nr2\r\nr3\r\nTitle\r\n${input}\r\nstatus`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'Title', '>', 'r1', 'r2', 'r3', 'Title', input, '']);
+    });
+
+    test('a saved session keeps the output of an app that draws its first line again above an input line and a full-width footer', async () => {
+        const saves = recordSavedSessions();
+        const input = `> ${'x'.repeat(78)}`;
+        await receiveOutput(`$ app\r\n\x1b[?2004hTitle\r\n> \r\nr1\r\nr2\r\nr3\r\nTitle\r\n${input}\r\n${'='.repeat(80)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(0, 7), ['$ app', 'Title', '>', 'r1', 'r2', 'r3', 'Title']);
+    });
+
+    test('a saved session keeps the output of an app that draws its first line again above a progress bar filled to the last column', async () => {
+        const saves = recordSavedSessions();
+        const bar = `step ${'#'.repeat(75)}`;
+        await receiveOutput(`$ app\r\n\x1b[?2004h[build]\r\nstep \r\nr1\r\nr2\r\nr3\r\n[build]\r\n${bar}\r\ndone`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '[build]', 'step', 'r1', 'r2', 'r3', '[build]', bar, '']);
+    });
+
+    // An input box between rules with a footer, drawn the way Claude Code 2 draws it
+    const RULE = '─'.repeat(80);
+    const inputBox = (...input) => `${RULE}\r\n${input.join('\r\n')}\r\n${RULE}\r\n  ? for shortcuts`;
+
+    test('a saved session keeps the output of an app that draws its input box again with an input filled to the last column', async () => {
+        const saves = recordSavedSessions();
+        const input = `> ${'x'.repeat(78)}`;
+        await receiveOutput(`$ app\r\n\x1b[?2004h${inputBox('> ')}\r\nr1\r\nr2\r\nr3\r\n${inputBox(input)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)),
+            ['$ app', RULE, '>', RULE, '  ? for shortcuts', 'r1', 'r2', 'r3', RULE, input, RULE, '']);
+    });
+
+    test('a saved session keeps the output of an app that wraps its own input line onto rows filled to the last column', async () => {
+        // The app writes each row with a newline, so none is marked as wrapped
+        const saves = recordSavedSessions();
+        const rows = [`> ${'x'.repeat(78)}`, 'y'.repeat(80), 'z'.repeat(40)];
+        await receiveOutput(`$ app\r\n\x1b[?2004h${inputBox('> ')}\r\nr1\r\nr2\r\nr3\r\n${RULE}\r\n${rows.join('\r\n')}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)),
+            ['$ app', RULE, '>', RULE, '  ? for shortcuts', 'r1', 'r2', 'r3', RULE, rows[0], rows[1], '']);
+    });
+
+    test('a saved session keeps the output of an app that draws its first two lines again, the second running on for five rows', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n\x1b[?2004hA\r\nB\r\nC\r\nA\r\nB${'x'.repeat(400)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(0, 5), ['$ app', 'A', 'B', 'C', 'A']);
+    });
+
+    test('a saved session keeps the output of an app that draws its first line again under a blank row, above a filled input line', async () => {
+        // The blank row above a redrawn prompt counts only where the marked prompt started with one too
+        const saves = recordSavedSessions();
+        const input = `> ${'x'.repeat(78)}`;
+        await receiveOutput(`$ app\r\n\x1b[?2004hTitle\r\n> \r\nr1\r\nr2\r\n\r\nTitle\r\n${input}\r\nstatus`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'Title', '>', 'r1', 'r2', '', 'Title', input, '']);
+    });
+
+    test('a saved session keeps the output of an app that starts with a blank row and draws its first line again above a filled input line', async () => {
+        // ...and where the redrawn one has it as well
+        const saves = recordSavedSessions();
+        const input = `> ${'x'.repeat(78)}`;
+        await receiveOutput(`$ app\r\n\x1b[?2004h\r\nTitle\r\n> \r\nr1\r\nr2\r\nr3\r\nTitle\r\n${input}\r\nstatus`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '', 'Title', '>', 'r1', 'r2', 'r3', 'Title', input, '']);
+    });
+
+    // Apps that start with a blank row, as Starship's prompt does, and draw rows like it again under another: only
+    // a redrawn prompt's rows match, and only the rows the command was typed onto run on
+    const filledInput = `> ${'x'.repeat(78)}`;
+    for (const [shape, output, kept] of [
+        ['draws its first line and input line again above a status row',
+            'Title\r\n> \r\nr1\r\nr2\r\n\r\nTitle\r\n> hi\r\nstatus', ['Title', '>', 'r1', 'r2', '', 'Title', '> hi']],
+        ['draws its first five lines again',
+            'A\r\nB\r\nC\r\nD\r\nE\r\nr1\r\n\r\nA\r\nB\r\nC\r\nD\r\nE', ['A', 'B', 'C', 'D', 'E', 'r1', '', 'A', 'B', 'C', 'D']],
+        ['draws its input line again under a different first line',
+            `Title\r\n> \r\nr1\r\nr2\r\n\r\nOther\r\n${filledInput}\r\nmore`, ['Title', '>', 'r1', 'r2', '', 'Other', filledInput]],
+        ['draws its first line again under a longer one',
+            `ab\r\n> \r\nr1\r\nr2\r\n\r\nabc\r\n${filledInput}\r\nmore`, ['ab', '>', 'r1', 'r2', '', 'abc', filledInput]],
+        ['draws its first line again above a typed row, where it first drew an empty one',
+            'Title\r\n\r\nr1\r\nr2\r\nr3\r\n\r\nTitle\r\nsomething', ['Title', '', 'r1', 'r2', 'r3', '', 'Title']],
+        ['pads its input line with a space to the last column above a status row',
+            `Title\r\n> \r\nr1\r\nr2\r\n\r\nTitle\r\n> ${'x'.repeat(77)} \r\nstatus`, ['Title', '>', 'r1', 'r2', '', 'Title', `> ${'x'.repeat(77)}`]],
+        ['draws its first line and a rule again above a different row',
+            `Title\r\n${RULE}\r\npage 1\r\nr1\r\n\r\nTitle\r\n${RULE}\r\npage 2`, ['Title', RULE, 'page 1', 'r1', '', 'Title', RULE]],
+    ]) {
+        test(`a saved session keeps the output of an app that starts with a blank row and ${shape}`, async () => {
+            const saves = recordSavedSessions();
+            await receiveOutput(`$ app\r\n\x1b[?2004h\r\n${output}`);
+
+            assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '', ...kept, '']);
+        });
+    }
+
+    test('a saved session keeps the output of an app that starts with a blank row and draws a wrapped line again, the cursor moved up into it', async () => {
+        // The cursor's line runs on below it: compared whole, the two lines differ
+        const saves = recordSavedSessions();
+        const wide = (tail) => `${'x'.repeat(170)}${tail}`;
+        await receiveOutput(`$ app\r\n\x1b[?2004h\r\nTitle\r\n${wide('-old')}\r\nr1\r\nr2\r\nr3\r\n\r\nTitle\r\n${wide('-new')}\x1b[A`);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(0, 8), ['$ app', '', 'Title', wide('-old'), 'r1', 'r2', 'r3', '']);
+    });
+
+    test('a saved session keeps the output of an app that starts with a blank row and repeats a line under blank rows, then wraps one onto six rows', async () => {
+        // A redrawn prompt's rows lie below the marked command, not over it
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n\x1b[?2004h\r\nA\r\n\r\nA\r\n\r\nA${'x'.repeat(400)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(0, 6), ['$ app', '', 'A', '', 'A', '']);
+    });
+
     // The save at the prompt after `echo out`, before the listing: what each later save should equal
     const savedBeforeListing = (saved) => saved[1];
 
@@ -930,8 +1048,21 @@ describe('terminal control sequences', () => {
         assert.equal(saves.at(-1), '');
     });
 
-    test('a saved session leaves out a three-line prompt redrawn below a completion listing once the cursor moved down across the command\'s wrap', async () => {
+    test('a saved session leaves out a prompt with a blank row and three lines above its command redrawn below a completion listing once the cursor moved down across the command\'s wrap', async () => {
         // Three rows above the command, the most a prompt has
+        const saves = recordSavedSessions();
+        const prompt = '\r\ncontext\r\nuser@box\r\n/app\r\n$ ';
+        await receiveOutput(`\x1b[?2004h${prompt}echo out\r\n\x1b[?2004l\rout\r\n`);
+        await receiveOutput(`\x1b[?2004h${prompt}ls /tmp/d/\x07\r\n${COMPLETIONS}${prompt}ls /tmp/d/${'a'.repeat(70)}`);
+        await receiveOutput(ctrlA(1, 2));
+        await receiveOutput(ctrlE(1, 2));
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['', 'context', 'user@box', '/app', '$ echo out', 'out', '']);
+    });
+
+    test('a saved session keeps a three-line prompt with no blank first row redrawn below a completion listing once the cursor moved down across the command\'s wrap', async () => {
+        // Known limit: the redrawn prompt is looked for higher than the cursor's rows only under a blank row like
+        // Starship's, as an app's rows would pass for a prompt's. Pinned so that changing it is deliberate
         const saves = recordSavedSessions();
         const prompt = 'context\r\nuser@box\r\n/app\r\n$ ';
         await receiveOutput(`\x1b[?2004h${prompt}echo out\r\n\x1b[?2004l\rout\r\n`);
@@ -939,7 +1070,8 @@ describe('terminal control sequences', () => {
         await receiveOutput(ctrlA(1, 2));
         await receiveOutput(ctrlE(1, 2));
 
-        assert.deepEqual(savedLines(saves.at(-1)), ['context', 'user@box', '/app', '$ echo out', 'out', '']);
+        assert.deepEqual(savedLines(saves.at(-1)), ['context', 'user@box', '/app', '$ echo out', 'out', 'context', 'user@box',
+            '/app', `$ ls /tmp/d/`, COMPLETIONS.trimEnd(), 'context', 'user@box', '/app', `$ ls /tmp/d/${'a'.repeat(68)}`, '']);
     });
 
     test('a saved session keeps a plain prompt redrawn below a completion listing once the cursor moved down across the command\'s wrap', async () => {
