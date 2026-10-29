@@ -223,24 +223,23 @@ describe('service worker manager update prompt', () => {
         await settle();
     }
 
-    test('a lone tab offers the server\'s new version when a terminal tab reconnects', async () => {
-        await loneTabAcrossUpgrade();
-        await reconnect();
-        assert.deepEqual(prompts(), [PROMPT_1_3_1]);
-    });
-
-    test('a lone tab offers the server\'s new version when the page becomes visible', async () => {
-        await loneTabAcrossUpgrade();
-        await becomeVisible();
-        assert.deepEqual(prompts(), [PROMPT_1_3_1]);
-    });
-
-    test('a lone tab offers the server\'s new version on the hourly check', async () => {
-        await loneTabAcrossUpgrade();
+    async function hourPasses() {
         mock.timers.tick(60 * 60 * 1000);
         await settle();
-        assert.deepEqual(prompts(), [PROMPT_1_3_1]);
-    });
+    }
+
+    // The checks no longer go through the worker, so a page no worker controls yet asks the server too
+    for (const controlled of [true, false]) {
+        const page = controlled ? 'a lone tab' : 'a page no worker controls yet';
+        for (const [when, check] of [['when a terminal tab reconnects', reconnect],
+            ['when the page becomes visible', becomeVisible], ['on the hourly check', hourPasses]]) {
+            test(`${page} offers the server's new version ${when}`, async () => {
+                await loneTabAcrossUpgrade({ controlled });
+                await check();
+                assert.deepEqual(prompts(), [PROMPT_1_3_1]);
+            });
+        }
+    }
 
     // A page should match the server it talks to, so a server rolled back to an older image is offered too
     test('a page newer than the server offers the server\'s version', async () => {
@@ -248,12 +247,6 @@ describe('service worker manager update prompt', () => {
         server.version = '1.2.0';
         await reconnect();
         assert.deepEqual(prompts(), ['New version v1.2.0 available! Current: v1.3.0 Update Now Later']);
-    });
-
-    test('a page no worker controls yet still asks the server', async () => {
-        await loneTabAcrossUpgrade({ controlled: false });
-        await becomeVisible();
-        assert.deepEqual(prompts(), [PROMPT_1_3_1]);
     });
 
     test('asks the server itself for config.js, under the base path', async () => {
@@ -311,6 +304,15 @@ describe('service worker manager update prompt', () => {
         });
     }
 
+    test('a page that does not know its own version shows no prompt', async () => {
+        server.version = '1.3.1';
+        await startManager({ pageVersion: undefined, cachedVersion: '1.3.0', controlled: true });
+        await reconnect();
+        await becomeVisible();
+        assert.equal(fetched.length >= 2, true, 'it asked the server');
+        assert.deepEqual(prompts(), []);
+    });
+
     test('no second request while the prompt is up', async () => {
         await loneTabAcrossUpgrade();
         await reconnect();
@@ -334,6 +336,12 @@ describe('service worker manager update prompt', () => {
         const { fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
         fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
         assert.deepEqual(prompts(), [PROMPT_1_3_1]);
+    });
+
+    test('a worker reporting no change shows no prompt', async () => {
+        const { fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
+        fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.1', newVersion: '1.3.1' });
+        assert.deepEqual(prompts(), []);
     });
 
     test('the new worker\'s word shows no prompt on a page already on the new version', async () => {
