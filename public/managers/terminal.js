@@ -794,6 +794,8 @@ export default class TerminalManager {
         let reconnectAttempts = 0;
         // Whether the tab has said it is reconnecting since it was last connected: once is enough
         let outageReported = false;
+        // Whether the tab has been connected before, so that its next connection is a reconnect
+        let connectedBefore = false;
         const self = this; // Store reference to 'this' for use in callbacks
 
         function connectionUnderway() {
@@ -864,6 +866,13 @@ export default class TerminalManager {
                     }
                 }, 100);
                 startHeartbeat(socket);
+
+                // A reconnect can be to a server that was upgraded meanwhile, so the page checks its version. Last,
+                // once the new connection is set up
+                if (connectedBefore) {
+                    window.dispatchEvent(new Event('dumbterm:reconnected'));
+                }
+                connectedBefore = true;
             };
 
             socket.onclose = (event) => {

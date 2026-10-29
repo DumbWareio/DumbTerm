@@ -72,6 +72,7 @@ function installBrowserGlobals() {
         location: { protocol: 'http:', host: 'localhost' },
         appConfig: { basePath: '' },
         addEventListener: noop,
+        dispatchEvent: noop,
     };
     globalThis.document = { documentElement: {}, addEventListener: noop };
     globalThis.getComputedStyle = () => ({ getPropertyValue: () => '' });
