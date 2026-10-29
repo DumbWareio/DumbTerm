@@ -426,11 +426,14 @@ export default class ServiceWorkerManager {
         const updateNotification = document.createElement('div');
         updateNotification.className = 'update-notification';
         updateNotification.innerHTML = `
-            <p>New version v${newVersion} available!</p>
-            <p class="update-details">Current: v${currentVersion}</p>
+            <p></p>
+            <p class="update-details"></p>
             <button id="update-now">Update Now</button>
             <button id="update-later" class="secondary">Later</button>
         `;
+        // The versions go in as text, whoever reported them
+        updateNotification.querySelector('p').textContent = `New version v${newVersion} available!`;
+        updateNotification.querySelector('.update-details').textContent = `Current: v${currentVersion}`;
         document.body.appendChild(updateNotification);
         
         // Set up buttons

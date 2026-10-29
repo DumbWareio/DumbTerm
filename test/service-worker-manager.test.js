@@ -301,6 +301,13 @@ describe('service worker manager update prompt', () => {
         assert.deepEqual(fetched, [{ url: '/term/config.js', method: 'HEAD', cache: 'no-store' }]);
     });
 
+    test('shows the versions as text', async () => {
+        await loneTabAcrossUpgrade();
+        server.version = '1.3.1<b>beta</b>';
+        await reconnect();
+        assert.deepEqual(prompts(), ['New version v1.3.1<b>beta</b> available! Current: v1.3.0 Update Now Later']);
+    });
+
     // The worker controlling the page caches the release it was registered with, so it can't install the server's
     // new one; a reload loads it, network-first
     test('Update Now on the server\'s new version reloads the page once the server answers', async () => {
@@ -441,6 +448,12 @@ describe('service worker manager update prompt', () => {
         const { fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
         fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
         assert.deepEqual(prompts(), [PROMPT_1_3_1]);
+    });
+
+    test('the new worker\'s versions are shown as text', async () => {
+        const { fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
+        fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0<i>', newVersion: '1.3.1<b>beta</b>' });
+        assert.deepEqual(prompts(), ['New version v1.3.1<b>beta</b> available! Current: v1.3.0<i> Update Now Later']);
     });
 
     test('Update Now on the new worker\'s word still asks the worker to update', async () => {
