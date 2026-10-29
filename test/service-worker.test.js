@@ -108,6 +108,14 @@ async function getVersion(worker) {
     return answer;
 }
 
+// A worker registered without a release version (an old page's bare registration), installed: it takes `version`
+// from config.js, and a page's SET_VERSION can change it while a fill runs, so a fill of another version can start
+async function installUnversioned(version, options = {}) {
+    const worker = loadWorker({ ...options, version: '1730000000000', config: { version } });
+    await install(worker);
+    return worker;
+}
+
 // What the page sends when the user picks Update Now on the worker's own UPDATE_AVAILABLE
 async function performUpdate(worker) {
     await worker.listeners.message({ data: { type: 'PERFORM_UPDATE' } });
@@ -323,10 +331,10 @@ describe('service worker activation', () => {
         }
     });
 
-    test('two fills for different versions at once leave a filled cache', async () => {
+    test('two fills for different versions at once leave one filled cache', async () => {
         // A first visit: 1.3.3 activates while a page still running 1.3.2 starts a fill of its own
         let release;
-        const worker = loadWorker({ version: '1.3.3', manifest: ['index.html', 'index.js'] });
+        const worker = await installUnversioned('1.3.3', { manifest: ['index.html', 'index.js'] });
         worker.server.manifestHeld = new Promise((resolve) => { release = resolve; });
         const pending = [];
         worker.listeners.activate({ waitUntil(promise) { pending.push(promise); } });
@@ -336,8 +344,27 @@ describe('service worker activation', () => {
         release();
         await Promise.all(pending);
         const names = [...worker.store.keys()];
-        assert.ok(names.length > 0, 'no cache left');
+        assert.equal(names.length, 1, names.join(', '));
         for (const name of names) assert.deepEqual(cachedUrls(worker, name), [ORIGIN + 'index.html', ORIGIN + 'index.js'], name);
+    });
+
+    test('two fills for different versions at once keep the cache of the one that finishes last', async () => {
+        // As above, with the page's fill finishing first
+        let releaseFirst;
+        let releaseSecond;
+        const worker = await installUnversioned('1.3.3', { manifest: ['index.html', 'index.js'] });
+        worker.server.manifestHeld = new Promise((resolve) => { releaseFirst = resolve; });
+        const pending = [];
+        worker.listeners.activate({ waitUntil(promise) { pending.push(promise); } });
+        await manifestRequested(worker);
+        worker.server.manifestHeld = new Promise((resolve) => { releaseSecond = resolve; });
+        const second = worker.listeners.message({ data: { type: 'SET_VERSION', version: '1.3.2' } });
+        await manifestRequested(worker, 2);
+        releaseSecond();
+        await second;
+        releaseFirst();
+        await Promise.all(pending);
+        assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_/_V1.3.3': 2 });
     });
 
     test('deletes an older cache whatever its DumbTerm name looks like', async () => {
