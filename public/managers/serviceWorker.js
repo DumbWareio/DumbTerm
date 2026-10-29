@@ -584,11 +584,13 @@ export default class ServiceWorkerManager {
      * @param {Object} data - Update completion data
      */
     handleUpdateComplete(data) {
-        // Clear any pending timeout
-        if (this.updateTimeout) {
-            clearTimeout(this.updateTimeout);
-            this.updateTimeout = null;
-        }
+        // Whatever the outcome, the Update Now waiting on the worker is over
+        const attemptWaiting = this.updateAttempt !== null;
+        this.cancelUpdateAttempt();
+        
+        // The worker tells every tab when an update fails, so only the tab whose Update Now still waits says so;
+        // any other leaves its page, and a prompt that replaced that Update Now, as they are
+        if (data.success === false && !attemptWaiting) return;
         
         // Reset notification tracking state
         this.updateNotificationActive = false;
@@ -599,15 +601,7 @@ export default class ServiceWorkerManager {
         existingNotifications.forEach(notification => notification.remove());
         
         if (data.success === false) {
-            // Show error notification
-            const errorNotification = document.createElement('div');
-            errorNotification.className = 'update-notification error';
-            errorNotification.innerHTML = `
-                <p>Update failed: ${data.error || 'Unknown error'}</p>
-                <button onclick="this.parentElement.remove()">Dismiss</button>
-            `;
-            document.body.appendChild(errorNotification);
-            setTimeout(() => errorNotification.remove(), 5000);
+            this.showUpdateError(`Update failed: ${data.error || 'Unknown error'}`);
         } else {
             // Store cacheName if available for future use
             if (data.cacheName) {

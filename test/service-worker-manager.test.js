@@ -610,6 +610,42 @@ describe('service worker manager update prompt', () => {
         assert.equal(window.location.reloads, 0);
     });
 
+    // The worker tells every tab when an update it was asked for fails; only the tab whose Update Now waits says so
+    test('Update Now on the new worker\'s word that fails says so, and the footer shows the page\'s version again', async () => {
+        const { manager, displayed, fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
+        fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
+        await click('update-now');
+        assert.equal(displayed.at(-1), 'loading');
+        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', success: false, error: 'boom' });
+        assert.deepEqual(prompts(), ['Update failed: boom Dismiss']);
+        assert.equal(displayed.at(-1), '1.3.0', 'the footer is no longer loading');
+        assert.equal(manager.updateAttempt, null, 'the attempt is over');
+        mock.timers.tick(5000);
+        assert.deepEqual(prompts(), []);
+        mock.timers.tick(30000);
+        assert.deepEqual(prompts(), [], 'no "Update timed out" later on');
+        assert.equal(displayed.at(-1), '1.3.0');
+    });
+
+    test('Update Now on the new worker\'s word that a newer prompt replaced shows no error when it fails', async () => {
+        const { displayed, fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
+        fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
+        await click('update-now');
+        fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.2' });
+        assert.equal(displayed.at(-1), '1.3.0', 'the footer is no longer loading');
+        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', success: false, error: 'boom' });
+        assert.deepEqual(prompts(), [PROMPT_1_3_2]);
+    });
+
+    test('an update that fails in another tab leaves this tab\'s prompt as it is', async () => {
+        const { displayed, fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
+        fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
+        const footer = displayed.length;
+        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', success: false, error: 'boom' });
+        assert.deepEqual(prompts(), [PROMPT_1_3_1]);
+        assert.equal(displayed.length, footer, 'the footer is left as it is');
+    });
+
     // The same versions from the worker while the server's prompt is up leave that prompt as it is, so its
     // Update Now still reloads
     test('the new worker\'s word while the server\'s prompt is up leaves that prompt', async () => {
