@@ -559,13 +559,14 @@ function createTerminal(ws) {
         term.kill();
     });
 
-    // Handle terminal exit. A shell that exits non-zero within a second of its spawn never started (a bad SHELL or
-    // HOME: node-pty prints why and the shell exits with 1), which the page tells from a shell the user ended
-    term.on('exit', (code) => {
-        debugLog('Terminal process exited with code:', code);
+    // Handle terminal exit. A shell that exits non-zero, or is killed by a signal, within a second of its spawn never
+    // started (a bad SHELL or HOME: on Linux node-pty prints why, and the shell exits with 1), which the page tells
+    // from a shell the user ended. node-pty reports a signal as code 0 and the signal
+    term.on('exit', (code, signal) => {
+        debugLog('Terminal process exited with code:', code, 'signal:', signal);
         if (ws.readyState === ws.OPEN) {
-            if (code !== 0 && Date.now() - spawnedAt < 1000) {
-                ws.close(1011, `Shell exited with code ${code}`);
+            if ((code !== 0 || signal) && Date.now() - spawnedAt < 1000) {
+                ws.close(1011, signal ? `Shell was killed by signal ${signal}` : `Shell exited with code ${code}`);
             } else {
                 ws.close();
             }

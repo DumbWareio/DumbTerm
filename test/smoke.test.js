@@ -424,10 +424,11 @@ for (const [what, env, nodePtyLine] of [
     });
 }
 
-// Any shell that ends within a second of its spawn without exiting cleanly never started, including one that fails
-// late in that second
+// Any shell that ends within a second of its spawn without exiting cleanly never started: one that fails late in
+// that second, and one killed by a signal (which node-pty reports as code 0 and the signal)
 for (const [what, fixture, reason] of [
     ['fails 0.6 s after it starts', 'slow-failing-shell.sh', 'Shell exited with code 2'],
+    ['is killed by a signal as it starts', 'self-killing-shell.sh', 'Shell was killed by signal 9'],
 ]) {
     describe(`DumbTerm server when the shell ${what}`, () => {
         let server;
