@@ -335,13 +335,34 @@ describe('service worker manager update prompt', () => {
         assert.equal(window.location.reloads, 1);
     });
 
-    test('a prompt put off with Later comes back on the next check', async () => {
+    // Later puts off the version it offered: switching back to the page doesn't bring it back, but the checks that
+    // come with a reconnect or every hour do
+    test('a version put off with Later is not offered again when the page becomes visible', async () => {
         await loneTabAcrossUpgrade();
         await reconnect();
         await click('update-later');
         assert.deepEqual(prompts(), []);
         await becomeVisible();
-        assert.deepEqual(prompts(), [PROMPT_1_3_1]);
+        assert.deepEqual(prompts(), []);
+    });
+
+    for (const [when, check] of [['when a terminal tab reconnects', reconnect], ['on the hourly check', hourPasses]]) {
+        test(`a version put off with Later is offered again ${when}`, async () => {
+            await loneTabAcrossUpgrade();
+            await reconnect();
+            await click('update-later');
+            await check();
+            assert.deepEqual(prompts(), [PROMPT_1_3_1]);
+        });
+    }
+
+    test('a version newer than the one put off with Later is offered when the page becomes visible', async () => {
+        await loneTabAcrossUpgrade();
+        await reconnect();
+        await click('update-later');
+        server.version = '1.3.2';
+        await becomeVisible();
+        assert.deepEqual(prompts(), ['New version v1.3.2 available! Current: v1.3.0 Update Now Later']);
     });
 
     test('several tabs reconnecting at once show one prompt', async () => {

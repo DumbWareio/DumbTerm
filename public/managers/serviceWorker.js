@@ -11,6 +11,8 @@ export default class ServiceWorkerManager {
         this.updateNotificationActive = false;
         this.lastCheckedVersionPair = null;
         this._receivedCacheName = null;
+        // The version the user put off with Later
+        this.dismissedVersion = null;
         
         // Initialize with basePath from config
         this.basePath = window.appConfig?.basePath || '';
@@ -162,10 +164,11 @@ export default class ServiceWorkerManager {
      * Sets up periodic version checking when page is visible
      */
     setupPeriodicVersionCheck() {
-        // Check for updates when the page becomes visible
+        // Check for updates when the page becomes visible, except for a version put off with Later: switching
+        // back to the page happens too often to ask again each time
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible') {
-                this.checkVersion();
+                this.checkVersion({ offerDismissed: false });
             }
         });
         
@@ -215,9 +218,11 @@ export default class ServiceWorkerManager {
      * Asks the server which version it runs, and offers the update when it is not the page's.
      * The worker can't tell: it was registered as service-worker.js?v=<page version> and goes on reporting that
      * version after the server is upgraded, until another page load registers the new one
+     * @param {Object} [options]
+     * @param {boolean} [options.offerDismissed=true] - Whether to offer again a version put off with Later
      * @returns {Promise<void>}
      */
-    async checkVersion() {
+    async checkVersion({ offerDismissed = true } = {}) {
         // Skip check if an update notification is already active
         if (this.updateNotificationActive) {
             console.log("Update notification already active, skipping version check");
@@ -235,6 +240,9 @@ export default class ServiceWorkerManager {
         
         const pageVersion = window.appConfig?.version;
         console.log(`Version check: page=${pageVersion}, server=${serverVersion}`);
+        if (!offerDismissed && serverVersion === this.dismissedVersion) {
+            return;
+        }
         if (this.shouldShowUpdateNotification(pageVersion, serverVersion)) {
             this.showUpdateNotification(pageVersion, serverVersion, true);
         }
@@ -433,6 +441,7 @@ export default class ServiceWorkerManager {
         document.getElementById('update-later').addEventListener('click', () => {
             updateNotification.remove();
             this.updateNotificationActive = false;
+            this.dismissedVersion = newVersion;
         });
         
         // Log to console for debugging
