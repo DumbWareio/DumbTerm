@@ -160,17 +160,10 @@ async function checkCacheVersion() {
     // Check if current version cache exists
     const currentCacheExists = keys.includes(CACHE_NAME);
     
-    // Check for old versions
-    const oldCaches = keys.filter(key => isStaleCache(key, CACHE_NAME));
-    
-    console.log(
-        `Cache check: existingVersion=${existingVersion}, ` +
-        `currentCacheExists=${currentCacheExists}, hasOldVersions=${oldCaches.length > 0}`
-    );
+    console.log(`Cache check: existingVersion=${existingVersion}, currentCacheExists=${currentCacheExists}`);
     
     return {
         currentCacheExists,
-        oldCaches,
         existingVersion,
         isFirstInstall: !existingCache
     };
