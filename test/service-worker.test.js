@@ -551,6 +551,7 @@ describe('service worker caches on an origin shared by two installs', () => {
     test('an upgrade deletes the cache an earlier build named without the install\'s path once its own is filled', async () => {
         const worker = loadWorker({ scope: '/a/', version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_V1.3.0'], manifest: ['index.html'] });
         worker.store.get('DUMBTERM_CACHE_V1.3.0').set(ORIGIN + 'a/index.html', fakeResponse('old'));
+        await install(worker);
         await activate(worker);
         assert.deepEqual(urlsByCache(worker.store), { 'DUMBTERM_CACHE_/a/_V1.3.1': [ORIGIN + 'a/index.html'] });
     });
