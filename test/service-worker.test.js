@@ -249,4 +249,12 @@ describe('service worker Update Now', () => {
         assert.equal(failures(worker).length, 1);
         assert.match(failures(worker)[0].error, /500/);
     });
+
+    test('works after the same worker already filled its cache at activation', async () => {
+        const worker = loadWorker({ version: '1.3.1', manifest: ['index.html', 'index.js'] });
+        await activate(worker);
+        await performUpdate(worker);
+        assert.deepEqual(failures(worker), []);
+        assert.ok(worker.messages.some((message) => message.type === 'UPDATE_COMPLETE' && message.success === true));
+    });
 });

@@ -4,7 +4,6 @@
 const REGISTERED_VERSION = new URL(self.location.href).searchParams.get('v');
 let CACHE_VERSION = /^\d+\.\d+\.\d+/.test(REGISTERED_VERSION || '') ? REGISTERED_VERSION : "1.0.0"; // Default fallback version
 let CACHE_NAME = `DUMBTERM_CACHE_V${CACHE_VERSION}`; // Default format, will be overridden
-const ASSETS_TO_CACHE = [];
 const BASE_PATH = self.registration.scope;
 
 /**
@@ -268,13 +267,14 @@ async function installCache(isFirstInstall = false) {
         const response = await fetch(getAssetPath("assets/asset-manifest.json"));
         if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
         
+        // Build the list for this fill only: addAll rejects a list that names an asset twice, so one
+        // kept across fills would fail every fill after the first in this worker's lifetime
         const assets = await response.json();
-        const processedAssets = assets.map(asset => getAssetPath(asset));
-        ASSETS_TO_CACHE.push(...processedAssets);
+        const assetsToCache = assets.map(asset => getAssetPath(asset));
         
-        console.log("Caching assets:", ASSETS_TO_CACHE);
+        console.log("Caching assets:", assetsToCache);
         const cache = await caches.open(CACHE_NAME);
-        await cache.addAll(ASSETS_TO_CACHE);
+        await cache.addAll(assetsToCache);
         console.log("Assets cached successfully");
         
         // Clear old caches only now that the new one is filled: until then they are what works offline
