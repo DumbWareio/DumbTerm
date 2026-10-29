@@ -645,6 +645,15 @@ describe('service worker manager update prompt', () => {
         assert.equal(displayed.at(-1), '1.3.0');
     });
 
+    test('Update Now on the new worker\'s word that fails after the update timed out shows no second error', async () => {
+        const { fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
+        fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
+        await click('update-now');
+        mock.timers.tick(30000);
+        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', success: false, error: 'boom' });
+        assert.deepEqual(prompts(), ['Update timed out. Please try again. Dismiss']);
+    });
+
     test('Update Now on the new worker\'s word that a newer prompt replaced shows no error when it fails', async () => {
         const { displayed, fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
         fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
@@ -663,6 +672,18 @@ describe('service worker manager update prompt', () => {
         assert.deepEqual(prompts(), [PROMPT_1_3_1]);
         assert.equal(displayed.length, footer, 'the footer is left as it is');
     });
+
+    // A finished update reloads every tab, whether or not it asked, to the version the server now runs
+    for (const [tab, clickUpdateNow] of [['the tab that asked', true], ['a tab that did not ask', false]]) {
+        test(`an update the worker finished reloads ${tab}`, async () => {
+            const { fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
+            fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
+            if (clickUpdateNow) await click('update-now');
+            fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', success: true });
+            mock.timers.tick(100);
+            assert.equal(window.location.reloads, 1);
+        });
+    }
 
     // The same versions from the worker while the server's prompt is up leave that prompt as it is, so its
     // Update Now still reloads
