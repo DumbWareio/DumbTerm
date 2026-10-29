@@ -240,6 +240,15 @@ describe('service worker activation', () => {
         });
     }
 
+    test('registered with the default version 1.0.0, takes config.js\'s version as one registered without a version does', async () => {
+        const worker = loadWorker({ version: '1.0.0', config: { version: '1.3.2' }, manifest: ['index.html'] });
+        await install(worker);
+        await activate(worker);
+        const answer = await getVersion(worker);
+        assert.deepEqual([answer.newVersion, answer.cacheName], ['1.3.2', 'DUMBTERM_CACHE_/_V1.3.2']);
+        assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_/_V1.3.2': 1 });
+    });
+
     test('an upgrade fills the new version\'s cache with the manifest\'s assets and deletes the old one', async () => {
         const worker = loadWorker({ version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_/_V1.3.0'], manifest: ['index.html', 'index.js'] });
         worker.store.get('DUMBTERM_CACHE_/_V1.3.0').set(ORIGIN + 'index.js', fakeResponse('old'));

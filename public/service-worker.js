@@ -5,7 +5,8 @@ const REGISTERED_VERSION = new URL(self.location.href).searchParams.get('v');
 // A worker registered with a release version keeps it, whatever version config.js or a page's SET_VERSION names:
 // pages show their own version, and the next release's page registers a worker of its own. A worker registered
 // without one (an old page's bare registration, or a page that could not read config.js) takes the version they name.
-const HAS_RELEASE_VERSION = /^\d+\.\d+\.\d+/.test(REGISTERED_VERSION || '');
+// 1.0.0 is the version a worker without one starts at, so it counts as none.
+const HAS_RELEASE_VERSION = /^\d+\.\d+\.\d+/.test(REGISTERED_VERSION || '') && REGISTERED_VERSION !== "1.0.0";
 let CACHE_VERSION = HAS_RELEASE_VERSION ? REGISTERED_VERSION : "1.0.0"; // Default fallback version
 const BASE_PATH = self.registration.scope;
 // Cache Storage is shared by every install on the origin, so each cache name carries the path this install is
