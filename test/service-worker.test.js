@@ -16,17 +16,35 @@ function fakeResponse(body, { status = 200, type = 'basic', redirected = false }
     return { body, status, type, redirected, ok: status === 200, clone() { return this; }, json: async () => JSON.parse(body) };
 }
 
-// Load the worker as the browser would register it (service-worker.js?v=<version>)
-function loadWorker({ version = '1.3.0', network = async () => fakeResponse('network'), cacheNames = [] } = {}) {
+// Load the worker as the browser would register it (service-worker.js?v=<version>).
+// `server.manifest` is what assets/asset-manifest.json lists, and `server.manifestStatus` its HTTP status;
+// tests can change either between steps. Messages the worker posts to its one page land in `messages`.
+function loadWorker({ version = '1.3.0', network = async () => fakeResponse('network'), cacheNames = [], manifest = [], manifestStatus = 200 } = {}) {
     const store = new Map(cacheNames.map((name) => [name, new Map()]));
     const listeners = {};
     const fetchCalls = [];
+    const messages = [];
+    const server = { manifest, manifestStatus };
+    const fetch = async (request) => {
+        const url = typeof request === 'string' ? request : request.url;
+        fetchCalls.push(url);
+        if (url.endsWith('config.js')) return fakeResponse(`window.appConfig = {"version":"${version}"};`);
+        if (url.endsWith('asset-manifest.json')) return fakeResponse(JSON.stringify(server.manifest), { status: server.manifestStatus });
+        return network(request);
+    };
     const openCache = (name) => {
         if (!store.has(name)) store.set(name, new Map());
         const entries = store.get(name);
         return {
             put: async (request, response) => { entries.set(request.url, response); },
-            addAll: async (urls) => urls.forEach((url) => entries.set(url, fakeResponse(url))),
+            // As in Chromium: a URL listed twice rejects the whole call, and so does any failed response,
+            // in which case nothing is stored
+            addAll: async (urls) => {
+                if (new Set(urls).size !== urls.length) throw new TypeError("Failed to execute 'addAll' on 'Cache': duplicate requests");
+                const responses = await Promise.all(urls.map((url) => fetch(url)));
+                if (responses.some((response) => !response.ok)) throw new TypeError('Request failed');
+                urls.forEach((url, i) => entries.set(url, responses[i]));
+            },
         };
     };
     const sandbox = {
@@ -34,13 +52,7 @@ function loadWorker({ version = '1.3.0', network = async () => fakeResponse('net
         URL,
         Response: class { constructor(body, init) { Object.assign(this, { body, ...init }); } },
         setTimeout: (fn) => fn(),
-        fetch: async (request) => {
-            const url = typeof request === 'string' ? request : request.url;
-            fetchCalls.push(url);
-            if (url.endsWith('config.js')) return fakeResponse(`window.appConfig = {"version":"${version}"};`);
-            if (url.endsWith('asset-manifest.json')) return fakeResponse('[]');
-            return network(request);
-        },
+        fetch,
         caches: {
             open: async (name) => openCache(name),
             keys: async () => [...store.keys()],
@@ -56,12 +68,31 @@ function loadWorker({ version = '1.3.0', network = async () => fakeResponse('net
             registration: { scope: ORIGIN },
             addEventListener: (type, fn) => { listeners[type] = fn; },
             skipWaiting: async () => {},
-            clients: { claim: async () => {}, matchAll: async () => [] },
+            clients: { claim: async () => {}, matchAll: async () => [{ postMessage: (message) => messages.push(message) }] },
         },
     };
     vm.runInNewContext(WORKER_SOURCE, sandbox);
-    return { listeners, store, fetchCalls };
+    return { listeners, store, fetchCalls, messages, server };
 }
+
+// The worker posts some messages from promise callbacks it does not wait for; let those run
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+async function activate(worker) {
+    const pending = [];
+    worker.listeners.activate({ waitUntil(promise) { pending.push(promise); } });
+    await Promise.all(pending);
+    await settle();
+}
+
+// What the page sends when the user picks Update Now on the worker's own UPDATE_AVAILABLE
+async function performUpdate(worker) {
+    await worker.listeners.message({ data: { type: 'PERFORM_UPDATE' } });
+    await settle();
+}
+
+const cacheSizes = (worker) => Object.fromEntries([...worker.store].map(([name, entries]) => [name, entries.size]));
+const failures = (worker) => worker.messages.filter((message) => message.type === 'UPDATE_COMPLETE' && message.success === false);
 
 // Dispatch a fetch event; resolves with the response the worker chose, or null if it did not respond
 async function dispatchFetch(worker, request) {
@@ -147,5 +178,36 @@ describe('service worker activation', () => {
         worker.listeners.activate({ waitUntil(promise) { pending.push(promise); } });
         await Promise.all(pending);
         assert.ok(worker.store.has('DUMBTERM_CACHE_V1.2.0'));
+    });
+
+    test('an upgrade fills the new version\'s cache with the manifest\'s assets and deletes the old one', async () => {
+        const worker = loadWorker({ version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_V1.3.0'], manifest: ['index.html', 'index.js'] });
+        worker.store.get('DUMBTERM_CACHE_V1.3.0').set(ORIGIN + 'index.js', fakeResponse('old'));
+        await activate(worker);
+        assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_V1.3.1': 2 });
+        assert.deepEqual(failures(worker), []);
+    });
+
+    test('a later version deletes every older cache, including one a failed upgrade left behind', async () => {
+        // A failed 1.3.1 upgrade kept 1.3.0's cache, and the pages it served started a 1.3.1 cache
+        const worker = loadWorker({ version: '1.3.2', cacheNames: ['DUMBTERM_CACHE_V1.3.0', 'DUMBTERM_CACHE_V1.3.1'], manifest: ['index.html'] });
+        worker.store.get('DUMBTERM_CACHE_V1.3.1').set(ORIGIN + 'index.js', fakeResponse('partial'));
+        await activate(worker);
+        assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_V1.3.2': 1 });
+    });
+
+    test('does not refill a current cache that is the only one', async () => {
+        const worker = loadWorker({ version: '1.3.0', cacheNames: ['DUMBTERM_CACHE_V1.3.0'], manifest: ['index.html'] });
+        await activate(worker);
+        assert.ok(!worker.fetchCalls.some((url) => url.endsWith('asset-manifest.json')));
+    });
+});
+
+describe('service worker Update Now', () => {
+    test('fills the new cache, deletes the old one and reports success', async () => {
+        const worker = loadWorker({ version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_V1.3.0'], manifest: ['index.html'] });
+        await performUpdate(worker);
+        assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_V1.3.1': 1 });
+        assert.ok(worker.messages.some((message) => message.type === 'UPDATE_COMPLETE' && message.success === true));
     });
 });
