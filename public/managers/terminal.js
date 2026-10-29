@@ -13,7 +13,18 @@ const PROMPT_MAX_ROWS_BELOW_MARK = 4;
 // row: look for it, from its first line (after a blank one, Starship's) down to the command, starting in the
 // rows a prompt reaches above, and on, the cursor's row. The command is the cursor's whole line, wrapped onto
 // as many rows as it takes (one that starts above those rows is no command), and may have been typed on (or
-// erased back) since the listing, so there one line need only start like the other
+// erased back) since the listing, so there one line need only start like the other.
+// A prompt that starts with a blank row, like Starship's, is also looked for higher: redrawn under a blank row, with
+// the rows above its command (Starship's top line) repeating the marked one's, its command may start as high as it
+// is long and, where it was typed on past the marked one's end, run on from a row filled to its last column into
+// one not marked as wrapped: readline moves the cursor down a wrapped command with a newline, which unmarks the row
+// it moves to. Without the blank rows an app's rows would pass for a prompt (its title redrawn above an input line
+// that fills its row), so known limits: a prompt with no blank first row (a plain one) redrawn with a command
+// typed past four rows after the listing, or after the cursor moved down across its command's wrap (Ctrl-E, End,
+// →), stays in the save, and so does any prompt where that wrap leaves the last column empty or blank (a wide
+// character that did not fit, a space) or the marked command filled its row. And the other way: an app that starts
+// with a blank row and later draws it, its title and an input line that fills its row (or wraps) again reads as
+// such a prompt, so its output from the first blank row on is left out
 function redrawnPromptRow(buffer, markedRow, cursorRow) {
     const text = (row) => buffer.getLine(row)?.translateToString(true) ?? '';
     const line = (row) => {
@@ -35,6 +46,44 @@ function redrawnPromptRow(buffer, markedRow, cursorRow) {
             same = row === commandRow ? sameCommand(line(marked), command) : text(marked) === text(row);
         }
         if (same) return markedRow;
+    }
+    // Whether a row's last cell holds text, or the right half of a wide character (which has none of its own)
+    const filled = (row) => {
+        const cells = buffer.getLine(row);
+        const last = cells?.getCell(cells.length - 1);
+        return !!last && (last.getWidth() === 0 || last.getChars().trim() !== '');
+    };
+    // Whether the line starting on a row ends at its last row's last column
+    const lineFilled = (row) => {
+        while (buffer.getLine(row + 1)?.isWrapped) row++;
+        return filled(row);
+    };
+    // The first characters of a command, as many as asked for, from its rows listed last row first
+    const commandStart = (rows, length) => {
+        let prefix = '';
+        for (let i = rows.length - 1; i >= 0 && prefix.length < length; i--) {
+            prefix += rows[i].slice(0, length - prefix.length);
+        }
+        return prefix;
+    };
+    // The redrawn prompt's rows lie wholly below the marked command's first row. A row not marked as wrapped runs
+    // on from a filled one only where the command was typed on: the marked one ended short of the last column. The
+    // command's rows, from the cursor's line (with the rows it wraps onto) up to the row it starts on, are gathered a
+    // row at a time as the search moves up, and only its start is compared: one line starting like the other reads
+    // no more of it than one character past the marked command
+    for (let start = cursorRow, unmarked = false, rows = [line(cursorRow)]; first > markedRow && start > first + 2;
+        rows.push(text(--start))) {
+        for (let above = 1; above < PROMPT_MAX_ROWS_BELOW_MARK && start - above > first + above; above++) {
+            let same = text(start - above - 1) === '';
+            for (let row = 0; same && row < above; row++) same = text(first + row) === text(start - above + row);
+            if (!same || (unmarked && lineFilled(first + above))) continue;
+            const marked = line(first + above);
+            if (sameCommand(marked, commandStart(rows, marked.length + 1))) return markedRow;
+        }
+        if (!buffer.getLine(start)?.isWrapped) {
+            if (!filled(start - 1)) break;
+            unmarked = true;
+        }
     }
     return null;
 }
