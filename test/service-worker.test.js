@@ -279,6 +279,24 @@ describe('service worker activation', () => {
         }
     });
 
+    test('a failed fill that a page\'s version overtook still names its own version', async () => {
+        let release;
+        const worker = loadWorker({ version: '1.3.3', cacheNames: ['DUMBTERM_CACHE_V1.3.2'], manifestStatus: 500 });
+        worker.server.manifestHeld = new Promise((resolve) => { release = resolve; });
+        const pending = [];
+        worker.listeners.activate({ waitUntil(promise) { pending.push(promise); } });
+        await manifestRequested(worker);
+        await worker.listeners.message({ data: { type: 'SET_VERSION', version: '1.3.2', cacheName: 'DUMBTERM_CACHE_V1.3.2' } });
+        release();
+        await Promise.all(pending);
+        await settle();
+        const fillMessages = worker.messages.filter((message) => message.cacheName);
+        assert.ok(fillMessages.length > 0);
+        for (const message of fillMessages) {
+            assert.deepEqual([message.currentVersion, message.cacheName], ['1.3.3', 'DUMBTERM_CACHE_V1.3.3']);
+        }
+    });
+
     test('two fills for different versions at once leave a filled cache', async () => {
         // A first visit: 1.3.3 activates while a page still running 1.3.2 starts a fill of its own
         let release;
@@ -323,6 +341,8 @@ describe('service worker Update Now', () => {
         assert.deepEqual(cachedUrls(worker, 'DUMBTERM_CACHE_V1.3.1'), [ORIGIN + 'index.html']);
         assert.ok(worker.messages.some((message) => message.type === 'UPDATE_COMPLETE' && message.success === true
             && message.version === '1.3.1' && message.cacheName === 'DUMBTERM_CACHE_V1.3.1'));
+        assert.ok(worker.messages.some((message) => message.type === 'CACHE_VERSION_INFO'
+            && message.currentVersion === '1.3.1' && message.cacheName === 'DUMBTERM_CACHE_V1.3.1'));
     });
 
     test('reports a failed manifest request and keeps the old cache', async () => {
@@ -332,6 +352,7 @@ describe('service worker Update Now', () => {
         assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_V1.3.0': 1 });
         assert.equal(failures(worker).length, 1);
         assert.match(failures(worker)[0].error, /500/);
+        assert.deepEqual([failures(worker)[0].version, failures(worker)[0].cacheName], ['1.3.1', 'DUMBTERM_CACHE_V1.3.1']);
     });
 
     test('overlapping an activation fill of another version leaves a filled cache and reports success', async () => {
@@ -352,6 +373,34 @@ describe('service worker Update Now', () => {
         assert.ok(names.length > 0, 'no cache left');
         for (const name of names) assert.deepEqual(cachedUrls(worker, name), [ORIGIN + 'index.html', ORIGIN + 'index.js'], name);
         assert.ok(worker.messages.some((message) => message.type === 'UPDATE_COMPLETE' && message.success === true));
+    });
+
+    test('clears the cache of a fill that failed earlier in the same worker', async () => {
+        // 1.3.1's activation fill fails and its pages start a 1.3.1 cache; a page running 1.3.2 then asks for Update Now
+        const worker = loadWorker({ version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_V1.3.0'], manifest: ['index.html'], manifestStatus: 500 });
+        await activate(worker);
+        await dispatchFetch(worker, get('index.js'));
+        worker.server.manifestStatus = 200;
+        await worker.listeners.message({ data: { type: 'SET_VERSION', version: '1.3.2', cacheName: 'DUMBTERM_CACHE_V1.3.2' } });
+        await performUpdate(worker);
+        assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_V1.3.2': 1 });
+    });
+
+    test('names the version it filled when a page sends another version during the fill', async () => {
+        let release;
+        const worker = loadWorker({ version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_V1.3.0'], manifest: ['index.html'] });
+        worker.server.manifestHeld = new Promise((resolve) => { release = resolve; });
+        const update = worker.listeners.message({ data: { type: 'PERFORM_UPDATE' } });
+        await manifestRequested(worker);
+        await worker.listeners.message({ data: { type: 'SET_VERSION', version: '1.3.2', cacheName: 'DUMBTERM_CACHE_V1.3.2' } });
+        release();
+        await update;
+        await settle();
+        const fillMessages = worker.messages.filter((message) => message.cacheName && message.type !== 'UPDATE_AVAILABLE');
+        assert.ok(fillMessages.length > 0);
+        for (const message of fillMessages) {
+            assert.deepEqual([message.version ?? message.currentVersion, message.cacheName], ['1.3.1', 'DUMBTERM_CACHE_V1.3.1']);
+        }
     });
 
     test('works after the same worker already filled its cache at activation', async () => {
