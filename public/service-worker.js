@@ -303,7 +303,8 @@ async function installCache(isFirstInstall = false, requestId) {
         console.log("Assets cached successfully");
         
         // Clear old caches only now that the new one is filled: until then they are what works offline.
-        // A cache another fill is still filling is left for the next activation to clear.
+        // A cache another fill is still filling is left alone: that fill keeps it if it succeeds, and the next fill
+        // clears it if it fails.
         const oldCaches = (await caches.keys())
             .filter(key => isStaleCache(key, cacheName) && !CACHES_BEING_FILLED.includes(key));
         if (oldCaches.length > 0) {
