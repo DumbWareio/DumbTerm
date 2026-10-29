@@ -185,7 +185,14 @@ describe('service worker activation', () => {
         worker.store.get('DUMBTERM_CACHE_V1.3.0').set(ORIGIN + 'index.js', fakeResponse('old'));
         await activate(worker);
         assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_V1.3.1': 2 });
-        assert.deepEqual(failures(worker), []);
+        // UPDATE_COMPLETE is for Update Now: the page reloads on success and shows a notice on failure
+        assert.deepEqual(worker.messages.filter((message) => message.type === 'UPDATE_COMPLETE'), []);
+    });
+
+    test('a first install fills its cache', async () => {
+        const worker = loadWorker({ version: '1.3.0', manifest: ['index.html', 'index.js'] });
+        await activate(worker);
+        assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_V1.3.0': 2 });
     });
 
     test('an upgrade whose manifest request fails keeps the old cache and tells no page', async () => {
