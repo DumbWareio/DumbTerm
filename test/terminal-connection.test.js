@@ -436,6 +436,43 @@ describe('terminal connection', () => {
         assert.equal(FakeWebSocket.last.readyState, FakeWebSocket.OPEN);
     });
 
+    // A key's attempt after a failed start that meets an outage is an outage like any other: a return to the page
+    // cuts its retry's wait short, and reconnects the tab once its retries ran out
+    test('coming back to the page while a key\'s retry after a failed start waits connects at once', () => {
+        const first = FakeWebSocket.last;
+        first.closes({ code: 1011, reason: 'Shell exited with code 1', wasClean: true });
+        server.up = false;
+        wait(1000);
+        type('a');
+        // Refused at once, then at 2s and 4s; the third retry waits until 8s
+        wait(4000);
+        server.up = true;
+        const returnedAt = now;
+        document.fire('visibilitychange');
+        wait(1000);
+
+        assert.equal(FakeWebSocket.last.createdAt, returnedAt, 'connected on the return');
+        assert.equal(FakeWebSocket.last.readyState, FakeWebSocket.OPEN);
+    });
+
+    test('coming back to the page after a key\'s retries after a failed start ran out reconnects', () => {
+        const first = FakeWebSocket.last;
+        first.closes({ code: 1011, reason: 'Shell exited with code 1', wasClean: true });
+        server.up = false;
+        wait(1000);
+        type('a');
+        wait(60000);
+        assert.equal(linesSaying(RAN_OUT), 1, 'the retries ran out');
+        const lastRetry = FakeWebSocket.last;
+
+        server.up = true;
+        document.fire('visibilitychange');
+        wait(1000);
+
+        assert.equal(socketsSince(lastRetry).length, 1, 'reconnected on the return');
+        assert.equal(FakeWebSocket.last.readyState, FakeWebSocket.OPEN);
+    });
+
     // Guard: only a close the server reports as failed (1011) says the shell could not start, whatever its reason
     test('a shell that exits (1005) with a reason still says it closed normally', () => {
         FakeWebSocket.last.closes({ code: 1005, reason: 'Shell exited with code 1', wasClean: true });

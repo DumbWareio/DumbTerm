@@ -796,7 +796,7 @@ export default class TerminalManager {
         let outageReported = false;
         // Whether the tab has been connected before, so that its next connection is a reconnect
         let connectedBefore = false;
-        // Whether the tab's last shell failed to start (1011), so that coming back to the page leaves it be
+        // Whether the tab's last shell failed to start (1011), so that coming back to the page leaves it for a key
         let shellFailedToStart = false;
         const self = this; // Store reference to 'this' for use in callbacks
 
@@ -834,7 +834,6 @@ export default class TerminalManager {
                 clearTimeout(connectionTimeout);
                 reconnectAttempts = 0;
                 outageReported = false;
-                shellFailedToStart = false;
 
                 // Each connection gets a new shell, so an editor open on the old one is gone with it, and so are
                 // the modes the old shell's programs set, in either buffer (a picker drawn under the prompt sets
@@ -987,8 +986,9 @@ export default class TerminalManager {
 
         // Handle terminal input with connection check. A key typed with no connection is dropped. While one is
         // underway it says nothing, as the close still to come may be final; otherwise it says so and starts one,
-        // with its retries renewed: that is how a tab whose shell exited gets a new one, and how one whose retries
-        // ran out before the server came back reconnects
+        // with its retries renewed: that is how a tab whose shell exited or failed to start gets a new one, and how
+        // one whose retries ran out before the server came back reconnects. An attempt a key started after a failed
+        // start is like any other: if it meets an outage, coming back to the page reconnects it
         terminal.onData(data => {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
@@ -998,6 +998,7 @@ export default class TerminalManager {
             } else if (!connectionUnderway()) {
                 reportOutage('\r\nConnection not available. Attempting to reconnect...');
                 reconnectAttempts = 0;
+                shellFailedToStart = false;
                 connectWebSocket();
             }
             
