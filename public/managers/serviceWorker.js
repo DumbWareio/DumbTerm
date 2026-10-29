@@ -13,6 +13,8 @@ export default class ServiceWorkerManager {
         this._receivedCacheName = null;
         // The version the user put off with Later
         this.dismissedVersion = null;
+        // The Update Now under way, which the update timeout and Later call off
+        this.updateAttempt = null;
         
         // Initialize with basePath from config
         this.basePath = window.appConfig?.basePath || '';
@@ -250,14 +252,15 @@ export default class ServiceWorkerManager {
 
     /**
      * Asks the server which version it runs, from the header it sends with config.js
+     * @param {AbortSignal} [signal] - Calls the request off
      * @returns {Promise<string|null>} The server's version, or null when it doesn't say
      * @throws When the server can't be reached or answers with an error
      */
-    async getServerVersion() {
+    async getServerVersion(signal) {
         // A HEAD request: the worker leaves requests other than GET to the network, so the answer is never a copy
         // it kept, and it keeps none (a GET would leave the new config.js in the old version's cache, for the old
         // page to load offline). no-store keeps the browser's HTTP cache out of it too
-        const response = await fetch(this.joinPath('config.js'), { method: 'HEAD', cache: 'no-store' });
+        const response = await fetch(this.joinPath('config.js'), { method: 'HEAD', cache: 'no-store', signal });
         if (!response.ok) throw new Error(`Failed to reach the server: ${response.status}`);
         return response.headers.get('X-DumbTerm-Version');
     }
@@ -442,6 +445,7 @@ export default class ServiceWorkerManager {
         });
         
         document.getElementById('update-later').addEventListener('click', () => {
+            this.cancelUpdateAttempt();
             updateNotification.remove();
             this.updateNotificationActive = false;
             this.dismissedVersion = newVersion;
@@ -457,6 +461,11 @@ export default class ServiceWorkerManager {
      * @param {boolean} [fromServer] - Whether the server reported the new version, rather than a newer worker
      */
     async handleUpdateRequest(notification, fromServer = false) {
+        // This attempt replaces any earlier one, and lasts until it ends or the timeout or Later calls it off
+        this.cancelUpdateAttempt();
+        const attempt = new AbortController();
+        this.updateAttempt = attempt;
+        
         // Show loading state
         const updateButton = notification.querySelector('#update-now');
         updateButton.innerHTML = 'Updating...';
@@ -468,8 +477,10 @@ export default class ServiceWorkerManager {
         }
         
         // Set a timeout to handle cases where the update might hang
-        if (this.updateTimeout) clearTimeout(this.updateTimeout);
         this.updateTimeout = setTimeout(() => {
+            attempt.abort();
+            this.updateAttempt = null;
+            
             // Remove any notifications
             const existingNotifications = document.querySelectorAll('.update-notification');
             existingNotifications.forEach(notification => notification.remove());
@@ -504,17 +515,39 @@ export default class ServiceWorkerManager {
         }
         
         // The reload needs the server: while it is down the page would come back as the worker's offline copy of
-        // the old version, or not at all
+        // the old version, or not at all. An answer that comes after the attempt was called off changes nothing
         try {
-            await this.getServerVersion();
+            await this.getServerVersion(attempt.signal);
         } catch (error) {
+            if (attempt.signal.aborted) return;
+            this.updateAttempt = null;
             console.log("Not reloading, the server can't be reached:", error);
             this.showUpdateError("Can't reach the server. Try again when it's back.");
             return;
         }
+        if (attempt.signal.aborted) return;
+        this.updateAttempt = null;
         console.log("Reloading to load the new version");
         this.updateNotificationActive = false;
         window.location.reload(true);
+    }
+
+    /**
+     * Calls off the Update Now under way, if any: its request to the server and its timeout. The footer, which
+     * showed it loading, shows the page's version again
+     */
+    cancelUpdateAttempt() {
+        if (this.updateTimeout) {
+            clearTimeout(this.updateTimeout);
+            this.updateTimeout = null;
+        }
+        if (this.updateAttempt) {
+            this.updateAttempt.abort();
+            this.updateAttempt = null;
+            if (this.updateVersionDisplayCallback) {
+                this.updateVersionDisplayCallback();
+            }
+        }
     }
 
     /**

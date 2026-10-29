@@ -373,6 +373,64 @@ describe('service worker manager update prompt', () => {
         assert.equal(window.location.reloads, 0);
     });
 
+    // An attempt the update timeout or Later gave up on is over: its request is called off, and an answer that
+    // comes anyway changes nothing
+    test('Update Now does not reload after the update timed out', async () => {
+        await loneTabAcrossUpgrade();
+        await reconnect();
+        server.held = true;
+        await click('update-now');
+        mock.timers.tick(30000);
+        assert.deepEqual(prompts(), ['Update timed out. Please try again. Dismiss']);
+        assert.equal(signals.at(-1)?.aborted, true, 'the request was called off');
+        releaseHeld();
+        await settle();
+        assert.equal(window.location.reloads, 0);
+    });
+
+    test('Update Now that fails after the update timed out shows no second error', async () => {
+        await loneTabAcrossUpgrade();
+        await reconnect();
+        server.held = true;
+        await click('update-now');
+        mock.timers.tick(30000);
+        server.down = true;
+        releaseHeld();
+        await settle();
+        assert.deepEqual(prompts(), ['Update timed out. Please try again. Dismiss']);
+    });
+
+    test('Later while Update Now waits for the server calls the update off, with no error then or later', async () => {
+        const { displayed } = await loneTabAcrossUpgrade();
+        await reconnect();
+        server.held = true;
+        await click('update-now');
+        await click('update-later');
+        assert.equal(signals.at(-1)?.aborted, true, 'the request was called off');
+        assert.equal(displayed.at(-1), '1.3.0', 'the footer is no longer loading');
+        releaseHeld();
+        await settle();
+        mock.timers.tick(40000);
+        assert.equal(window.location.reloads, 0);
+        assert.deepEqual(prompts(), []);
+    });
+
+    test('a new Update Now after one called off with Later still reloads', async () => {
+        await loneTabAcrossUpgrade();
+        await reconnect();
+        server.held = true;
+        await click('update-now');
+        await click('update-later');
+        server.held = false;
+        await reconnect();
+        assert.deepEqual(prompts(), [PROMPT_1_3_1]);
+        await click('update-now');
+        assert.equal(window.location.reloads, 1);
+        releaseHeld();
+        await settle();
+        assert.equal(window.location.reloads, 1, 'the request called off changes nothing');
+    });
+
     test('the error goes by itself, the footer shows the page\'s version again, and the update timeout is off', async () => {
         const { displayed } = await loneTabAcrossUpgrade();
         await reconnect();
