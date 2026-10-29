@@ -93,7 +93,7 @@ async function startServer(extraEnv = () => ({}), nodeArgs = []) {
 // Open a terminal WebSocket and collect everything the server sends until it closes.
 function openTerminal(server, headers) {
     const ws = new WebSocket(`ws://localhost:${server.port}/`, { headers });
-    const state = { output: '', closeCode: null, rejectedStatus: null };
+    const state = { output: '', closeCode: null, closeReason: null, rejectedStatus: null };
     ws.on('message', (raw) => {
         const message = JSON.parse(raw.toString());
         if (message.type === 'output') state.output += message.data;
@@ -103,8 +103,9 @@ function openTerminal(server, headers) {
         ws.terminate();
     });
     ws.on('error', () => {});
-    const closed = new Promise((resolve) => ws.on('close', (code) => {
+    const closed = new Promise((resolve) => ws.on('close', (code, reason) => {
         state.closeCode = code;
+        state.closeReason = reason.toString();
         resolve(code);
     }));
     return { ws, state, closed };
@@ -385,10 +386,99 @@ describe('DumbTerm server when the pty cannot be spawned', () => {
     test('closes the terminal WebSocket with 1011 and keeps running', async () => {
         const terminal = openTerminal(server, { Cookie: PIN_COOKIE, Origin: server.baseUrl });
         assert.equal(await closeCodeWithin(terminal), 1011);
+        assert.equal(terminal.state.closeReason, 'Failed to start terminal');
         await new Promise((resolve) => setTimeout(resolve, 300));
         assert.ok(server.isRunning(), `server crashed:\n${server.output()}`);
         const res = await fetch(`${server.baseUrl}/login`);
         assert.equal(res.status, 200);
+    });
+});
+
+// A shell that fails to start (#46) mostly does not make spawn() throw: node-pty starts it, prints why it could not
+// run it (on Linux; on macOS it prints nothing), and the shell exits with code 1. On macOS spawn() may throw instead,
+// and the close says 'Failed to start terminal'; Linux (CI and the Docker image) runs the exit path
+for (const [what, env, nodePtyLine] of [
+    ['SHELL does not exist', { SHELL: '/nonexistent' }, 'execvp(3) failed.: No such file or directory'],
+    ['HOME does not exist', { HOME: '/nonexistent' }, 'chdir(2) failed.: No such file or directory'],
+]) {
+    describe(`DumbTerm server when the ${what}`, () => {
+        let server;
+
+        before(async () => { server = await startServer(() => env); });
+        after(async () => { await server.stop(); });
+
+        test('closes the terminal WebSocket with 1011, saying why, and keeps running', async () => {
+            const terminal = openTerminal(server, { Cookie: PIN_COOKIE, Origin: server.baseUrl });
+            assert.equal(await closeCodeWithin(terminal), 1011);
+            if (process.platform === 'linux') {
+                assert.ok(terminal.state.output.includes(nodePtyLine),
+                    `no "${nodePtyLine}" before the close, got: ${JSON.stringify(terminal.state.output)}`);
+                assert.equal(terminal.state.closeReason, 'Shell exited with code 1');
+            } else {
+                assert.ok(['Shell exited with code 1', 'Failed to start terminal'].includes(terminal.state.closeReason),
+                    `unexpected reason ${JSON.stringify(terminal.state.closeReason)}`);
+            }
+            await new Promise((resolve) => setTimeout(resolve, 300));
+            assert.ok(server.isRunning(), `server crashed:\n${server.output()}`);
+        });
+    });
+}
+
+// Any shell that ends within a second of its spawn without exiting cleanly never started: one that fails late in
+// that second, and one killed by a signal (which node-pty reports as code 0 and the signal)
+for (const [what, fixture, reason] of [
+    ['fails 0.6 s after it starts', 'slow-failing-shell.sh', 'Shell exited with code 2'],
+    ['is killed by a signal as it starts', 'self-killing-shell.sh', 'Shell was killed by signal 9'],
+]) {
+    describe(`DumbTerm server when the shell ${what}`, () => {
+        let server;
+
+        before(async () => { server = await startServer(() => ({ SHELL: path.join(__dirname, 'fixtures', fixture) })); });
+        after(async () => { await server.stop(); });
+
+        test('closes the terminal WebSocket with 1011, saying why', async () => {
+            const terminal = openTerminal(server, { Cookie: PIN_COOKIE, Origin: server.baseUrl });
+            assert.equal(await closeCodeWithin(terminal), 1011);
+            assert.equal(terminal.state.closeReason, reason);
+        });
+    });
+}
+
+// A shell the user ends closes as it always has, without a status (1005), whatever its exit code once it has been
+// up a while (#46)
+describe('DumbTerm server when the shell exits', () => {
+    let server;
+
+    before(async () => { server = await startServer(); });
+    after(async () => { await server.stop(); });
+
+    async function shellEndedWith(command, upForMs) {
+        const terminal = openTerminal(server, { Cookie: PIN_COOKIE, Origin: server.baseUrl });
+        await new Promise((resolve) => terminal.ws.once('open', resolve));
+        await new Promise((resolve) => setTimeout(resolve, upForMs));
+        terminal.ws.send(JSON.stringify({ type: 'input', data: `${command}\r` }));
+        return closeCodeWithin(terminal);
+    }
+
+    test('closes without a status on exit', async () => {
+        assert.equal(await shellEndedWith('exit', 0), 1005);
+    });
+
+    test('closes without a status on a non-zero exit after the shell has been up a while', async () => {
+        assert.equal(await shellEndedWith('exit 3', 1500), 1005);
+    });
+
+    test('closes without a status when the shell is killed by a signal after it has been up a while', async () => {
+        assert.equal(await shellEndedWith('kill -9 $$', 1500), 1005);
+    });
+
+    // The rule is any non-zero code within a second of the spawn, not only node-pty's 1
+    test('closes with 1011 and the exit code on a non-zero exit as the shell starts', async () => {
+        const terminal = openTerminal(server, { Cookie: PIN_COOKIE, Origin: server.baseUrl });
+        await new Promise((resolve) => terminal.ws.once('open', resolve));
+        terminal.ws.send(JSON.stringify({ type: 'input', data: 'exit 3\r' }));
+        assert.equal(await closeCodeWithin(terminal), 1011);
+        assert.equal(terminal.state.closeReason, 'Shell exited with code 3');
     });
 });
 

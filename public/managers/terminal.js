@@ -796,6 +796,8 @@ export default class TerminalManager {
         let outageReported = false;
         // Whether the tab has been connected before, so that its next connection is a reconnect
         let connectedBefore = false;
+        // Whether the tab's last shell failed to start (1011), so that coming back to the page leaves it for a key
+        let shellFailedToStart = false;
         const self = this; // Store reference to 'this' for use in callbacks
 
         function connectionUnderway() {
@@ -935,7 +937,13 @@ export default class TerminalManager {
 
             // A clean close is final (the shell exited, or failed to start), unless the server is going away
             // (1001, shutting down) or restarting (1012): the tab then reconnects once it is back, as it does
-            // after a dropped connection
+            // after a dropped connection. A shell that failed to start (1011) says why, as retrying would fail
+            // the same way
+            if (event.wasClean && event.code === 1011) {
+                shellFailedToStart = true;
+                terminal.writeln(`\r\nThe server could not start a shell: ${event.reason || 'Failed to start terminal'}.`);
+                return;
+            }
             if (event.wasClean && event.code !== 1001 && event.code !== 1012) {
                 terminal.writeln('\r\nConnection closed normally.');
                 return;
@@ -978,8 +986,9 @@ export default class TerminalManager {
 
         // Handle terminal input with connection check. A key typed with no connection is dropped. While one is
         // underway it says nothing, as the close still to come may be final; otherwise it says so and starts one,
-        // with its retries renewed: that is how a tab whose shell exited gets a new one, and how one whose retries
-        // ran out before the server came back reconnects
+        // with its retries renewed: that is how a tab whose shell exited or failed to start gets a new one, and how
+        // one whose retries ran out before the server came back reconnects. An attempt a key started after a failed
+        // start is like any other: if it meets an outage, coming back to the page reconnects it
         terminal.onData(data => {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
@@ -989,6 +998,7 @@ export default class TerminalManager {
             } else if (!connectionUnderway()) {
                 reportOutage('\r\nConnection not available. Attempting to reconnect...');
                 reconnectAttempts = 0;
+                shellFailedToStart = false;
                 connectWebSocket();
             }
             
@@ -1013,9 +1023,10 @@ export default class TerminalManager {
 
         // Handle page visibility changes: coming back to the page reconnects a tab whose connection ended, with
         // its retries renewed. A retry waiting out its backoff is called off for it, as the page may have been
-        // away (a laptop asleep) for longer than the wait; a socket connecting or open is left to finish
+        // away (a laptop asleep) for longer than the wait; a socket connecting or open is left to finish. A tab
+        // whose shell failed to start is left for a key, as each return would fail the same way
         const onVisibilityChange = () => {
-            if (document.visibilityState !== 'visible') {
+            if (document.visibilityState !== 'visible' || shellFailedToStart) {
                 return;
             }
             clearTimeout(reconnectTimer);
