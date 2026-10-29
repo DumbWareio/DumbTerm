@@ -833,12 +833,6 @@ export default class TerminalManager {
                 reconnectAttempts = 0;
                 outageReported = false;
 
-                // A reconnect can be to a server that was upgraded meanwhile, so the page checks its version
-                if (connectedBefore) {
-                    window.dispatchEvent(new Event('dumbterm:reconnected'));
-                }
-                connectedBefore = true;
-
                 // Each connection gets a new shell, so an editor open on the old one is gone with it, and so are
                 // the modes the old shell's programs set, in either buffer (a picker drawn under the prompt sets
                 // them without leaving the normal one): DECSTR shows the cursor and resets the cursor keys and
@@ -872,6 +866,13 @@ export default class TerminalManager {
                     }
                 }, 100);
                 startHeartbeat(socket);
+
+                // A reconnect can be to a server that was upgraded meanwhile, so the page checks its version. Last,
+                // once the new connection is set up
+                if (connectedBefore) {
+                    window.dispatchEvent(new Event('dumbterm:reconnected'));
+                }
+                connectedBefore = true;
             };
 
             socket.onclose = (event) => {
