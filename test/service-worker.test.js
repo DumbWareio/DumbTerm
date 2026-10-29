@@ -287,10 +287,21 @@ describe('service worker activation', () => {
     });
 
     test('deletes an older cache whatever its DumbTerm name looks like', async () => {
-        // Builds from May 2025 named their cache without the V
-        const worker = loadWorker({ version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_1.2.0', 'unrelated-cache'], manifest: ['index.html'] });
+        // Builds from May 2025 named their cache without the V, and earlier ones DUMBTERM_PWA_CACHE_V<version>
+        const worker = loadWorker({
+            version: '1.3.1',
+            cacheNames: ['DUMBTERM_CACHE_1.2.0', 'DUMBTERM_PWA_CACHE_V1.0.0', 'unrelated-cache'],
+            manifest: ['index.html'],
+        });
         await activate(worker);
         assert.deepEqual(cacheSizes(worker), { 'unrelated-cache': 0, 'DUMBTERM_CACHE_V1.3.1': 1 });
+    });
+
+    test('clears a cache with an older DumbTerm name left beside the current one', async () => {
+        const worker = loadWorker({ version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_1.2.0', 'DUMBTERM_CACHE_V1.3.1'], manifest: ['index.html'] });
+        worker.store.get('DUMBTERM_CACHE_V1.3.1').set(ORIGIN + 'index.html', fakeResponse('cached'));
+        await activate(worker);
+        assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_V1.3.1': 1 });
     });
 });
 

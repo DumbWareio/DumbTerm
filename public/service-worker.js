@@ -166,6 +166,17 @@ async function checkCacheVersion() {
 }
 
 /**
+ * Whether a cache is one of DumbTerm's other than the given one. Every name DumbTerm has used starts with
+ * DUMBTERM_ (DUMBTERM_CACHE_V<version>, and earlier DUMBTERM_CACHE_<version> and DUMBTERM_PWA_CACHE_V<version>).
+ * @param {string} key - Cache name
+ * @param {string} cacheName - The cache to keep
+ * @returns {boolean} True if the cache is another DumbTerm cache
+ */
+function isOtherDumbTermCache(key, cacheName) {
+    return key.startsWith('DUMBTERM_') && key !== cacheName;
+}
+
+/**
  * Determines if an update notification should be shown
  * @param {string} currentVersion - Current installed version
  * @param {string} newVersion - New available version
@@ -287,7 +298,7 @@ async function installCache(isFirstInstall = false) {
         // Clear old caches only now that the new one is filled: until then they are what works offline.
         // A cache another fill is still filling is left for the next activation to clear.
         const oldCaches = (await caches.keys())
-            .filter(key => key.startsWith('DUMBTERM_') && key !== cacheName && !CACHES_BEING_FILLED.includes(key));
+            .filter(key => isOtherDumbTermCache(key, cacheName) && !CACHES_BEING_FILLED.includes(key));
         if (oldCaches.length > 0) {
             console.log(`Deleting old caches: ${oldCaches}`);
             await Promise.all(
@@ -378,11 +389,12 @@ self.addEventListener("activate", event => {
                 console.log("Service worker has claimed clients");
 
                 // Fetches are network-first, so pages already run this version: fill its cache now, which also
-                // deletes the older caches once it succeeds. A successful fill leaves no other cache, so one still
-                // there means this version's last fill failed (or never ran) and is worth another try.
+                // deletes the older caches once it succeeds. A successful fill leaves no other DumbTerm cache (unless
+                // another fill was running), so one still there means this version's last fill failed or never ran
+                // and is worth another try.
                 if (CACHE_VERSION !== "1.0.0") {
-                    const { currentCacheExists, oldCaches } = await checkCacheVersion();
-                    if (!currentCacheExists || oldCaches.length > 0) {
+                    const keys = await caches.keys();
+                    if (!keys.includes(CACHE_NAME) || keys.some(key => isOtherDumbTermCache(key, CACHE_NAME))) {
                         await installCache(true);
                     } else {
                         await notifyClients();
