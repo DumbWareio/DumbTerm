@@ -285,6 +285,11 @@ describe('service worker manager update prompt', () => {
         return navigator.serviceWorker.controller.messages.filter((message) => message.type === 'PERFORM_UPDATE').length;
     }
 
+    // The id the page sent with its last Update Now to the worker, which the worker's answer to it names
+    function requestSent() {
+        return navigator.serviceWorker.controller.messages.filter((message) => message.type === 'PERFORM_UPDATE').at(-1)?.requestId;
+    }
+
     // The checks don't go through the worker, so a page no worker controls yet, or a browser without service
     // workers, asks the server too
     for (const [page, options] of [['a lone tab', {}], ['a page no worker controls yet', { controlled: false }],
@@ -652,7 +657,7 @@ describe('service worker manager update prompt', () => {
         fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
         await click('update-now');
         assert.equal(displayed.at(-1), 'loading');
-        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', success: false, error: 'boom' });
+        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', requestId: requestSent(), success: false, error: 'boom' });
         assert.deepEqual(prompts(), ['Update failed: boom Dismiss']);
         assert.equal(displayed.at(-1), '1.3.0', 'the footer is no longer loading');
         assert.equal(manager.updateAttempt, null, 'the attempt is over');
@@ -667,7 +672,7 @@ describe('service worker manager update prompt', () => {
         const { fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
         fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
         await click('update-now');
-        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', success: false, error: '<b>x</b>' });
+        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', requestId: requestSent(), success: false, error: '<b>x</b>' });
         assert.deepEqual(prompts(), ['Update failed: <b>x</b> Dismiss']);
     });
 
@@ -680,6 +685,24 @@ describe('service worker manager update prompt', () => {
         fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', success: false, error: 'boom' });
         assert.deepEqual(prompts(), ['Update failed: boom Dismiss']);
         assert.equal(manager.updateAttempt, null, 'the attempt is over');
+    });
+
+    // An Update Now called off by a newer prompt goes on in the worker, and its answer can come after the next one
+    // started
+    test('Update Now on a newer prompt goes on waiting when the update it replaced fails', async () => {
+        const { manager, fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
+        fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
+        await click('update-now');
+        const replaced = requestSent();
+        fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.2' });
+        await click('update-now');
+        assert.notEqual(requestSent(), replaced, 'each Update Now sends its own id');
+        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', requestId: replaced, success: false, error: 'old' });
+        fromWorker({ type: 'CACHE_VERSION_INFO', currentVersion: '1.3.1' });
+        assert.deepEqual(prompts(), ['New version v1.3.2 available! Current: v1.3.0 Updating... Later']);
+        assert.notEqual(manager.updateTimeout, null, 'its timeout still runs');
+        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.2', requestId: requestSent(), success: false, error: 'new' });
+        assert.deepEqual(prompts(), ['Update failed: new Dismiss']);
     });
 
     // With no worker in control when the user clicks, Update Now asks the server, even on the worker's prompt
@@ -707,7 +730,7 @@ describe('service worker manager update prompt', () => {
         fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
         assert.notEqual(manager.updateAttempt, null, 'the attempt still waits');
         assert.equal(displayed.at(-1), 'loading');
-        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', success: false, error: 'boom' });
+        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', requestId: requestSent(), success: false, error: 'boom' });
         assert.deepEqual(prompts(), ['Update failed: boom Dismiss']);
     });
 
@@ -716,7 +739,7 @@ describe('service worker manager update prompt', () => {
         fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
         await click('update-now');
         mock.timers.tick(30000);
-        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', success: false, error: 'boom' });
+        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', requestId: requestSent(), success: false, error: 'boom' });
         assert.deepEqual(prompts(), ['Update timed out. Please try again. Dismiss']);
     });
 
@@ -726,7 +749,7 @@ describe('service worker manager update prompt', () => {
         await click('update-now');
         fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.2' });
         assert.equal(displayed.at(-1), '1.3.0', 'the footer is no longer loading');
-        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', success: false, error: 'boom' });
+        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', requestId: requestSent(), success: false, error: 'boom' });
         assert.deepEqual(prompts(), [PROMPT_1_3_2]);
     });
 
@@ -734,7 +757,7 @@ describe('service worker manager update prompt', () => {
         const { displayed, fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
         fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
         const footer = displayed.length;
-        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', success: false, error: 'boom' });
+        fromWorker({ type: 'UPDATE_COMPLETE', version: '1.3.1', requestId: 'tab-2', success: false, error: 'boom' });
         assert.deepEqual(prompts(), [PROMPT_1_3_1]);
         assert.equal(displayed.length, footer, 'the footer is left as it is');
     });

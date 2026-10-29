@@ -270,9 +270,11 @@ async function preload() {
  * @param {boolean} isFirstInstall - True for a fill the worker starts itself (activating a version, or the first
  * install a page's SET_VERSION starts), false for one the user asked for with Update Now. Only a failed fill the
  * user asked for is reported to the page.
+ * @param {string} [requestId] - The id of the Update Now that asked for this fill. Every tab hears the answer, so it
+ * names the request, and the tab that sent it knows the answer is its own
  * @returns {Promise<void>}
  */
-async function installCache(isFirstInstall = false) {
+async function installCache(isFirstInstall = false, requestId) {
     // A page's SET_VERSION can change CACHE_VERSION and CACHE_NAME while this fill waits on the network, so fill,
     // keep and report the version this fill started with
     const version = CACHE_VERSION;
@@ -323,6 +325,7 @@ async function installCache(isFirstInstall = false) {
                         type: 'UPDATE_COMPLETE',
                         version,
                         cacheName,
+                        requestId,
                         success: true
                     });
                     
@@ -347,6 +350,7 @@ async function installCache(isFirstInstall = false) {
                         type: 'UPDATE_COMPLETE',
                         version,
                         cacheName,
+                        requestId,
                         success: false,
                         error: error.message
                     });
@@ -502,7 +506,7 @@ self.addEventListener('message', async event => {
             break;
             
         case 'PERFORM_UPDATE':
-            await handlePerformUpdate();
+            await handlePerformUpdate(data.requestId);
             break;
             
         case 'CHECK_FOR_UPDATES':
@@ -655,8 +659,9 @@ async function handleGetVersion(event) {
 
 /**
  * Handles PERFORM_UPDATE messages from the client
+ * @param {string} [requestId] - The page's id for this Update Now, named in the answer
  */
-async function handlePerformUpdate() {
+async function handlePerformUpdate(requestId) {
     console.log("User confirmed update, installing cache");
-    await installCache(false);
+    await installCache(false, requestId);
 }

@@ -403,6 +403,32 @@ describe('service worker Update Now', () => {
         }
     });
 
+    // The worker tells every tab how a fill went, so each answer names the request it answers, and a tab can tell
+    // its own Update Now's answer from another tab's
+    for (const [outcome, manifestStatus, success] of [['succeeds', 200, true], ['fails', 500, false]]) {
+        test(`names the request it answers when the fill ${outcome}`, async () => {
+            const worker = loadWorker({ version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_V1.3.0'], manifest: ['index.html'], manifestStatus });
+            await worker.listeners.message({ data: { type: 'PERFORM_UPDATE', requestId: 'tab-1' } });
+            await settle();
+            const answers = worker.messages.filter((message) => message.type === 'UPDATE_COMPLETE');
+            assert.deepEqual(answers.map((message) => [message.success, message.requestId]), [[success, 'tab-1']]);
+        });
+    }
+
+    test('names its own request in each of two overlapping fills\' answers', async () => {
+        let release;
+        const worker = loadWorker({ version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_V1.3.0'], manifestStatus: 500 });
+        worker.server.manifestHeld = new Promise((resolve) => { release = resolve; });
+        const first = worker.listeners.message({ data: { type: 'PERFORM_UPDATE', requestId: 'tab-1' } });
+        await manifestRequested(worker);
+        const second = worker.listeners.message({ data: { type: 'PERFORM_UPDATE', requestId: 'tab-2' } });
+        await manifestRequested(worker, 2);
+        release();
+        await Promise.all([first, second]);
+        await settle();
+        assert.deepEqual(failures(worker).map((message) => message.requestId).sort(), ['tab-1', 'tab-2']);
+    });
+
     test('works after the same worker already filled its cache at activation', async () => {
         const worker = loadWorker({ version: '1.3.1', manifest: ['index.html', 'index.js'] });
         await activate(worker);

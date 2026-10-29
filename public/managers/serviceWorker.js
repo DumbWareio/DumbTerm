@@ -485,9 +485,10 @@ export default class ServiceWorkerManager {
         // (pages are fetched network-first) and registers the new version's worker
         const controller = navigator.serviceWorker?.controller;
         if (controller && !fromServer) {
-            // Request the update via service worker, which answers every tab: this attempt is the one waiting on it
-            attempt.askedWorker = true;
-            controller.postMessage({ type: 'PERFORM_UPDATE' });
+            // Request the update via service worker. It answers every tab, naming the request it answers, so this
+            // attempt keeps the id it sends
+            attempt.requestId = crypto.randomUUID();
+            controller.postMessage({ type: 'PERFORM_UPDATE', requestId: attempt.requestId });
             return;
         }
         
@@ -564,10 +565,14 @@ export default class ServiceWorkerManager {
      * @param {Object} data - Update completion data
      */
     handleUpdateComplete(data) {
-        // The worker tells every tab when an update fails, so only the tab whose Update Now waits on the worker
+        // The worker tells every tab when an update fails, so only the tab whose waiting Update Now sent that request
         // says so. Any other leaves its page as it is: a prompt that replaced that Update Now, or one that waits on
-        // the server
-        if (data.success === false && !this.updateAttempt?.askedWorker) return;
+        // the server. A worker from before the request ids names none, and its failure still ends the Update Now
+        // waiting on it rather than leave it to time out
+        const waitingRequest = this.updateAttempt?.requestId;
+        const answersWaitingRequest = waitingRequest !== undefined
+            && (data.requestId === undefined || data.requestId === waitingRequest);
+        if (data.success === false && !answersWaitingRequest) return;
         
         // Whatever the outcome, the Update Now waiting on the worker is over
         this.cancelUpdateAttempt();
