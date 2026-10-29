@@ -376,13 +376,14 @@ describe('service worker manager update prompt', () => {
     // An attempt the update timeout or Later gave up on is over: its request is called off, and an answer that
     // comes anyway changes nothing
     test('Update Now does not reload after the update timed out', async () => {
-        await loneTabAcrossUpgrade();
+        const { displayed } = await loneTabAcrossUpgrade();
         await reconnect();
         server.held = true;
         await click('update-now');
         mock.timers.tick(30000);
         assert.deepEqual(prompts(), ['Update timed out. Please try again. Dismiss']);
         assert.equal(signals.at(-1)?.aborted, true, 'the request was called off');
+        assert.equal(displayed.at(-1), '1.3.0', 'the footer is no longer loading');
         releaseHeld();
         await settle();
         assert.equal(window.location.reloads, 0);
