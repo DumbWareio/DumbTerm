@@ -49,9 +49,11 @@ function headlessDocument() {
         buttons,
         body: { appendChild(element) { shown.push(element); } },
         createElement() {
+            const button = { innerHTML: '', disabled: false };
             const element = {
                 className: '',
                 innerHTML: '',
+                querySelector: (selector) => (selector === '#update-now' ? button : null),
                 remove() {
                     const index = shown.indexOf(element);
                     if (index >= 0) shown.splice(index, 1);
@@ -115,7 +117,7 @@ async function settle() {
 async function startManager({ pageVersion, cachedVersion, basePath = '', controlled = false }) {
     globalThis.window = listeningTarget({
         appConfig: pageVersion ? { version: pageVersion, basePath } : undefined,
-        location: { reload() {} },
+        location: { reloads: 0, reload() { this.reloads++; } },
     });
     const workerListeners = [];
     // Node already defines a read-only `navigator` global, so replace it rather than assign to it
@@ -257,6 +259,16 @@ describe('service worker manager update prompt', () => {
         assert.equal(fetched[0].options?.cache, 'no-store', 'not from the browser\'s HTTP cache');
     });
 
+    // The worker controlling the page caches the release it was registered with, so it can't install the server's
+    // new one; a reload loads it, network-first
+    test('Update Now on the server\'s new version reloads the page', async () => {
+        await loneTabAcrossUpgrade();
+        await reconnect();
+        document.buttons.get('update-now').click();
+        assert.equal(window.location.reloads, 1);
+        assert.deepEqual(navigator.serviceWorker.controller.messages.filter((message) => message.type === 'PERFORM_UPDATE'), []);
+    });
+
     test('a prompt put off with Later comes back on the next check', async () => {
         await loneTabAcrossUpgrade();
         await reconnect();
@@ -336,6 +348,15 @@ describe('service worker manager update prompt', () => {
         const { fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
         fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
         assert.deepEqual(prompts(), [PROMPT_1_3_1]);
+    });
+
+    test('Update Now on the new worker\'s word still asks the worker to update', async () => {
+        const { fromWorker } = await startManager({ pageVersion: '1.3.0', cachedVersion: '1.3.0', controlled: true });
+        fromWorker({ type: 'UPDATE_AVAILABLE', currentVersion: '1.3.0', newVersion: '1.3.1' });
+        document.buttons.get('update-now').click();
+        assert.deepEqual(navigator.serviceWorker.controller.messages.filter((message) => message.type === 'PERFORM_UPDATE'),
+            [{ type: 'PERFORM_UPDATE' }]);
+        assert.equal(window.location.reloads, 0);
     });
 
     test('a worker reporting no change shows no prompt', async () => {

@@ -235,7 +235,7 @@ export default class ServiceWorkerManager {
             
             console.log(`Version check: page=${pageVersion}, server=${serverVersion}`);
             if (this.shouldShowUpdateNotification(pageVersion, serverVersion)) {
-                this.showUpdateNotification(pageVersion, serverVersion);
+                this.showUpdateNotification(pageVersion, serverVersion, true);
             }
         } catch (error) {
             // Offline, or the server is restarting: say nothing, the next check asks again
@@ -371,8 +371,9 @@ export default class ServiceWorkerManager {
      * Shows a notification when updates are available
      * @param {string} currentVersion - Current installed version
      * @param {string} newVersion - New available version
+     * @param {boolean} [fromServer] - Whether the server reported the new version, rather than a newer worker
      */
-    showUpdateNotification(currentVersion, newVersion) {
+    showUpdateNotification(currentVersion, newVersion, fromServer = false) {
         console.log(`Showing update notification: current=${currentVersion}, new=${newVersion}`);
         
         // Validate versions before showing
@@ -415,7 +416,7 @@ export default class ServiceWorkerManager {
         
         // Set up buttons
         document.getElementById('update-now').addEventListener('click', () => {
-            this.handleUpdateRequest(updateNotification);
+            this.handleUpdateRequest(updateNotification, fromServer);
         });
         
         document.getElementById('update-later').addEventListener('click', () => {
@@ -430,8 +431,9 @@ export default class ServiceWorkerManager {
     /**
      * Handles a user request to update the application
      * @param {HTMLElement} notification - The notification element
+     * @param {boolean} [fromServer] - Whether the server reported the new version, rather than a newer worker
      */
-    handleUpdateRequest(notification) {
+    handleUpdateRequest(notification, fromServer = false) {
         // Show loading state
         const updateButton = notification.querySelector('#update-now');
         updateButton.innerHTML = 'Updating...';
@@ -468,12 +470,14 @@ export default class ServiceWorkerManager {
             }
         }, 30000); // 30 second timeout
         
-        if (navigator.serviceWorker.controller) {
+        // The worker controlling the page caches the release it was registered with, so only a newer worker can
+        // install a new version. When the server reported it, or no worker controls the page, a reload loads it
+        // (pages are fetched network-first) and registers the new version's worker
+        if (navigator.serviceWorker.controller && !fromServer) {
             // Request the update via service worker
             navigator.serviceWorker.controller.postMessage({ type: 'PERFORM_UPDATE' });
         } else {
-            // No service worker controller, try to force reload
-            console.log("No service worker controller, forcing page reload");
+            console.log("Reloading to load the new version");
             this.updateNotificationActive = false;
             window.location.reload(true);
         }
