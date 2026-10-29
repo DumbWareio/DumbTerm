@@ -243,6 +243,26 @@ describe('DumbTerm server', () => {
         await terminal.closed;
     });
 
+    // xterm sends mouse reports in its default encoding as binary data, a character per byte (#45). The server
+    // writes them to the pty as those bytes, where a string would go as UTF-8 (0x85 as c2 85), and ignores data
+    // that is not a string
+    test('writes binary data to the shell as its bytes', async () => {
+        const terminal = openTerminal(server, { Cookie: PIN_COOKIE, Origin: server.baseUrl });
+        await new Promise((resolve) => terminal.ws.once('open', resolve));
+        // A raw terminal hands the shell the bytes as they come; RE''ADY appears as READY only once the shell ran it
+        terminal.ws.send(JSON.stringify({ type: 'input',
+            data: "stty raw -echo; echo RE''ADY; head -c 6 | od -An -tx1; stty sane\r" }));
+        await waitFor(() => terminal.state.output.includes('READY'), 5000,
+            () => `the shell did not get ready, got: ${JSON.stringify(terminal.state.output)}`);
+        terminal.ws.send(JSON.stringify({ type: 'binary', data: [0x41, 0x42] }));
+        terminal.ws.send(JSON.stringify({ type: 'binary', data: 66 }));
+        terminal.ws.send(JSON.stringify({ type: 'binary', data: '\x1b[M \x85\xa0' }));
+        await waitFor(() => /1b\s+5b\s+4d\s+20\s+85\s+a0\s/.test(terminal.state.output), 5000,
+            () => `the shell did not read the bytes, got: ${JSON.stringify(terminal.state.output)}`);
+        terminal.ws.close();
+        await terminal.closed;
+    });
+
     test('closes the terminal WebSocket with 1008 when the PIN cookie is missing', async () => {
         const terminal = openTerminal(server, { Origin: server.baseUrl });
         assert.equal(await closeCodeWithin(terminal), 1008);
@@ -391,6 +411,30 @@ describe('DumbTerm server when the pty cannot be spawned', () => {
         assert.ok(server.isRunning(), `server crashed:\n${server.output()}`);
         const res = await fetch(`${server.baseUrl}/login`);
         assert.equal(res.status, 200);
+    });
+});
+
+// DEMO_MODE runs a stand-in for the shell that takes typed text only (#45)
+describe('DumbTerm server in demo mode', () => {
+    let server;
+
+    before(async () => { server = await startServer(() => ({ DEMO_MODE: 'true' })); });
+    after(async () => { await server.stop(); });
+
+    test('leaves binary data out of what the demo shell is typed', async () => {
+        const terminal = openTerminal(server, { Cookie: PIN_COOKIE, Origin: server.baseUrl });
+        await new Promise((resolve) => terminal.ws.once('open', resolve));
+        terminal.ws.send(JSON.stringify({ type: 'binary', data: '\x1b[M \x85\xa0' }));
+        terminal.ws.send(JSON.stringify({ type: 'input', data: 'pwd' }));
+        terminal.ws.send(JSON.stringify({ type: 'input', data: '\r' }));
+        await waitFor(() => terminal.state.output.includes('$ pwd\r\n'), 5000,
+            () => `the demo shell did not run pwd, got: ${JSON.stringify(terminal.state.output)}`);
+        await waitFor(() => terminal.state.output.endsWith('$ '), 5000,
+            () => `the demo shell did not answer, got: ${JSON.stringify(terminal.state.output)}`);
+        assert.match(terminal.state.output, /\$ pwd\r\n\/home\/demo\r\n/);
+        assert.ok(server.isRunning(), `server crashed:\n${server.output()}`);
+        terminal.ws.close();
+        await terminal.closed;
     });
 });
 

@@ -533,6 +533,13 @@ function createTerminal(ws) {
                 case 'input':
                     term.write(message.data);
                     break;
+                case 'binary':
+                    // Mouse reports in xterm's default encoding, a character per byte: written as those bytes,
+                    // where a string would go to the shell as UTF-8 (a column past 95 as two bytes)
+                    if (typeof message.data === 'string') {
+                        term.write(Buffer.from(message.data, 'latin1'));
+                    }
+                    break;
                 case 'resize':
                     term.resize(message.cols, message.rows);
                     break;
