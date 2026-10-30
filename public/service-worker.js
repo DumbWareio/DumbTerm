@@ -2,7 +2,12 @@
 // The page registers this worker as service-worker.js?v=<app version>, so read the version from there:
 // a worker the browser restarts after idling would otherwise start at 1.0.0 and cache into a stray cache
 const REGISTERED_VERSION = new URL(self.location.href).searchParams.get('v');
-let CACHE_VERSION = /^\d+\.\d+\.\d+/.test(REGISTERED_VERSION || '') ? REGISTERED_VERSION : "1.0.0"; // Default fallback version
+// A worker registered with a release version keeps it, whatever version config.js or a page's SET_VERSION names:
+// pages show their own version, and the next release's page registers a worker of its own. A worker registered
+// without one (an old page's bare registration, or a page that could not read config.js) takes the version they name.
+// 1.0.0 is the version a worker without one starts at, so it counts as none.
+const HAS_RELEASE_VERSION = /^\d+\.\d+\.\d+/.test(REGISTERED_VERSION || '') && REGISTERED_VERSION !== "1.0.0";
+let CACHE_VERSION = HAS_RELEASE_VERSION ? REGISTERED_VERSION : "1.0.0"; // Default fallback version
 const BASE_PATH = self.registration.scope;
 // Cache Storage is shared by every install on the origin, so each cache name carries the path this install is
 // served under ('/' or '/a/'), and an install deletes only its own caches
@@ -97,11 +102,13 @@ async function initializeVersion() {
             // Take only the version: a server from before scoped names also sends a cacheName, without the path
             if (appConfig.version) {
                 console.log(`Found version in config.js: ${appConfig.version}`);
-                CACHE_VERSION = appConfig.version;
-                CACHE_NAME = cacheNameFor(CACHE_VERSION);
-                
-                // If we have an existing version that's different from what we just loaded,
-                // we should notify clients about an available update
+                if (!HAS_RELEASE_VERSION) {
+                    CACHE_VERSION = appConfig.version;
+                    CACHE_NAME = cacheNameFor(CACHE_VERSION);
+                }
+
+                // If the existing cache holds another version than the one this worker caches (config.js's, or
+                // the one it was registered with), notify clients about an available update
                 if (existingVersion && existingVersion !== CACHE_VERSION) {
                     console.log(`Different version detected: existing=${existingVersion}, new=${CACHE_VERSION}`);
                     setTimeout(() => notifyClients(), 1000);
@@ -279,8 +286,8 @@ async function preload() {
  * @returns {Promise<void>}
  */
 async function installCache(isFirstInstall = false, requestId) {
-    // A page's SET_VERSION can change CACHE_VERSION and CACHE_NAME while this fill waits on the network, so fill,
-    // keep and report the version this fill started with
+    // In a worker registered without a release version, a page's SET_VERSION can change CACHE_VERSION and CACHE_NAME
+    // while this fill waits on the network, so fill, keep and report the version this fill started with
     const version = CACHE_VERSION;
     const cacheName = CACHE_NAME;
     console.log(`${isFirstInstall ? 'First-time installation' : 'Updating'} cache to version ${version}`);
@@ -303,7 +310,8 @@ async function installCache(isFirstInstall = false, requestId) {
         console.log("Assets cached successfully");
         
         // Clear old caches only now that the new one is filled: until then they are what works offline.
-        // A cache another fill is still filling is left for the next activation to clear.
+        // A cache another fill is still filling is left alone: that fill keeps it if it succeeds, and the next fill
+        // clears it if it fails.
         const oldCaches = (await caches.keys())
             .filter(key => isStaleCache(key, cacheName) && !CACHES_BEING_FILLED.includes(key));
         if (oldCaches.length > 0) {
@@ -522,7 +530,8 @@ self.addEventListener('message', async event => {
 });
 
 /**
- * Handles SET_VERSION messages from the client
+ * Handles SET_VERSION messages from the client. A worker registered with a release version keeps it, so it takes
+ * the version only when registered without one (see HAS_RELEASE_VERSION)
  * @param {string} version - Version sent from client. A cacheName beside it (pages before scoped names sent one) is
  * ignored: this install's cache is named after its path
  */
@@ -534,8 +543,8 @@ async function handleSetVersion(version) {
     // Check current cache status
     const { existingVersion, isFirstInstall } = await checkCacheVersion();
     
-    // Only update if non-default version and different from current
-    if (version !== CACHE_VERSION) {
+    // Only update if different from current, and only in a worker registered without a release version
+    if (version !== CACHE_VERSION && !HAS_RELEASE_VERSION) {
         const previousVersion = CACHE_VERSION;
         CACHE_VERSION = version;
         CACHE_NAME = cacheNameFor(CACHE_VERSION);
@@ -557,7 +566,7 @@ async function handleSetVersion(version) {
             await notifyClients();
         }
     } else {
-        console.log(`No version change needed, current: ${CACHE_VERSION}`);
+        console.log(`Keeping version ${CACHE_VERSION}`);
         await notifyClients();
     }
 }
