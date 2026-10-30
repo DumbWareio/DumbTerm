@@ -1,5 +1,5 @@
 {
-    "description": "What bash 5.2 wrote to the terminal at each step, captured from DumbTerm's Docker image in a throwaway container (issue #59), each key typed on its own: with ENABLE_STARSHIP and the shipped starship.toml, or with the default prompt under the hostname box. A long command is typed at the prompt and not run",
+    "description": "What bash 5.2 wrote to the terminal at each step, captured from DumbTerm's Docker image in a throwaway container (issue #59), each key typed on its own: with ENABLE_STARSHIP and the shipped starship.toml, or with the default prompt under the hostname box. A long command is typed at the prompt and not run. The sessions with a description of their own were captured differently, as it says",
     "starshipLong": {
         "columns": 80,
         "steps": [
@@ -73,6 +73,50 @@
             {
                 "keys": "Ctrl-E",
                 "output": "\r\n\r\n\r\n\r\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C"
+            }
+        ]
+    },
+    "plainAsyncJob": {
+        "description": "bash 5.2.37 in node:24-trixie-slim under script(1), with PS1='root@box:/app# ' and no rc files, each key typed on its own: a background job runs, prints its line at the next prompt, and a long command is typed after it and not run",
+        "columns": 80,
+        "steps": [
+            {
+                "keys": "(bash starts)",
+                "output": "\u001b[?2004hroot@box:/app# "
+            },
+            {
+                "keys": "(sleep 0.5; echo job done) &, Enter",
+                "output": "(sleep 0.5; echo job done) &\r\n\u001b[?2004l\r[1] 891\r\n\u001b[?2004hroot@box:/app# "
+            },
+            {
+                "keys": "(the job prints its line at the prompt)",
+                "output": "job done\r\n"
+            },
+            {
+                "keys": "echo , a × 400",
+                "output": "echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaa"
+            }
+        ]
+    },
+    "plainAsyncNotify": {
+        "description": "bash 5.2.37 in node:24-trixie-slim under script(1), with PS1='root@box:/app# ' and no rc files, each key typed on its own: with set -b, bash reports a background job done at the next prompt, and a long command is typed after it and not run",
+        "columns": 80,
+        "steps": [
+            {
+                "keys": "(bash starts)",
+                "output": "\u001b[?2004hroot@box:/app# "
+            },
+            {
+                "keys": "set -b; sleep 0.5 &, Enter",
+                "output": "set -b; sleep 0.5 &\r\n\u001b[?2004l\r[1] 1328\r\n\u001b[?2004hroot@box:/app# "
+            },
+            {
+                "keys": "(bash reports the job done at the prompt)",
+                "output": "[1]+  Done                    sleep 0.5\r\r\n"
+            },
+            {
+                "keys": "echo , a × 400",
+                "output": "echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaa"
             }
         ]
     }

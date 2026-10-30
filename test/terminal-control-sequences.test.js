@@ -1193,26 +1193,49 @@ describe('terminal control sequences', () => {
         assert.equal(saves.at(-1), savedAtPrompt);
     });
 
-    test('a saved session leaves out every line of a two-line prompt with a half-typed command', async () => {
+    test('a saved session keeps a two-line prompt with no blank first row and a half-typed command more than four rows below it', async () => {
+        // Known limit: with no blank row first, the prompt's second line could as well be a background job's line at a
+        // one-line prompt, with the command typed after it. The save keeps the prompt and the command's rows above the
+        // cursor's, which the tab shows again above its new prompt. Pinned so that changing it is deliberate
         const saves = recordSavedSessions();
         const prompt = '\x1b[?2004huser@box ~/app\r\n$ ';
         await receiveOutput(`${prompt}echo out\r\n\x1b[?2004l\rout\r\n`);
         await receiveOutput(`${prompt}${typedCommand(400)}`);
 
-        assert.deepEqual(savedLines(saves.at(-1)), ['user@box ~/app', '$ echo out', 'out', '']);
+        assert.deepEqual(savedLines(saves.at(-1)),
+            ['user@box ~/app', '$ echo out', 'out', 'user@box ~/app', `$ ${typedCommand(400)}`.slice(0, 5 * 80), '']);
     });
 
     for (const [shape, firstLine] of [['a first line', 'Title'], ['a first line wrapped onto two rows', 'T'.repeat(100)]]) {
-        test(`a saved session leaves out the output of an app that left bracketed paste on and printed ${shape}, then a line running past four rows`, async () => {
-            // Known limit: a line that runs on from the row under the app's first line to the cursor reads as a command
-            // typed at a prompt, so the save stops above the app's output. An app starts new lines as it prints, so
-            // its last line seldom starts that high. Pinned so that changing it is deliberate
+        test(`a saved session keeps the output of an app that left bracketed paste on and printed ${shape}, then a line running past four rows`, async () => {
+            // With no blank row first, the line after the first one starts no command
             const saves = recordSavedSessions();
             await receiveOutput(`$ app\r\n\x1b[?2004h${firstLine}\r\n${'x'.repeat(400)}`);
+
+            assert.deepEqual(savedLines(saves.at(-1)), ['$ app', firstLine, 'x'.repeat(4 * 80), '']);
+        });
+    }
+
+    for (const [shape, before] of [['a line running past four rows', ''],
+        ['a blank row and a first line, then a line running past four rows', '\r\nTitle\r\n']]) {
+        test(`a saved session leaves out the output of an app that left bracketed paste on and printed ${shape}`, async () => {
+            // Known limit: the line reads as a command typed at a prompt, a one-line one or Starship's, so the save stops
+            // above the app's output. An app starts new lines as it prints, so its last line seldom starts that high.
+            // Pinned so that changing it is deliberate
+            const saves = recordSavedSessions();
+            await receiveOutput(`$ app\r\n\x1b[?2004h${before}${'x'.repeat(450)}`);
 
             assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '']);
         });
     }
+
+    test('a saved session keeps the output of an app whose first line ran past four rows, with the cursor on the row below it', async () => {
+        // The line that matters is the cursor's own, which starts on its row
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n\x1b[?2004h${'x'.repeat(400)}\r\n`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'x'.repeat(400), '']);
+    });
 
     test('a saved session keeps the output of an app that starts with two blank rows, then a line running past four rows', async () => {
         // No prompt has two blank rows first
@@ -1240,6 +1263,20 @@ describe('terminal control sequences', () => {
             assert.deepEqual(savedLines(saved[1]).slice(-3), [name === 'plainLong' ? 'root@box:/app# echo out' : '❯ echo out',
                 'out', '']);
             assert.equal(saved[2], saved[1]);
+        });
+    }
+
+    for (const [name, job, kept] of [
+        ['plainAsyncJob', 'a background job\'s line', ['root@box:/app# (sleep 0.5; echo job done) &', '[1] 891', 'root@box:/app# job done']],
+        ['plainAsyncNotify', 'bash\'s notice that a background job is done',
+            ['root@box:/app# set -b; sleep 0.5 &', '[1] 1328', `root@box:/app# [1]+  Done${' '.repeat(20)}sleep 0.5`]],
+    ]) {
+        test(`a saved session keeps ${job} printed at a plain prompt, with a long command typed under it, as bash prints it`, async () => {
+            // The line lands on the prompt's row and the command starts on the row below, as a two-line prompt's
+            // would: with no blank row first, that is no command typed at the prompt
+            const saved = await replayCapture(name, 4, LONG_COMMANDS);
+
+            assert.deepEqual(savedLines(saved[3]).slice(0, 3), kept);
         });
     }
 
