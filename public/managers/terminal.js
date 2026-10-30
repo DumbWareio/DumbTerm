@@ -100,7 +100,8 @@ function redrawnPromptRow(buffer, markedRow, cursorRow) {
 // at a one-line prompt, with the command typed under it, looks the same; so does a prompt with two or more lines
 // above its command after a blank first row, and a command not marked as wrapped all the way up from the cursor:
 // the cursor moved down across its wrap (Ctrl-E, End, →), which readline does with a newline, or a wide character
-// that did not fit. And the other way: an app that left bracketed paste on and printed, from its first row, a line
+// that did not fit; and so does Starship's prompt after output with no final newline (printf, curl), whose blank
+// first row that output's row takes, as the mark goes on the row below it. And the other way: an app that left bracketed paste on and printed, from its first row, a line
 // running past four rows, or a blank row and one line and then such a line, with the cursor at its end, reads as
 // such a command, so its output from the first row on is left out. So is a background job's text printed with no
 // final newline at a one-line prompt, which the command typed after it runs on from as one line, and a job's line
