@@ -927,9 +927,14 @@ describe('terminal control sequences', () => {
     // Apps that start with a blank row, as Starship's prompt does, and draw rows like it again under another: only
     // a redrawn prompt's rows match, and only the rows the command was typed onto run on
     const filledInput = `> ${'x'.repeat(78)}`;
+    const wrappedInput = `> ${'x'.repeat(150)}`;
     for (const [shape, output, kept] of [
         ['draws its first line and input line again above a status row',
             'Title\r\n> \r\nr1\r\nr2\r\n\r\nTitle\r\n> hi\r\nstatus', ['Title', '>', 'r1', 'r2', '', 'Title', '> hi']],
+        ['draws it, its first line and a filled input line again, then two rows',
+            `Title\r\n> \r\nr1\r\nr2\r\nr3\r\n\r\nTitle\r\n${filledInput}\r\nstatus\r\nmore`, ['Title', '>', 'r1', 'r2', 'r3', '', 'Title', filledInput, 'status']],
+        ['draws it, its first line and a wrapped input line ending short of the last column again, then a row',
+            `Title\r\n> \r\nr1\r\nr2\r\nr3\r\n\r\nTitle\r\n${wrappedInput}\r\nstatus`, ['Title', '>', 'r1', 'r2', 'r3', '', 'Title', wrappedInput]],
         ['draws its first five lines again',
             'A\r\nB\r\nC\r\nD\r\nE\r\nr1\r\n\r\nA\r\nB\r\nC\r\nD\r\nE', ['A', 'B', 'C', 'D', 'E', 'r1', '', 'A', 'B', 'C', 'D']],
         ['draws its input line again under a different first line',
@@ -956,10 +961,10 @@ describe('terminal control sequences', () => {
     }
 
     test('a saved session leaves out the output of an app that starts with a blank row and draws it, its first line and a filled input line again', async () => {
-        // Known limit: under a blank row, an app's title drawn again above an input line that fills its row (or wraps)
-        // reads as Starship's prompt redrawn below a listing and typed on, so the save stops above the app's
-        // transcript. Telling the two apart would also keep Starship's redrawn prompt. Pinned so that changing it is
-        // deliberate
+        // Known limit: under a blank row, an app's title drawn again above an input line that ends at its last column,
+        // with the cursor on the row below it, reads as Starship's prompt redrawn below a listing and typed on, so the
+        // save stops above the app's transcript (with the cursor a row further down, it is kept). Telling the two apart
+        // would also keep Starship's redrawn prompt. Pinned so that changing it is deliberate
         const saves = recordSavedSessions();
         await receiveOutput(`$ app\r\n\x1b[?2004h\r\nTitle\r\n> \r\nr1\r\nr2\r\nr3\r\n\r\nTitle\r\n${filledInput}\r\nstatus`);
 

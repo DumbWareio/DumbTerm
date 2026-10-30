@@ -25,8 +25,9 @@ const PROMPT_MAX_ROWS_BELOW_MARK = 4;
 // typed past four rows after the listing, or after the cursor moved down across its command's wrap (Ctrl-E, End,
 // →), stays in the save, and so does any prompt where that wrap leaves the last column empty or blank (a wide
 // character that did not fit, a space) or the marked command filled its row. And the other way: an app that starts
-// with a blank row and later draws it, its title and an input line that fills its row (or wraps) again reads as
-// such a prompt, so its output from the first blank row on is left out
+// with a blank row and later draws it, its title and an input line again, with the cursor on that line or, where
+// the line ends at its last column, on the row below it (not further down), reads as such a prompt, so its output
+// from the first blank row on is left out
 function redrawnPromptRow(buffer, markedRow, cursorRow) {
     const text = (row) => buffer.getLine(row)?.translateToString(true) ?? '';
     const line = (row) => {
