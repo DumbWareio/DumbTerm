@@ -966,6 +966,15 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '']);
     });
 
+    test('a saved session leaves out the output of an app that starts with a blank row, its first line and a blank row and draws them again above a blank line that wraps', async () => {
+        // The known limit above, with a blank input line: an empty command matches another empty one, though no other.
+        // Pinned so that changing it is deliberate
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n\x1b[?2004h\r\nTitle\r\n\r\n\r\nTitle\r\n${`${'x'.repeat(80)}\x1b[1K`.repeat(5)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '']);
+    });
+
     test('a saved session keeps the output of an app that starts with a blank row and draws a wrapped line again, the cursor moved up into it', async () => {
         // The cursor's line runs on below it: compared whole, the two lines differ
         const saves = recordSavedSessions();
