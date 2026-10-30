@@ -498,8 +498,9 @@ describe('service worker Update Now', () => {
     }
 
     test('counts a fill as filling from its start, so another fill that finishes first keeps its cache', async () => {
-        // As below, holding Cache Storage's next answer as well as the network's: a fill that looked at Cache Storage
-        // before counting itself would leave its cache to the other fill's cleanup meanwhile
+        // As the "keeps the cache a fill still waiting on the network" test further down, holding Cache Storage's
+        // next answer as well as the network's: a fill that looked at Cache Storage before counting itself would
+        // leave its cache to the other fill's cleanup meanwhile
         let releaseKeys;
         let releaseManifest;
         const worker = await installUnversioned('1.3.1', { cacheNames: ['DUMBTERM_CACHE_/_V1.3.1'], manifest: ['index.html'] });
