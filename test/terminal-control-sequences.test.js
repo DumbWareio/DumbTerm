@@ -1193,6 +1193,28 @@ describe('terminal control sequences', () => {
         assert.equal(saves.at(-1), savedAtPrompt);
     });
 
+    test('a saved session leaves out a Starship prompt with a half-typed command at 20 columns', async () => {
+        // At 20 columns the prompt's top line wraps onto two rows more
+        const saves = recordSavedSessions();
+        terminal.resize(20, terminal.rows);
+        const [{ output: start }, { output: echoOut }] = LISTINGS.starshipNarrow.steps;
+        await receiveOutput(`${start}${echoOut}`);
+        const savedAtPrompt = saves.at(-1);
+        await receiveOutput(typedCommand(100));
+
+        assert.deepEqual(savedLines(savedAtPrompt).slice(-3), ['❯ echo out', 'out', '']);
+        assert.equal(saves.at(-1), savedAtPrompt);
+    });
+
+    test('a saved session leaves out a one-line prompt after a blank row with a half-typed command six rows long', async () => {
+        const saves = recordSavedSessions();
+        const prompt = '\x1b[?2004h\r\n$ ';
+        await receiveOutput(`${prompt}echo out\r\n\x1b[?2004l\rout\r\n`);
+        await receiveOutput(`${prompt}${typedCommand(400)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['', '$ echo out', 'out', '']);
+    });
+
     test('a saved session keeps a two-line prompt with no blank first row and a half-typed command more than four rows below it', async () => {
         // Known limit: with no blank row first, the prompt's second line could as well be a background job's line at a
         // one-line prompt, with the command typed after it. The save keeps the prompt and the command's rows above the
@@ -1235,6 +1257,13 @@ describe('terminal control sequences', () => {
         await receiveOutput(`$ app\r\n\x1b[?2004h${'x'.repeat(400)}\r\n`);
 
         assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'x'.repeat(400), '']);
+    });
+
+    test('a saved session keeps the output of an app that printed a first line, then a line running past four rows, with the cursor on the row below it', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n\x1b[?2004hTitle\r\n${'x'.repeat(400)}\r\n`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'Title', 'x'.repeat(400), '']);
     });
 
     test('a saved session keeps the output of an app that starts with two blank rows, then a line running past four rows', async () => {
