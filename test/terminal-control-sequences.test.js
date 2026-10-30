@@ -1235,6 +1235,24 @@ describe('terminal control sequences', () => {
         });
     }
 
+    test('a saved session leaves out a Starship prompt with a half-typed command four rows long after Ctrl-A, as bash prints it', async () => {
+        const saved = await replayCapture('starshipLongCtrlE', 4, LONG_COMMANDS);
+
+        assert.equal(saved[3], saved[1]);
+    });
+
+    test('a saved session keeps a Starship prompt with a half-typed command four rows long after Ctrl-A and Ctrl-E, as bash prints it', async () => {
+        // Known limit: readline moves the cursor down the command with a newline, which leaves the rows it moves to
+        // unmarked as wrapped ones, so the command no longer runs on as one line from the prompt's. The save keeps the
+        // prompt and the command's rows above the cursor's, which the tab shows again above its new prompt. Pinned so
+        // that changing it is deliberate
+        const saved = await replayCapture('starshipLongCtrlE', 5, LONG_COMMANDS);
+
+        const atPrompt = savedLines(saved[1]);
+        assert.deepEqual(savedLines(saved[4]), [...atPrompt.slice(0, -1), '', atPrompt[1], `❯ echo ${'a'.repeat(73)}`,
+            'a'.repeat(80), 'a'.repeat(80), '']);
+    });
+
     test('a saved session leaves out the prompt redrawn at the top of a cleared screen', async () => {
         // Ctrl-L clears the screen, and with it the row the shell marked, and redraws the prompt without
         // turning bracketed paste on again
