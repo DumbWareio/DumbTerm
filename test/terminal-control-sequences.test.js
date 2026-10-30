@@ -1309,7 +1309,8 @@ describe('terminal control sequences', () => {
         });
     }
 
-    test('a saved session leaves out a Starship prompt with a half-typed command four rows long after Ctrl-A, as bash prints it', async () => {
+    test('a saved session leaves out a Starship prompt with a half-typed command four rows long once Ctrl-A takes the cursor back up to its first row, as bash prints it', async () => {
+        // The cursor is back within four rows of the marked one
         const saved = await replayCapture('starshipLongCtrlE', 4, LONG_COMMANDS);
 
         assert.equal(saved[3], saved[1]);
