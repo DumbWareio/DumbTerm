@@ -88,6 +88,28 @@ function redrawnPromptRow(buffer, markedRow, cursorRow) {
     return null;
 }
 
+// A command typed at the prompt and not run takes the cursor further below the marked row than that too, once it wraps
+// onto enough rows. The terminal wraps it, so every row it runs onto is marked as wrapped, back up to the row it
+// starts on. That row starts the prompt's first line (after a blank one, Starship's), as a one-line prompt's command
+// does, or the line after it, as a two-line prompt's does, each line on as many rows as it wraps onto (at 40 columns
+// Starship's top line wraps its last space onto a row of its own). No prompt starts with two blank rows. An app's
+// output starts new lines as it prints, so its last line starts lower. Known limits: a prompt with two or more lines
+// above its command (after any blank first row) stays in the save, as does a command not marked as wrapped all the
+// way up from the cursor: the cursor moved down across its wrap (Ctrl-E, End, →), which readline does with a newline,
+// or a wide character that did not fit. And the other way: an app that left bracketed paste on and printed its first
+// line (on one row or wrapped), then a line running past four rows with the cursor at its end, reads as such a
+// command, so its output from the first line on is left out
+function typedOnPromptRow(buffer, markedRow, cursorRow) {
+    const blank = (row) => (buffer.getLine(row)?.translateToString(true) ?? '') === '';
+    const first = blank(markedRow) ? markedRow + 1 : markedRow;
+    if (blank(first)) return null;
+    let second = first + 1;
+    while (buffer.getLine(second)?.isWrapped) second++;
+    let start = cursorRow;
+    while (buffer.getLine(start)?.isWrapped) start--;
+    return start === first || start === second ? markedRow : null;
+}
+
 // How to end each terminal's connection to the server (see initTerminal), for when its tab closes
 const connectionEnders = new WeakMap();
 
@@ -1187,9 +1209,10 @@ export default class TerminalManager {
                             // The prompt starts on the row marked when the shell turned bracketed paste on, or on
                             // the cursor's row if that is higher (zsh marks after its prompt), the marked row is
                             // gone (erased by a screen clear, or out of the scrollback) or it is too far up to be
-                            // the prompt's, unless the prompt was redrawn below. Rows above it are all kept, so no
-                            // prompt patterns here. Known limit: zsh turns it on after the prompt, so the upper
-                            // lines of a multi-line zsh prompt stay in the save
+                            // the prompt's, unless a command typed at the prompt runs on that far down or the prompt
+                            // was redrawn below. Rows above it are all kept, so no prompt patterns here. Known limit:
+                            // zsh turns it on after the prompt, so the upper lines of a multi-line zsh prompt stay in
+                            // the save
                             const cursorRow = buffer.baseY + buffer.cursorY;
                             const mark = promptMarkers.get(terminal);
                             const markedRow = !mark ? cursorRow
@@ -1197,7 +1220,8 @@ export default class TerminalManager {
                                 : mark.marker.isDisposed ? cursorRow : mark.marker.line + mark.rowsBelow;
                             const promptStart = cursorRow - markedRow <= PROMPT_MAX_ROWS_BELOW_MARK
                                 ? Math.min(markedRow, cursorRow)
-                                : redrawnPromptRow(buffer, markedRow, cursorRow) ?? cursorRow;
+                                : typedOnPromptRow(buffer, markedRow, cursorRow)
+                                    ?? redrawnPromptRow(buffer, markedRow, cursorRow) ?? cursorRow;
                             serializedContent = promptStart > 0
                                 ? addons.serializeAddon.serialize({ ...serializeOptions, range: { start: 0, end: promptStart - 1 } })
                                 : '';

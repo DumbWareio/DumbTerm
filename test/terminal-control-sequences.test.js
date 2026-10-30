@@ -838,8 +838,8 @@ describe('terminal control sequences', () => {
     // bash 5.2's output at each keystroke (test/fixtures/bash-completion-listings.json); the terminal takes the
     // width it was captured at. Returns the content saved after each step
     const LISTINGS = require('./fixtures/bash-completion-listings.json');
-    async function replayCapture(name, stepCount) {
-        const { columns, steps } = LISTINGS[name];
+    async function replayCapture(name, stepCount, captures = LISTINGS) {
+        const { columns, steps } = captures[name];
         const saves = recordSavedSessions();
         terminal.resize(columns, terminal.rows);
         const savedAfter = [];
@@ -1158,6 +1158,82 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saved.at(-1)), [`${prompt}echo out`, 'out', `${prompt}ls /tmp/d/`,
             'alpha/ beta/  delta/ gamma/', `${prompt}ls /tmp/d/${'a'.repeat(55 + 4 * 80)}`, '']);
     });
+
+    // A command typed at the prompt and not run, long enough to take the cursor more than four rows below the marked
+    // row: the terminal wraps it, so its rows run on as one line from the prompt's
+    const typedCommand = (length) => `echo ${'a'.repeat(length)}`;
+
+    test('a saved session leaves out a Starship prompt with a half-typed command four rows long', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput(`${STARSHIP_PROMPT}echo out\r\n\x1b[?2004l\rout\r\n`);
+        await receiveOutput(`${STARSHIP_PROMPT}${typedCommand(250)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['', plain(STARSHIP_TOP_LINE), '❯ echo out', 'out', '']);
+    });
+
+    test('a saved session leaves out a plain prompt with a half-typed command six rows long', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput('\x1b[?2004hroot@box:/app# echo out\r\n\x1b[?2004l\rout\r\n');
+        await receiveOutput(`\x1b[?2004hroot@box:/app# ${typedCommand(400)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['root@box:/app# echo out', 'out', '']);
+    });
+
+    test('a saved session leaves out a Starship prompt with a half-typed command at 40 columns', async () => {
+        // At 40 columns the prompt's top line wraps its last space onto a row of its own, so the command starts on the
+        // prompt's third row and a command three rows long takes the cursor five rows below the marked one
+        const saves = recordSavedSessions();
+        terminal.resize(40, terminal.rows);
+        const [{ output: start }, { output: echoOut }] = LISTINGS.starshipNarrow.steps;
+        await receiveOutput(`${start}${echoOut}`);
+        const savedAtPrompt = saves.at(-1);
+        await receiveOutput(typedCommand(100));
+
+        assert.deepEqual(savedLines(savedAtPrompt).slice(2), ['❯ echo out', 'out', '']);
+        assert.equal(saves.at(-1), savedAtPrompt);
+    });
+
+    test('a saved session leaves out every line of a two-line prompt with a half-typed command', async () => {
+        const saves = recordSavedSessions();
+        const prompt = '\x1b[?2004huser@box ~/app\r\n$ ';
+        await receiveOutput(`${prompt}echo out\r\n\x1b[?2004l\rout\r\n`);
+        await receiveOutput(`${prompt}${typedCommand(400)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['user@box ~/app', '$ echo out', 'out', '']);
+    });
+
+    for (const [shape, firstLine] of [['a first line', 'Title'], ['a first line wrapped onto two rows', 'T'.repeat(100)]]) {
+        test(`a saved session leaves out the output of an app that left bracketed paste on and printed ${shape}, then a line running past four rows`, async () => {
+            // Known limit: a line that runs on from the row under the app's first line to the cursor reads as a command
+            // typed at a prompt, so the save stops above the app's output. An app starts new lines as it prints, so
+            // its last line seldom starts that high. Pinned so that changing it is deliberate
+            const saves = recordSavedSessions();
+            await receiveOutput(`$ app\r\n\x1b[?2004h${firstLine}\r\n${'x'.repeat(400)}`);
+
+            assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '']);
+        });
+    }
+
+    test('a saved session keeps the output of an app that starts with two blank rows, then a line running past four rows', async () => {
+        // No prompt has two blank rows first
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n\x1b[?2004h\r\n\r\n${'x'.repeat(400)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '', '', 'x'.repeat(320), '']);
+    });
+
+    // bash 5.2's output at each keystroke, a long command typed a key at a time (test/fixtures/bash-long-commands.json)
+    const LONG_COMMANDS = require('./fixtures/bash-long-commands.json');
+    for (const [name, prompt] of [['starshipLong', 'a Starship prompt'], ['starshipLongNarrow', 'a Starship prompt at 40 columns'],
+        ['plainLong', 'a plain prompt']]) {
+        test(`a saved session leaves out ${prompt} with a half-typed command more than four rows below it, as bash prints it`, async () => {
+            const saved = await replayCapture(name, 3, LONG_COMMANDS);
+
+            assert.deepEqual(savedLines(saved[1]).slice(-3), [name === 'plainLong' ? 'root@box:/app# echo out' : '❯ echo out',
+                'out', '']);
+            assert.equal(saved[2], saved[1]);
+        });
+    }
 
     test('a saved session leaves out the prompt redrawn at the top of a cleared screen', async () => {
         // Ctrl-L clears the screen, and with it the row the shell marked, and redraws the prompt without
