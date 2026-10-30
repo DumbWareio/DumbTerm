@@ -60,27 +60,36 @@ function redrawnPromptRow(buffer, markedRow, cursorRow) {
         while (buffer.getLine(row + 1)?.isWrapped) row++;
         return filled(row);
     };
-    // The first characters of a command, as many as asked for, from its rows listed last row first
-    const commandStart = (rows, length) => {
-        let prefix = '';
-        for (let i = rows.length - 1; i >= 0 && prefix.length < length; i--) {
-            prefix += rows[i].slice(0, length - prefix.length);
+    // Whether a command, from its rows listed last row first, starts like the marked one as sameCommand has it: one
+    // need only start like the other, and an empty one matches only another. Its rows are compared from the first,
+    // down to the first that differs or, past the marked command's end, the first with any text
+    const startsLike = (marked, rows) => {
+        let length = 0;
+        for (let i = rows.length - 1; i >= 0; i--) {
+            if (rows[i] === '') continue;
+            if (length === marked.length) return length > 0;
+            const part = rows[i].slice(0, marked.length - length);
+            if (!marked.startsWith(part, length)) return false;
+            length += part.length;
         }
-        return prefix;
+        return (length > 0) === (marked !== '');
     };
+    // The marked command for each number of rows above it, and whether it ends at its last column, read once each
+    const markedCommands = [];
     // The redrawn prompt's rows lie wholly below the marked command's first row. A row not marked as wrapped runs
     // on from a filled one only where the command was typed on: the marked one ended short of the last column. The
     // command's rows, from the cursor's line (with the rows it wraps onto) up to the row it starts on, are gathered a
     // row at a time as the search moves up, and only its start is compared: one line starting like the other reads
-    // no more of it than one character past the marked command
+    // no more of it than the marked command's length
     for (let start = cursorRow, unmarked = false, rows = [line(cursorRow)]; first > markedRow && start > first + 2;
         rows.push(text(--start))) {
         for (let above = 1; above < PROMPT_MAX_ROWS_BELOW_MARK && start - above > first + above; above++) {
             let same = text(start - above - 1) === '';
             for (let row = 0; same && row < above; row++) same = text(first + row) === text(start - above + row);
-            if (!same || (unmarked && lineFilled(first + above))) continue;
-            const marked = line(first + above);
-            if (sameCommand(marked, commandStart(rows, marked.length + 1))) return markedRow;
+            if (!same) continue;
+            const marked = (markedCommands[above] ??= { line: line(first + above), filled: lineFilled(first + above) });
+            if (unmarked && marked.filled) continue;
+            if (startsLike(marked.line, rows)) return markedRow;
         }
         if (!buffer.getLine(start)?.isWrapped) {
             if (!filled(start - 1)) break;

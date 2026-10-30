@@ -1052,6 +1052,28 @@ describe('terminal control sequences', () => {
         }
     });
 
+    test('a save reads a long marked command\'s rows a few times in all and compares each command no further than the row where it differs', async () => {
+        // The marked prompt's command wrapped onto 200 rows, under an app's lines each wrapped onto two rows, the first
+        // erased back to blank and the second repeating the prompt's top line: each line's second row starts a
+        // redrawn prompt's command to compare with the marked one, and each newline after a filled row leaves that
+        // command reading as typed on. Reading the marked command afresh for each would read ~200 rows each time, as
+        // would asking each time whether it ends at its last column, and building the redrawn one's start as long as
+        // the marked one would slice ~200 rows each time; counted, not timed. startsWith's characters count the
+        // marked command whole each time, so they are not bounded here
+        const saves = recordSavedSessions();
+        const top = 'H'.repeat(80);
+        await receiveOutput(`$ app\r\n\x1b[?2004h\r\n${top}\r\n> ${'y'.repeat(80 * 200)}\r\n${`${'x'.repeat(80)}\x1b[1K${top}\r\n`.repeat(1000)}`);
+        const buffer = terminal.buffer.active;
+        const cells = buffer.length * terminal.cols;
+        const work = countedSave();
+
+        assert.ok(savedLines(saves.at(-1)).includes(top), 'the app\'s output is kept');
+        assert.ok(work.reads < 50 * buffer.length, `${work.reads} row reads for ${buffer.length} rows`);
+        assert.ok(work.comparisons > 0, 'the commands are compared');
+        assert.ok(work.slices < 10 * work.comparisons, `${work.slices} slices for ${work.comparisons} comparisons`);
+        assert.ok(work.sliced < 10 * cells, `${work.sliced} characters sliced from for ${cells} cells`);
+    });
+
     // The save at the prompt after `echo out`, before the listing: what each later save should equal
     const savedBeforeListing = (saved) => saved[1];
 
