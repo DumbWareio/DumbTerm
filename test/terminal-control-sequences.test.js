@@ -1251,6 +1251,26 @@ describe('terminal control sequences', () => {
         });
     }
 
+    test('a saved session leaves out a background job\'s text printed with no final newline at a one-line prompt, with a long command typed on after it', async () => {
+        // Known limit: the job's text and the command run on as one line from the prompt's row, which reads as a command
+        // typed at the prompt, so the save stops above the prompt. With a command short enough to stay within four rows
+        // of the marked one, the save leaves the job's text out too. Pinned so that changing it is deliberate
+        const saves = recordSavedSessions();
+        await receiveOutput(`kept\r\n\x1b[?2004hroot@box:/app# job done${typedCommand(400)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['kept', '']);
+    });
+
+    test('a saved session leaves out a job\'s line under a blank row marked after output with no final newline, with a long command typed under it', async () => {
+        // Known limit: output with no final newline puts the mark on the row below, which can be blank like the first
+        // row of Starship's prompt, so the job's line reads as that prompt's top line and the command as its own.
+        // Pinned so that changing it is deliberate
+        const saves = recordSavedSessions();
+        await receiveOutput(`kept\r\nout\x1b[?2004h$ \r\n\r\njob done\r\n${typedCommand(400)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['kept', 'out$', '']);
+    });
+
     test('a saved session keeps the output of an app whose first line ran past four rows, with the cursor on the row below it', async () => {
         // The line that matters is the cursor's own, which starts on its row
         const saves = recordSavedSessions();

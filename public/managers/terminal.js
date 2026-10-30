@@ -102,7 +102,10 @@ function redrawnPromptRow(buffer, markedRow, cursorRow) {
 // the cursor moved down across its wrap (Ctrl-E, End, →), which readline does with a newline, or a wide character
 // that did not fit. And the other way: an app that left bracketed paste on and printed, from its first row, a line
 // running past four rows, or a blank row and one line and then such a line, with the cursor at its end, reads as
-// such a command, so its output from the first row on is left out
+// such a command, so its output from the first row on is left out. So is a background job's text printed with no
+// final newline at a one-line prompt, which the command typed after it runs on from as one line, and a job's line
+// under a blank marked row that is no Starship prompt's: output with no final newline puts the mark on the row below,
+// which may stay blank. Within four rows of the mark the save leaves all of these out already
 function typedOnPromptRow(buffer, markedRow, cursorRow) {
     const blank = (row) => (buffer.getLine(row)?.translateToString(true) ?? '') === '';
     const first = blank(markedRow) ? markedRow + 1 : markedRow;
