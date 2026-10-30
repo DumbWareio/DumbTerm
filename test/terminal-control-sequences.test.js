@@ -983,47 +983,73 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)).slice(0, 6), ['$ app', '', 'A', '', 'A', '']);
     });
 
-    test('a save reads a long wrapped line\'s rows a few times each and compares only the start of each command', async () => {
-        // An app's line wrapped onto 2,000 rows, every other one erased back to blank (EL 1 keeps the wrap) and the
-        // rest repeating the marked prompt's top line: each row there starts a redrawn prompt's command to compare
-        // with the marked one. Building that command afresh at each row would read ~500 rows per row, comparing it
-        // whole would go through ~80,000 characters each time, and taking its start from every row gathered so far
-        // would slice ~500 rows each time; counted, not timed
-        const saves = recordSavedSessions();
-        const top = 'H'.repeat(80);
-        await receiveOutput(`$ app\r\n\x1b[?2004h\r\n${top}\r\n> \r\n${`${'x'.repeat(80)}\x1b[1K${top}`.repeat(1000)}`);
+    // Run a save with its work counted: the rows it reads, its startsWith calls with the characters of both strings, its
+    // slice calls with the characters of the strings sliced, and its join calls with the characters joined. Strings
+    // built some other way (with + alone, or a template) go uncounted
+    function countedSave() {
         const buffer = terminal.buffer.active;
         const getLine = buffer.getLine.bind(buffer);
         const { startsWith, slice } = String.prototype;
-        let reads = 0;
-        let slices = 0;
-        let comparisons = 0;
-        let compared = 0;
+        const { join } = Array.prototype;
+        const work = { reads: 0, comparisons: 0, compared: 0, slices: 0, sliced: 0, joins: 0, joined: 0 };
         buffer.getLine = (row) => {
-            reads++;
+            work.reads++;
             return getLine(row);
         };
         String.prototype.startsWith = function (search, ...rest) {
-            comparisons++;
-            compared += this.length + String(search).length;
+            work.comparisons++;
+            work.compared += this.length + String(search).length;
             return startsWith.call(this, search, ...rest);
         };
         String.prototype.slice = function (...range) {
-            slices++;
+            work.slices++;
+            work.sliced += this.length;
             return slice.apply(this, range);
+        };
+        Array.prototype.join = function (...separator) {
+            const joined = join.apply(this, separator);
+            work.joins++;
+            work.joined += joined.length;
+            return joined;
         };
         try {
             manager.saveSessionState();
         } finally {
             Object.assign(String.prototype, { startsWith, slice });
+            Array.prototype.join = join;
             delete buffer.getLine;
         }
+        return work;
+    }
+
+    test('a save reads a long wrapped line\'s rows a few times each and compares only the start of each command', async () => {
+        // An app's line wrapped onto 2,000 rows, every other one erased back to blank (EL 1 keeps the wrap) and the
+        // rest repeating the marked prompt's top line: each row there starts a redrawn prompt's command to compare
+        // with the marked one. Building that command afresh at each row would read ~500 rows per row, comparing it
+        // whole would go through ~80,000 characters each time, and taking its start from every row gathered so far
+        // would slice ~500 rows each time, or slice it from them all joined, or added one to the front of the rest;
+        // counted, not timed. The save's work is counted with the line half as long too: twice as long, the line
+        // takes no count to more than three times as much
+        const saves = recordSavedSessions();
+        const top = 'H'.repeat(80);
+        const appRows = (count) => `${'x'.repeat(80)}\x1b[1K${top}`.repeat(count / 2);
+        await receiveOutput(`$ app\r\n\x1b[?2004h\r\n${top}\r\n> \r\n${appRows(1000)}`);
+        const half = countedSave();
+        await receiveOutput(appRows(1000));
+        const buffer = terminal.buffer.active;
+        const cells = buffer.length * terminal.cols;
+        const work = countedSave();
 
         assert.ok(savedLines(saves.at(-1)).includes(top), 'the app\'s output is kept');
-        assert.ok(reads < 50 * buffer.length, `${reads} row reads for ${buffer.length} rows`);
-        assert.ok(comparisons > 0, 'the commands are compared');
-        assert.ok(compared < 20 * comparisons, `${compared} characters compared in ${comparisons} comparisons`);
-        assert.ok(slices < 10 * comparisons, `${slices} slices for ${comparisons} comparisons`);
+        assert.ok(work.reads < 50 * buffer.length, `${work.reads} row reads for ${buffer.length} rows`);
+        assert.ok(work.comparisons > 0, 'the commands are compared');
+        assert.ok(work.compared < 20 * work.comparisons, `${work.compared} characters compared in ${work.comparisons} comparisons`);
+        assert.ok(work.slices < 10 * work.comparisons, `${work.slices} slices for ${work.comparisons} comparisons`);
+        assert.ok(work.sliced < 10 * cells, `${work.sliced} characters sliced from for ${cells} cells`);
+        assert.ok(work.joined < 10 * cells, `${work.joined} characters joined in ${work.joins} joins for ${cells} cells`);
+        for (const [count, done] of Object.entries(work)) {
+            assert.ok(done <= 3 * half[count], `${count}: ${done} for the whole line, ${half[count]} for half of it`);
+        }
     });
 
     // The save at the prompt after `echo out`, before the listing: what each later save should equal
