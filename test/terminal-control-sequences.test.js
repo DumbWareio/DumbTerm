@@ -1222,6 +1222,14 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '', '', 'x'.repeat(320), '']);
     });
 
+    test('a saved session keeps the output of an app that turned bracketed paste on partway through a line it ran on past four rows', async () => {
+        // The line starts above the prompt's rows, so it is no command typed there
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n${'x'.repeat(50)}\x1b[?2004h${'x'.repeat(600)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'x'.repeat(8 * 80), '']);
+    });
+
     // bash 5.2's output at each keystroke, a long command typed a key at a time (test/fixtures/bash-long-commands.json)
     const LONG_COMMANDS = require('./fixtures/bash-long-commands.json');
     for (const [name, prompt] of [['starshipLong', 'a Starship prompt'], ['starshipLongNarrow', 'a Starship prompt at 40 columns'],
