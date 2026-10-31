@@ -13,8 +13,8 @@ const BASE_PATH = self.registration.scope;
 // served under ('/' or '/a/'), and an install deletes only its own caches
 const SCOPE_PATH = new URL(BASE_PATH).pathname;
 let CACHE_NAME = cacheNameFor(CACHE_VERSION);
-// Names of the caches this worker's fills are still filling (a name appears once per fill), so no fill deletes another's
-// cache. Another worker of this install can't see the list, which is why only the active worker clears caches.
+// Names of the caches this worker's fills are still filling (a name appears once per fill), so no fill deletes
+// another's cache. Other workers of this install can't see the list, so only the active worker clears caches.
 const CACHES_BEING_FILLED = [];
 
 /**
@@ -363,7 +363,9 @@ async function installCache(isFirstInstall = false, requestId, { activating = fa
         // Clear old caches only now that the new one is filled: until then they are what works offline.
         // A cache another fill is still filling is left alone: that fill keeps it if it succeeds, and the next fill
         // clears it if it fails. Only the active worker clears them: a worker whose successor has activated can't see
-        // which caches the successor's fills are filling, and the successor's next fill clears what it leaves.
+        // which caches the successor's fills are filling. What such a worker leaves stays until the active worker's
+        // next fill, which may be the next release's activation. One that can't tell it was replaced still clears, and
+        // can delete the cache its successor's activation fill fills; that fill then fills it once more.
         if (activating || isActiveWorker()) {
             const oldCaches = (await caches.keys())
                 .filter(key => isStaleCache(key, cacheName) && !CACHES_BEING_FILLED.includes(key));
