@@ -1331,6 +1331,33 @@ describe('terminal control sequences', () => {
         assert.equal(savedLines(saves.at(-1)).length, 6, 'the listing and the redrawn prompt are kept');
     });
 
+    test('a saved session leaves out a plain prompt redrawn below a completion listing with a long command when keys other than Tab were typed below', async () => {
+        // Every key typed reaches the page; only a Tab moves the row the reach starts below
+        const saved = await replayCapture('plainSixRows', 4, LISTINGS, { typeTabs: true });
+        terminal.input('a');
+        terminal.input('\x1b[D');
+        const saves = recordSavedSessions();
+        manager.saveSessionState();
+
+        assert.deepEqual(savedLines(savedBeforeListing(saved)), ['root@box:/app# echo out', 'out', '']);
+        assert.equal(saves.at(-1), savedBeforeListing(saved));
+    });
+
+    test('a saved session keeps a plain prompt redrawn below a completion listing with a long command when Tab was last typed on its first row', async () => {
+        // Known limit: a Tab typed at the redrawn prompt while its command is still on the prompt's row (a completion with
+        // no listing) moves the reach below that row, so the redrawn prompt, on it, is no longer looked for higher than
+        // the cursor's rows. Pinned so that changing it is deliberate
+        const saved = await replayCapture('plainSixRows', 3, LISTINGS, { typeTabs: true });
+        terminal.input('\t');
+        await receiveOutput('\x07');
+        await receiveOutput(LISTINGS.plainSixRows.steps[3].output);
+        const saves = recordSavedSessions();
+        manager.saveSessionState();
+
+        assert.deepEqual(savedLines(saved[2]), ['root@box:/app# echo out', 'out', '']);
+        assert.equal(savedLines(saves.at(-1)).length, 6, 'the listing and the redrawn prompt are kept');
+    });
+
     test('a saved session keeps a plain prompt redrawn below a completion listing with a long command when Tab was typed only at the prompt before', async () => {
         // A new prompt lets go of the Tab typed at the one before
         const saves = recordSavedSessions();
@@ -1654,6 +1681,18 @@ describe('terminal control sequences', () => {
         await receiveOutput(`\x1b[2A\r\x1b[79C\x1b[1J`);
 
         assert.ok(!markedRows().includes(row), `no record of row ${row} in ${markedRows()}`);
+    });
+
+    test('ED 1 from the last column keeps the record of the row below the cursor\'s once the screen has scrolled', async () => {
+        // There the row numbered one past the cursor's row on the screen is in the scrollback, and the row below the
+        // cursor's stays marked as wrapped
+        const saves = recordSavedSessions();
+        await receiveOutput(SCREENFULS);
+        await plainCommandAfterCtrlAE(saves);
+        const row = terminal.buffer.active.baseY + terminal.buffer.active.cursorY - 1;
+        await receiveOutput(`\x1b[2A\r\x1b[79C\x1b[1J`);
+
+        assert.ok(markedRows().includes(row), `a record of row ${row} in ${markedRows()}`);
     });
 
     test('a saved session no longer follows a command across the rows the cursor moved up over once the terminal is resized', async () => {
