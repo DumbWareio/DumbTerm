@@ -1205,6 +1205,38 @@ describe('terminal control sequences', () => {
         assert.equal(saves.at(-1), '');
     });
 
+    // bash 5.2 below a listing (captured for issue #64): the command typed on until it wraps, then Ctrl-A and Ctrl-E. Where
+    // it wraps, its row's last column is left blank, or the marked command filled its row
+    for (const [prompt, name, sessions] of [['a Starship prompt', 'starship', ['WideCtrlE', 'SpaceCtrlE']],
+        ['a plain prompt', 'plain', ['WideCtrlE', 'SpaceCtrlE', 'FilledCtrlE']]]) {
+        for (const [session, shape] of [['WideCtrlE', 'a wide character that did not fit the row\'s last column'],
+            ['SpaceCtrlE', 'a space in the row\'s last column'], ['FilledCtrlE', 'a command whose marked one filled its row']]
+            .filter(([session]) => sessions.includes(session))) {
+            test(`a saved session leaves out ${prompt} redrawn below a completion listing once the cursor moved down across ${shape}, as bash prints it`, async () => {
+                const saved = await replayCapture(`${name}${session}`, 6);
+
+                assert.deepEqual(savedLines(savedBeforeListing(saved)).slice(-3),
+                    [name === 'plain' ? 'root@box:/app# echo out' : '\u276f echo out', 'out', '']);
+                assert.deepEqual(saved.slice(3), [3, 4, 5].map(() => savedBeforeListing(saved)),
+                    'typed on until it wraps, after Ctrl-A and after Ctrl-E');
+            });
+        }
+    }
+
+    test('a saved session keeps a Starship prompt redrawn below a completion listing for a command whose marked one filled its row, once typed on, as bash prints it', async () => {
+        // Known limit: bash takes the cursor past a command that fills its row by writing a space at the start of the
+        // next row. The marked command keeps that space; typed on at the redrawn prompt, the command's next character
+        // replaces it, so neither starts like the other and the save keeps the listing and the redrawn prompt, which the
+        // tab shows again above its new prompt (a plain prompt below a listing one row tall is left out within four rows
+        // of the marked one). Pinned so that changing it is deliberate
+        const saved = await replayCapture('starshipFilledCtrlE', 6);
+
+        const top = savedLines(savedBeforeListing(saved))[1];
+        const command = `\u276f ls /tmp/${'x'.repeat(69)}/`;
+        assert.equal(saved[2], savedBeforeListing(saved), 'before it was typed on, it was left out');
+        assert.deepEqual(savedLines(saved[5]), ['', top, '\u276f echo out', 'out', '', top, command, 'alpha/ beta/', '', top, command, '']);
+    });
+
     test('a saved session leaves out a prompt with a blank row and three lines above its command redrawn below a completion listing once the cursor moved down across the command\'s wrap', async () => {
         // Three rows above the command, the most a prompt has
         const saves = recordSavedSessions();
@@ -1231,21 +1263,14 @@ describe('terminal control sequences', () => {
             '/app', `$ ls /tmp/d/`, COMPLETIONS.trimEnd(), 'context', 'user@box', '/app', `$ ls /tmp/d/${'a'.repeat(68)}`, '']);
     });
 
-    test('a saved session keeps a plain prompt redrawn below a completion listing once the cursor moved down across the command\'s wrap', async () => {
-        // Known limit: readline moves the cursor down a wrapped command with a newline, which leaves the row it
-        // moves to unmarked as a wrapped one, and a one-row prompt has no row above its command to anchor the
-        // rows below on. The save keeps the listing and the redrawn prompt, which the tab shows again above its new
-        // prompt. Pinned so that changing it is deliberate
+    test('a saved session leaves out a plain prompt redrawn below a completion listing once the cursor moved down across the command\'s wrap', async () => {
+        // readline moves the cursor down a wrapped command with a newline, which leaves the row it moves to unmarked as
+        // a wrapped one; Ctrl-A moved the cursor up over that row first, which the terminal recorded
         const saved = await replayCapture('plainCtrlE', 6);
 
-        const prompt = 'root@box:/app# ';
-        assert.deepEqual(savedLines(saved.at(-1)), [`${prompt}echo out`, 'out', `${prompt}ls /tmp/e/`,
-            'alpha-a-rather-long-directory-name/ eta-a-rather-long-directory-name/',
-            'beta-a-rather-long-directory-name/  gamma-a-rather-long-directory-name/',
-            'delta-a-rather-long-directory-name/ theta-a-rather-long-directory-name/',
-            'eps-a-rather-long-directory-name/   zeta-a-rather-long-directory-name/',
-            `${prompt}ls /tmp/e/${'a'.repeat(55)}`, '']);
-        assert.deepEqual(savedLines(saved[4]), [`${prompt}echo out`, 'out', ''], 'before the cursor moved, it was left out');
+        assert.deepEqual(savedLines(savedBeforeListing(saved)), ['root@box:/app# echo out', 'out', '']);
+        assert.deepEqual(saved.slice(3), [3, 4, 5].map(() => savedBeforeListing(saved)),
+            'typed until it wraps, after Ctrl-A and after Ctrl-E');
     });
 
     test('a saved session keeps a plain prompt redrawn below a completion listing with a command more than four rows long', async () => {
@@ -1435,16 +1460,166 @@ describe('terminal control sequences', () => {
         assert.equal(saved[3], saved[1]);
     });
 
-    test('a saved session keeps a Starship prompt with a half-typed command four rows long after Ctrl-A and Ctrl-E, as bash prints it', async () => {
-        // Known limit: readline moves the cursor down the command with a newline, which leaves the rows it moves to
-        // unmarked as wrapped ones, so the command no longer runs on as one line from the prompt's. The save keeps the
-        // prompt and the command's rows above the cursor's, which the tab shows again above its new prompt. Pinned so
-        // that changing it is deliberate
-        const saved = await replayCapture('starshipLongCtrlE', 5, LONG_COMMANDS);
+    for (const [name, prompt] of [['starshipLongCtrlE', 'a Starship prompt with a half-typed command four rows long'],
+        ['plainLongCtrlE', 'a plain prompt with a half-typed command six rows long']]) {
+        test(`a saved session leaves out ${prompt} after Ctrl-A and Ctrl-E, as bash prints it`, async () => {
+            // readline moves the cursor down the command with a newline, which leaves the rows it moves to unmarked as
+            // wrapped ones; Ctrl-A moved the cursor up over them first, which the terminal recorded
+            const saved = await replayCapture(name, 5, LONG_COMMANDS);
 
-        const atPrompt = savedLines(saved[1]);
-        assert.deepEqual(savedLines(saved[4]), [...atPrompt.slice(0, -1), '', atPrompt[1], `❯ echo ${'a'.repeat(73)}`,
-            'a'.repeat(80), 'a'.repeat(80), '']);
+            assert.deepEqual(savedLines(saved[1]).slice(-3), [name === 'plainLongCtrlE' ? 'root@box:/app# echo out' : '\u276f echo out',
+                'out', '']);
+            assert.deepEqual(saved.slice(2), [2, 3, 4].map(() => saved[1]), 'typed, after Ctrl-A and after Ctrl-E');
+        });
+    }
+
+    // A plain prompt with a half-typed command six rows long, after readline's Ctrl-A and Ctrl-E: the cursor moved up
+    // the command to its first row and back down with newlines, which left none of its rows marked as wrapped. Returns
+    // the save at the prompt before the command was typed, which the save after Ctrl-E equals
+    const ROOT_PROMPT = 'root@box:/app# ';
+    async function plainCommandAfterCtrlAE(saves) {
+        await receiveOutput(`\x1b[?2004h${ROOT_PROMPT}echo out\r\n\x1b[?2004l\rout\r\n\x1b[?2004h${ROOT_PROMPT}`);
+        const atPrompt = saves.at(-1);
+        await receiveOutput(typedCommand(400));
+        await receiveOutput(ctrlA(5, ROOT_PROMPT.length));
+        await receiveOutput(ctrlE(5, 20));
+        assert.equal(saves.at(-1), atPrompt, 'after Ctrl-E, the prompt is left out');
+        return atPrompt;
+    }
+    // The command's rows as the save keeps them once they no longer run on as one line from the prompt's
+    const keptCommand = [`${ROOT_PROMPT}echo out`, 'out', `${ROOT_PROMPT}${typedCommand(400)}`.slice(0, 80)];
+
+    for (const [move, up] of [['CSI 5 A', '\x1b[5A'], ['ESC M once a row', '\x1bM'.repeat(5)]]) {
+        test(`a saved session leaves out a plain prompt with a half-typed command six rows long after the cursor moved up it by ${move} and back down`, async () => {
+            const saves = recordSavedSessions();
+            await receiveOutput(`\x1b[?2004h${ROOT_PROMPT}echo out\r\n\x1b[?2004l\rout\r\n\x1b[?2004h${ROOT_PROMPT}`);
+            const atPrompt = saves.at(-1);
+            await receiveOutput(`${typedCommand(400)}${up}${ctrlE(5, 20)}`);
+
+            assert.equal(saves.at(-1), atPrompt);
+        });
+    }
+
+    // The markers of the screen in use: the prompt's mark is in the normal one
+    for (const [where, output, markers] of [['while a command runs', `\x1b[?2004h${ROOT_PROMPT}ls\r\n\x1b[?2004l\r`, 1],
+        ['in an editor\'s screen', '\x1b[?2004h$ vim\r\n\x1b[?2004l\r\x1b[?1049h\x1b[?2004h', 0]]) {
+        test(`the cursor's moves up over wrapped rows ${where} are not recorded`, async () => {
+            // Only a prompt's are: the shell's line editor turns bracketed paste on there, in the normal buffer
+            recordSavedSessions();
+            await receiveOutput(`${output}${'x'.repeat(420)}${ctrlA(5, 0)}${ctrlE(5, 20)}`);
+
+            assert.equal(terminal.markers.length, markers, `markers on rows ${terminal.markers.map((marker) => marker.line)}`);
+        });
+    }
+
+    // An erase on the command's fourth row, two above the cursor's, after which the rest of the command is written again
+    // from that row's first column, so the rows below it are marked as wrapped once more
+    for (const [erase, sequence, clearsWrap] of [
+        ['EL 0 at the row\'s first column', '\r\x1b[K', true],
+        ['EL 2', '\x1b[2K', true],
+        ['DECSEL 0 at the row\'s first column (CSI ? K)', '\r\x1b[?K', true],
+        ['DECSEL 2 (CSI ? 2 K)', '\x1b[?2K', true],
+        ['ED 0 at the row\'s first column', '\r\x1b[J', true],
+        ['DECSED 0 at the row\'s first column (CSI ? J)', '\r\x1b[?J', true],
+        ['EL 0 past the row\'s first column', '\r\x1b[5C\x1b[K', false],
+        ['EL 1', '\r\x1b[5C\x1b[1K', false],
+        ['ED 0 past the row\'s first column', '\r\x1b[5C\x1b[J', false],
+    ]) {
+        test(`a saved session ${clearsWrap ? 'no longer follows' : 'still follows'} a command across a row the cursor moved up over once ${erase} erases it`, async () => {
+            // The terminal clears a row's wrap where the erase starts at its first column or takes the whole row; a row the
+            // cursor moved up over at a prompt then counts as wrapped no more than any other
+            const saves = recordSavedSessions();
+            const atPrompt = await plainCommandAfterCtrlAE(saves);
+            await receiveOutput(`\x1b[2A${sequence}\r${'a'.repeat(180)}`);
+
+            if (clearsWrap) assert.deepEqual(savedLines(saves.at(-1)).slice(0, 3), keptCommand);
+            else assert.equal(saves.at(-1), atPrompt);
+        });
+    }
+
+    // The rows of the buffer that markers are on
+    const markedRows = () => terminal.markers.map((marker) => marker.line);
+
+    for (const [erase, sequence] of [['ED 1', '\x1b[5C\x1b[1J'], ['DECSED 1 (CSI ? 1 J)', '\x1b[5C\x1b[?1J'],
+        ['ED 2', '\x1b[2J'], ['DECSED 2 (CSI ? 2 J)', '\x1b[?2J']]) {
+        test(`${erase} drops the record of the cursor's row, which it erases`, async () => {
+            // The erase takes the prompt's marked row with it, so no save can tell
+            const saves = recordSavedSessions();
+            await plainCommandAfterCtrlAE(saves);
+            const row = terminal.buffer.active.baseY + terminal.buffer.active.cursorY - 2;
+            await receiveOutput(`\x1b[2A\r${sequence}`);
+
+            assert.ok(!markedRows().includes(row), `no record of row ${row} in ${markedRows()}`);
+        });
+    }
+
+    test('ED 1 from the last column drops the record of the row the terminal unmarks as wrapped below the cursor\'s', async () => {
+        // xterm.js clears the wrap of the row numbered one past the cursor's row on the screen, counted from the top of
+        // the buffer: here, with no scrollback, the row below the cursor's
+        const saves = recordSavedSessions();
+        await plainCommandAfterCtrlAE(saves);
+        const row = terminal.buffer.active.baseY + terminal.buffer.active.cursorY - 1;
+        await receiveOutput(`\x1b[2A\r\x1b[79C\x1b[1J`);
+
+        assert.ok(!markedRows().includes(row), `no record of row ${row} in ${markedRows()}`);
+    });
+
+    test('a saved session no longer follows a command across the rows the cursor moved up over once the terminal is resized', async () => {
+        // Resized, the terminal rewraps its lines, and the rows move
+        const saves = recordSavedSessions();
+        await plainCommandAfterCtrlAE(saves);
+        terminal.resize(100, terminal.rows);
+        manager.saveSessionState();
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(0, 3), keptCommand);
+    });
+
+    test('the rows the cursor moves up over again and again at a prompt are recorded once each', async () => {
+        const saves = recordSavedSessions();
+        await plainCommandAfterCtrlAE(saves);
+        const recorded = markedRows();
+        // Each time, the command is drawn again from its first row, as readline does after a key typed there, which marks
+        // the rows it runs onto as wrapped once more
+        for (let i = 0; i < 20; i++) {
+            await receiveOutput(`${ctrlA(5, ROOT_PROMPT.length)}\r${ROOT_PROMPT}${typedCommand(400)}${ctrlA(5, ROOT_PROMPT.length)}${ctrlE(5, 20)}`);
+        }
+
+        assert.deepEqual(markedRows(), recorded);
+        assert.equal(recorded.length, 6, 'the marked row and the five the command wraps onto');
+    });
+
+    test('an app that keeps bracketed paste on and moves up over a wrapped row again and again leaves a bounded record', async () => {
+        // Each time on a new row: the app's line wraps onto it, and the cursor moves up over it and back down. The record
+        // keeps the rows nearest the cursor, as many as no screen is tall
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n\x1b[?2004h${`${'x'.repeat(90)}\x1b[A\r\n\r\n`.repeat(500)}`);
+        const buffer = terminal.buffer.active;
+        const cursorRow = buffer.baseY + buffer.cursorY;
+
+        assert.ok(terminal.markers.length <= 201, `${terminal.markers.length} markers`);
+        assert.ok(markedRows().includes(cursorRow - 1), 'the last row moved up over is recorded');
+        assert.ok(savedLines(saves.at(-1)).includes('$ app'), 'the app\'s output is kept');
+    });
+
+    test('a new prompt drops the record of the rows the cursor moved up over at the one before', async () => {
+        const saves = recordSavedSessions();
+        await plainCommandAfterCtrlAE(saves);
+        await receiveOutput(`\r\n\x1b[?2004l\r${'a'.repeat(400)}\r\n\x1b[?2004h${ROOT_PROMPT}`);
+
+        assert.equal(terminal.markers.length, 1, `markers on rows ${markedRows()}`);
+    });
+
+    test('a prompt redrawn by Ctrl-L drops the record of the rows the cursor moved up over above the screen', async () => {
+        // The screen is the prompt's eight rows: typed on, the command scrolls its first rows into the scrollback, which
+        // clearing the screen leaves
+        terminal.resize(80, 8);
+        const saves = recordSavedSessions();
+        await plainCommandAfterCtrlAE(saves);
+        await receiveOutput('a'.repeat(400));
+        assert.ok(terminal.buffer.active.baseY > 3, 'the command\'s first rows in the scrollback');
+        await receiveOutput(`\x1b[H\x1b[2J${ROOT_PROMPT}`);
+
+        assert.equal(terminal.markers.length, 1, `markers on rows ${markedRows()}`);
     });
 
     test('a saved session leaves out the prompt redrawn at the top of a cleared screen', async () => {

@@ -10,6 +10,9 @@ const promptMarkers = new WeakMap();
 // command typed at the prompt runs on that far (see typedOnPromptRow) or the prompt was redrawn below (see
 // redrawnPromptRow)
 const PROMPT_MAX_ROWS_BELOW_MARK = 4;
+// The most rows recorded as wrapped at a prompt (see initTerminal): more than a screen holds, and the cursor moves up
+// no higher than the screen's top
+const MAX_WRAP_CLAIMS = 200;
 // readline redraws its whole prompt below a completion listing without turning bracketed paste on again, so
 // the cursor ends up further below the marked row than that. The redrawn prompt repeats the marked one row for
 // row: look for it, from its first line (after a blank one, Starship's) down to the command, starting in the
@@ -31,11 +34,11 @@ const PROMPT_MAX_ROWS_BELOW_MARK = 4;
 // line again, with the cursor on that line, or below it where the input line it first drew ended short of its last
 // column and the redrawn one and each line after it above the cursor's end at theirs, its output from the first
 // blank row on
-function redrawnPromptRow(buffer, markedRow, cursorRow) {
+function redrawnPromptRow(buffer, wrapped, markedRow, cursorRow) {
     const text = (row) => buffer.getLine(row)?.translateToString(true) ?? '';
     const line = (row) => {
         let joined = text(row);
-        for (let next = row + 1; buffer.getLine(next)?.isWrapped; next++) joined += text(next);
+        for (let next = row + 1; wrapped(next); next++) joined += text(next);
         return joined;
     };
     const first = text(markedRow) === '' ? markedRow + 1 : markedRow;
@@ -43,7 +46,7 @@ function redrawnPromptRow(buffer, markedRow, cursorRow) {
     const sameCommand = (a, b) => a === b || (a !== '' && b !== '' && (a.startsWith(b) || b.startsWith(a)));
     const highestTop = cursorRow - PROMPT_MAX_ROWS_BELOW_MARK + 1;
     let commandRow = cursorRow;
-    while (commandRow >= highestTop && buffer.getLine(commandRow)?.isWrapped) commandRow--;
+    while (commandRow >= highestTop && wrapped(commandRow)) commandRow--;
     const command = line(commandRow);
     for (let top = commandRow; top >= highestTop; top--) {
         let same = true;
@@ -61,7 +64,7 @@ function redrawnPromptRow(buffer, markedRow, cursorRow) {
     };
     // Whether the line starting on a row ends at its last row's last column
     const lineFilled = (row) => {
-        while (buffer.getLine(row + 1)?.isWrapped) row++;
+        while (wrapped(row + 1)) row++;
         return filled(row);
     };
     // Whether a command, from its rows listed last row first, starts like the marked one as sameCommand has it: one
@@ -95,7 +98,7 @@ function redrawnPromptRow(buffer, markedRow, cursorRow) {
             if (unmarked && marked.filled) continue;
             if (startsLike(marked.line, rows)) return markedRow;
         }
-        if (!buffer.getLine(start)?.isWrapped) {
+        if (!wrapped(start)) {
             if (!filled(start - 1)) break;
             unmarked = true;
         }
@@ -120,14 +123,14 @@ function redrawnPromptRow(buffer, markedRow, cursorRow) {
 // final newline at a one-line prompt, which the command typed after it runs on from as one line, and a job's line
 // under a blank marked row that is no Starship prompt's: output with no final newline puts the mark on the row below,
 // which may stay blank. Within four rows of the mark the save leaves all of these out already
-function typedOnPromptRow(buffer, markedRow, cursorRow) {
+function typedOnPromptRow(buffer, wrapped, markedRow, cursorRow) {
     const blank = (row) => (buffer.getLine(row)?.translateToString(true) ?? '') === '';
     const first = blank(markedRow) ? markedRow + 1 : markedRow;
     if (blank(first)) return null;
     let second = first + 1;
-    while (buffer.getLine(second)?.isWrapped) second++;
+    while (wrapped(second)) second++;
     let start = cursorRow;
-    while (buffer.getLine(start)?.isWrapped) start--;
+    while (wrapped(start)) start--;
     return start === first || (first > markedRow && start === second) ? markedRow : null;
 }
 
@@ -783,6 +786,14 @@ export default class TerminalManager {
         // (CSI ? 1049 h/l) is a separate private-mode sequence that xterm.js already handles
         terminal.parser.registerOscHandler(133, () => true);
 
+        // A new mark replaces the one before, with what was recorded at its prompt
+        const setMark = (mark) => {
+            const old = promptMarkers.get(terminal);
+            old?.marker?.dispose();
+            old?.claims.forEach((claim) => claim.dispose());
+            promptMarkers.set(terminal, { ...mark, claims: [] });
+        };
+
         // Shells turn bracketed paste on (CSI ? 2004 h) as their line editor takes over: bash before it prints
         // the prompt, zsh after. Mark that row so a saved session can leave the prompt out, or the row below
         // when the cursor is not at the start of a line: the row holds output with no final newline, and a
@@ -791,8 +802,7 @@ export default class TerminalManager {
         terminal.parser.registerCsiHandler({ prefix: '?', final: 'h' }, (params) => {
             const buffer = terminal.buffer.active;
             if (params.includes(2004) && buffer.type === 'normal') {
-                promptMarkers.get(terminal)?.marker?.dispose();
-                promptMarkers.set(terminal, { marker: terminal.registerMarker(buffer.cursorX === 0 ? 0 : 1), rowsBelow: 0 });
+                setMark({ marker: terminal.registerMarker(buffer.cursorX === 0 ? 0 : 1), rowsBelow: 0 });
             }
             return false;
         });
@@ -806,17 +816,70 @@ export default class TerminalManager {
             const buffer = terminal.buffer.active;
             const mark = promptMarkers.get(terminal);
             if (params[0] === 3 && mark?.rowsBelow === 1 && !mark.marker.isDisposed && mark.marker.line === buffer.baseY - 1) {
-                mark.marker.dispose();
-                promptMarkers.set(terminal, { marker: null, rowsBelow: 0 });
+                setMark({ marker: null, rowsBelow: 0 });
             }
             if (params[0] === 2 && terminal.modes.bracketedPasteMode && buffer.type === 'normal') {
-                promptMarkers.get(terminal)?.marker?.dispose();
-                promptMarkers.set(terminal, buffer.baseY > 0
+                setMark(buffer.baseY > 0
                     ? { marker: terminal.registerMarker(-buffer.cursorY - 1), rowsBelow: 1 }
                     : { marker: null, rowsBelow: 0 });
             }
             return false;
         });
+
+        // readline moves the cursor up a wrapped command with CSI A (Ctrl-A, ←, Backspace) and back down with a newline
+        // (Ctrl-E, End, →), which unmarks each row it moves to as a wrapped one. So at a prompt, each row the cursor moves
+        // up over (CSI A, ESC M) while it is marked as wrapped is recorded with a marker, kept with the prompt's mark, and
+        // the save counts it as wrapped still (see wrapped in saveSessionState). The record holds each row once, in the
+        // order of the rows, and no more than MAX_WRAP_CLAIMS of them: past that the highest goes. A row's record goes
+        // when an erase clears its wrap as xterm.js does: EL 0 from the row's first column, EL 2, ED 0 from the first
+        // column, ED 1 and ED 2, and their selective forms (CSI ? K, CSI ? J); the rows ED resets above or below the
+        // cursor's lose their markers with their text. The whole record goes with a new mark (see setMark) and on a
+        // resize, which rewraps the rows. Each handler returns false so xterm.js still does its part
+        const claimWrappedRows = (count) => {
+            const buffer = terminal.buffer.active;
+            const claims = promptMarkers.get(terminal)?.claims;
+            if (!claims || !terminal.modes.bracketedPasteMode || buffer.type !== 'normal') return;
+            const cursorRow = buffer.baseY + buffer.cursorY;
+            for (let up = 0; up < Math.min(count, buffer.cursorY); up++) {
+                const row = cursorRow - up;
+                if (!buffer.getLine(row)?.isWrapped) continue;
+                // Rows below this one are on the screen, and markers erased with their rows are let go on the way
+                let at = claims.length;
+                for (; at > 0 && (claims[at - 1].isDisposed || claims[at - 1].line > row); at--) {
+                    if (claims[at - 1].isDisposed) claims.splice(at - 1, 1);
+                }
+                if (claims[at - 1]?.line === row) continue;
+                claims.splice(at, 0, terminal.registerMarker(-up));
+                if (claims.length > MAX_WRAP_CLAIMS) claims.shift().dispose();
+            }
+        };
+        terminal.parser.registerCsiHandler({ final: 'A' }, (params) => {
+            claimWrappedRows(params[0] || 1);
+            return false;
+        });
+        terminal.parser.registerEscHandler({ final: 'M' }, () => {
+            claimWrappedRows(1);
+            return false;
+        });
+        const unclaim = (row) => {
+            const claims = promptMarkers.get(terminal)?.claims ?? [];
+            for (let at = claims.length - 1; at >= 0 && (claims[at].isDisposed || claims[at].line >= row); at--) {
+                if (claims[at].isDisposed || claims[at].line === row) claims.splice(at, 1)[0].dispose();
+            }
+        };
+        const unclaimErased = (mode, display) => {
+            const buffer = terminal.buffer.active;
+            if (mode === 2 || (mode === 0 && buffer.cursorX === 0) || (display && mode === 1)) unclaim(buffer.baseY + buffer.cursorY);
+            // ED 1 from the last column also unmarks the row numbered one past the cursor's row on the screen, counted
+            // from the top of the buffer (xterm.js 6.0.0): the row below the cursor's while nothing has scrolled
+            if (display && mode === 1 && buffer.cursorX + 1 >= terminal.cols) unclaim(buffer.cursorY + 1);
+            return false;
+        };
+        for (const prefix of [undefined, '?']) {
+            terminal.parser.registerCsiHandler({ prefix, final: 'K' }, (params) => unclaimErased(params[0], false));
+            terminal.parser.registerCsiHandler({ prefix, final: 'J' }, (params) => unclaimErased(params[0], true));
+        }
+        terminal.onResize(() => promptMarkers.get(terminal)?.claims.splice(0).forEach((claim) => claim.dispose()));
 
         // Then load other addons
         terminal.loadAddon(fitAddon);
@@ -1239,10 +1302,12 @@ export default class TerminalManager {
                             const markedRow = !mark ? cursorRow
                                 : !mark.marker ? 0
                                 : mark.marker.isDisposed ? cursorRow : mark.marker.line + mark.rowsBelow;
+                            const claimed = new Set(mark?.claims.filter((claim) => !claim.isDisposed).map((claim) => claim.line));
+                            const wrapped = (row) => !!buffer.getLine(row)?.isWrapped || claimed.has(row);
                             const promptStart = cursorRow - markedRow <= PROMPT_MAX_ROWS_BELOW_MARK
                                 ? Math.min(markedRow, cursorRow)
-                                : typedOnPromptRow(buffer, markedRow, cursorRow)
-                                    ?? redrawnPromptRow(buffer, markedRow, cursorRow) ?? cursorRow;
+                                : typedOnPromptRow(buffer, wrapped, markedRow, cursorRow)
+                                    ?? redrawnPromptRow(buffer, wrapped, markedRow, cursorRow) ?? cursorRow;
                             serializedContent = promptStart > 0
                                 ? addons.serializeAddon.serialize({ ...serializeOptions, range: { start: 0, end: promptStart - 1 } })
                                 : '';
