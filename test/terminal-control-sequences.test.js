@@ -1129,6 +1129,16 @@ describe('terminal control sequences', () => {
         assert.equal(saved.at(-1), savedBeforeListing(saved));
     });
 
+    test('a saved session leaves out a Starship prompt redrawn below a completion listing with a long command erased back', async () => {
+        // The redrawn command wraps onto more rows than a prompt reaches, and is shorter than the marked one: it need
+        // only start like it
+        const saves = recordSavedSessions();
+        await receiveOutput(`\r\n\x1b[?2004h\r\n\x1b[1mdir\x1b[0m on main\r\n\u276f echo ${'y'.repeat(500)}\r\nf1  f2  f3\r\n\r\n`
+            + `dir on main\r\n\u276f echo ${'y'.repeat(420)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['']);
+    });
+
     test('a saved session leaves out a Starship prompt redrawn below a completion listing for a command three rows long at 40 columns', async () => {
         // At 40 columns the prompt's top line wraps its last space onto a row of its own, so the redrawn prompt's top
         // line is five rows above the cursor
