@@ -156,7 +156,9 @@ function redrawnPromptRow(buffer, wrapped, markedRow, cursorRow, tabRow) {
 // such a line and then a short line, with the cursor on the short one (the long line reads as the top line of a prompt
 // like Starship's, the short one as its command), as it did before the rows the cursor moved up over were recorded, and
 // so does one that moved the cursor up over such a line and back down with newlines, each row it moved up over still
-// starting like what it held, and the row above each holding just what it held. So is a background job's text printed
+// starting like what it held, and the row above each holding just what it held, or, on the row it last moved up onto
+// with the cursor left there, holding just what an erase past the first column left of it, as readline's Backspace
+// across the wrap leaves it. So is a background job's text printed
 // with no final newline at a one-line prompt, which the command typed after it runs on from as one line, and a job's
 // line under a blank marked row that is no Starship prompt's: output with no final newline puts the mark on the row
 // below, which may stay blank. Within four rows of the mark the save leaves all of these out already
@@ -892,7 +894,12 @@ export default class TerminalManager {
         // text it had, which the row no longer starts like, and the command no longer runs on across it; and so does an
         // edit that keeps a row's length after Ctrl-A (M-c, M-u, Ctrl-T, a Tab completion in the middle of the line) on
         // the row above a recorded one: readline writes it where it stands and moves up over no row, so the record
-        // keeps the row above's old text
+        // keeps the row above's old text. Under a scroll region the marker movedUpOnto may also go on a row the cursor
+        // did not reach. And an app that moves up over its own wrapped line, back down, then up onto one of its rows
+        // and erases past its first column, the cursor left there, does what readline's Backspace across the wrap does:
+        // that row's record keeps what the erase left, so the line still runs on across it (see typedOnPromptRow).
+        // Erases in the alternate buffer (an editor's) are matched against these records by row number, so they may
+        // drop or cut the record of a row with the same number; the next prompt's mark clears the record
         // A marker on the row the cursor last moved up onto at a prompt, with CSI A or ESC M (see cutClaim): it follows
         // that row as the screen scrolls and the scrollback drops its oldest lines. At the screen's top the cursor
         // moves up no further, and the marker goes on the row it stays on
