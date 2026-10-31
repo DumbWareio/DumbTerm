@@ -836,15 +836,25 @@ describe('terminal control sequences', () => {
     });
 
     // bash 5.2's output at each keystroke (test/fixtures/bash-completion-listings.json); the terminal takes the
-    // width it was captured at. Returns the content saved after each step
+    // width it was captured at. With typeTabs, a step whose keys end with Tab, Tab has them typed where they were: the
+    // first rings the bell, the second lists the completions. Returns the content saved after each step
     const LISTINGS = require('./fixtures/bash-completion-listings.json');
-    async function replayCapture(name, stepCount, captures = LISTINGS) {
+    async function replayCapture(name, stepCount, captures = LISTINGS, { typeTabs = false } = {}) {
         const { columns, steps } = captures[name];
         const saves = recordSavedSessions();
         terminal.resize(columns, terminal.rows);
         const savedAfter = [];
-        for (const { output } of steps.slice(0, stepCount)) {
-            await receiveOutput(output);
+        for (const { keys, output } of steps.slice(0, stepCount)) {
+            const bell = output.indexOf('\x07');
+            if (typeTabs && keys.endsWith('Tab, Tab') && bell >= 0) {
+                await receiveOutput(output.slice(0, bell));
+                terminal.input('\t');
+                await receiveOutput('\x07');
+                terminal.input('\t');
+                await receiveOutput(output.slice(bell + 1));
+            } else {
+                await receiveOutput(output);
+            }
             savedAfter.push(saves.at(-1));
         }
         return savedAfter;
@@ -1246,13 +1256,29 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)), ['', 'context', 'user@box', '/app', '$ echo out', 'out', '']);
     });
 
-    test('a saved session keeps a three-line prompt with no blank first row redrawn below a completion listing once the cursor moved down across the command\'s wrap', async () => {
-        // Known limit: the redrawn prompt is looked for higher than the cursor's rows only under a blank row like
-        // Starship's, as an app's rows would pass for a prompt's. Pinned so that changing it is deliberate
+    // A prompt of three lines and its command, with no blank first row
+    const THREE_LINE_PROMPT = 'context\r\nuser@box\r\n/app\r\n$ ';
+
+    test('a saved session leaves out a three-line prompt with no blank first row redrawn below a completion listing once the cursor moved down across the command\'s wrap', async () => {
+        // Tab was typed at the prompt above the listing, so the redrawn one is looked for higher than the cursor's rows
         const saves = recordSavedSessions();
-        const prompt = 'context\r\nuser@box\r\n/app\r\n$ ';
-        await receiveOutput(`\x1b[?2004h${prompt}echo out\r\n\x1b[?2004l\rout\r\n`);
-        await receiveOutput(`\x1b[?2004h${prompt}ls /tmp/d/\x07\r\n${COMPLETIONS}${prompt}ls /tmp/d/${'a'.repeat(70)}`);
+        await receiveOutput(`\x1b[?2004h${THREE_LINE_PROMPT}echo out\r\n\x1b[?2004l\rout\r\n`);
+        await receiveOutput(`\x1b[?2004h${THREE_LINE_PROMPT}ls /tmp/d/`);
+        terminal.input('\t');
+        await receiveOutput(`\x07\r\n${COMPLETIONS}${THREE_LINE_PROMPT}ls /tmp/d/${'a'.repeat(70)}`);
+        await receiveOutput(ctrlA(1, 2));
+        await receiveOutput(ctrlE(1, 2));
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['context', 'user@box', '/app', '$ echo out', 'out', '']);
+    });
+
+    test('a saved session keeps a three-line prompt with no blank first row redrawn below a completion listing asked for with no Tab', async () => {
+        // Known limit: a listing asked for by another key (M-?, M-=, C-x /) leaves no Tab above it, and the redrawn
+        // prompt is then looked for higher than the cursor's rows only under a blank row like Starship's, as an app's
+        // rows would pass for a prompt's. Pinned so that changing it is deliberate
+        const saves = recordSavedSessions();
+        await receiveOutput(`\x1b[?2004h${THREE_LINE_PROMPT}echo out\r\n\x1b[?2004l\rout\r\n`);
+        await receiveOutput(`\x1b[?2004h${THREE_LINE_PROMPT}ls /tmp/d/\r\n${COMPLETIONS}${THREE_LINE_PROMPT}ls /tmp/d/${'a'.repeat(70)}`);
         await receiveOutput(ctrlA(1, 2));
         await receiveOutput(ctrlE(1, 2));
 
@@ -1270,14 +1296,82 @@ describe('terminal control sequences', () => {
             'typed until it wraps, after Ctrl-A and after Ctrl-E');
     });
 
-    test('a saved session keeps a plain prompt redrawn below a completion listing with a command more than four rows long', async () => {
-        // Known limit: the redrawn prompt is looked for no higher than four rows up, and a one-row prompt has no
-        // row above its command to anchor a longer one on. Pinned so that changing it is deliberate
+    test('a saved session leaves out a plain prompt redrawn below a completion listing with a command more than four rows long', async () => {
+        // Tab was typed at the prompt above the listing, so the redrawn one is looked for higher than the cursor's rows
+        const saved = await replayCapture('plainSixRows', 4, LISTINGS, { typeTabs: true });
+
+        assert.deepEqual(savedLines(savedBeforeListing(saved)), ['root@box:/app# echo out', 'out', '']);
+        assert.deepEqual(saved.slice(2), [2, 3].map(() => savedBeforeListing(saved)));
+    });
+
+    test('a saved session keeps a plain prompt redrawn below a completion listing asked for with no Tab, with a command more than four rows long', async () => {
+        // Known limit: with no Tab above the listing (M-?, M-=, C-x /), the redrawn prompt is looked for no higher than
+        // four rows up, and a one-row prompt has no row above its command to anchor a longer one on. Pinned so that
+        // changing it is deliberate
         const saved = await replayCapture('plainSixRows', 4);
 
         const prompt = 'root@box:/app# ';
         assert.deepEqual(savedLines(saved.at(-1)), [`${prompt}echo out`, 'out', `${prompt}ls /tmp/d/`,
             'alpha/ beta/  delta/ gamma/', `${prompt}ls /tmp/d/${'a'.repeat(55 + 4 * 80)}`, '']);
+    });
+
+    test('a saved session keeps a plain prompt redrawn below a completion listing with a long command when Tab was last typed below its first row', async () => {
+        // The Tab that moves the reach is the last one, typed at the redrawn prompt this time: a redrawn prompt is looked
+        // for higher than the cursor's rows only below it
+        const saved = await replayCapture('plainSixRows', 3, LISTINGS, { typeTabs: true });
+        const { output } = LISTINGS.plainSixRows.steps[3];
+        await receiveOutput(output.slice(0, 200));
+        terminal.input('\t');
+        await receiveOutput(`\x07${output.slice(200)}`);
+        const saves = recordSavedSessions();
+        manager.saveSessionState();
+
+        assert.deepEqual(savedLines(saved[2]), ['root@box:/app# echo out', 'out', '']);
+        assert.equal(savedLines(saves.at(-1)).length, 6, 'the listing and the redrawn prompt are kept');
+    });
+
+    test('a saved session keeps a plain prompt redrawn below a completion listing with a long command when Tab was typed only at the prompt before', async () => {
+        // A new prompt lets go of the Tab typed at the one before
+        const saves = recordSavedSessions();
+        await receiveOutput(`\x1b[?2004h${ROOT_PROMPT}echo out`);
+        terminal.input('\t');
+        await receiveOutput(`\x07\r\n\x1b[?2004l\rout\r\n\x1b[?2004h${ROOT_PROMPT}ls /tmp/d/\r\nalpha/ beta/  delta/ gamma/\r\n`
+            + `${ROOT_PROMPT}ls /tmp/d/${'a'.repeat(390)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(2, 4), [`${ROOT_PROMPT}ls /tmp/d/`, 'alpha/ beta/  delta/ gamma/']);
+    });
+
+    test('a saved session keeps a long command that starts like the prompt\'s on the row after it, when the prompt\'s own rows would hold the redrawn one\'s top', async () => {
+        // A two-line prompt and its command wrapped onto five rows, the last holding the prompt's first line again; then
+        // that command again, typed on. After a Tab, the redrawn prompt's top would be the marked command's last row:
+        // it is looked for only below the marked command
+        const saves = recordSavedSessions();
+        await receiveOutput('\x1b[?2004hP\r\n$ ');
+        terminal.input('\t');
+        const command = `${'y'.repeat(318)}P`;
+        await receiveOutput(`${command}\r\n$ ${command}${'z'.repeat(100)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['P', `$ ${command}`, `$ ${command}${'z'.repeat(100)}`.slice(0, 5 * 80), '']);
+    });
+
+    test('a saved session leaves out the output of an app that keeps bracketed paste on, when Tab was typed in it and it draws its first two lines again, the second running on for five rows', async () => {
+        // Known limit: after a Tab, the app's first lines drawn again over a line the terminal wraps past four rows read
+        // as a prompt redrawn below a listing and typed on, so the save stops above the app's output. With no Tab the
+        // app's output is kept (see above). Pinned so that changing it is deliberate
+        const saves = recordSavedSessions();
+        await receiveOutput('$ app\r\n\x1b[?2004hA\r\nB\r\n');
+        terminal.input('\t');
+        await receiveOutput(`C\r\nA\r\nB${'x'.repeat(400)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '']);
+    });
+
+    test('a Tab typed while a command runs leaves no marker', async () => {
+        recordSavedSessions();
+        await receiveOutput(`\x1b[?2004h${ROOT_PROMPT}sleep 9\r\n\x1b[?2004l\r`);
+        terminal.input('\t');
+
+        assert.equal(terminal.markers.length, 1);
     });
 
     // A command typed at the prompt and not run, long enough to take the cursor more than four rows below the marked

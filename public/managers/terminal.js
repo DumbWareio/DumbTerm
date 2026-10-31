@@ -34,7 +34,7 @@ const MAX_WRAP_CLAIMS = 200;
 // line again, with the cursor on that line, or below it where the input line it first drew ended short of its last
 // column and the redrawn one and each line after it above the cursor's end at theirs, its output from the first
 // blank row on
-function redrawnPromptRow(buffer, wrapped, markedRow, cursorRow) {
+function redrawnPromptRow(buffer, wrapped, markedRow, cursorRow, tabRow) {
     const text = (row) => buffer.getLine(row)?.translateToString(true) ?? '';
     const line = (row) => {
         let joined = text(row);
@@ -55,6 +55,22 @@ function redrawnPromptRow(buffer, wrapped, markedRow, cursorRow) {
             same = row === commandRow ? sameCommand(line(marked), command) : text(marked) === text(row);
         }
         if (same) return markedRow;
+    }
+    // After a Tab, the command is the cursor's whole line, however many rows it wraps up onto, and the prompt's rows
+    // above it may start higher than the cursor's rows, below the row the Tab was typed on and the marked command
+    if (tabRow !== null) {
+        let start = cursorRow;
+        while (start > tabRow && wrapped(start)) start--;
+        const typed = line(start);
+        for (let above = 0; above < PROMPT_MAX_ROWS_BELOW_MARK; above++) {
+            const top = start - above;
+            let markedEnd = first + above;
+            while (wrapped(markedEnd + 1)) markedEnd++;
+            if (top <= tabRow || top <= markedEnd) break;
+            let same = sameCommand(line(first + above), typed);
+            for (let row = 0; same && row < above; row++) same = text(first + row) === text(top + row);
+            if (same) return markedRow;
+        }
     }
     // Whether a command, from its rows listed last row first, starts like the marked one as sameCommand has it: one
     // need only start like the other, and an empty one matches only another. Its rows are compared from the first,
@@ -772,6 +788,7 @@ export default class TerminalManager {
             const old = promptMarkers.get(terminal);
             old?.marker?.dispose();
             old?.claims.forEach((claim) => claim.dispose());
+            old?.tab?.dispose();
             promptMarkers.set(terminal, { ...mark, claims: [] });
         };
 
@@ -1126,6 +1143,13 @@ export default class TerminalManager {
         // one whose retries ran out before the server came back reconnects. An attempt a key started after a failed
         // start is like any other: if it meets an outage, coming back to the page reconnects it
         terminal.onData(data => {
+            // Tab at a prompt: mark the cursor's row, as readline may list the completions below it and redraw the prompt
+            // (see redrawnPromptRow)
+            const mark = promptMarkers.get(terminal);
+            if (data === '\t' && mark && terminal.modes.bracketedPasteMode && terminal.buffer.active.type === 'normal') {
+                mark.tab?.dispose();
+                mark.tab = terminal.registerMarker(0);
+            }
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
                     type: 'input',
@@ -1285,10 +1309,11 @@ export default class TerminalManager {
                                 : mark.marker.isDisposed ? cursorRow : mark.marker.line + mark.rowsBelow;
                             const claimed = new Set(mark?.claims.filter((claim) => !claim.isDisposed).map((claim) => claim.line));
                             const wrapped = (row) => !!buffer.getLine(row)?.isWrapped || claimed.has(row);
+                            const tabRow = mark?.tab && !mark.tab.isDisposed ? mark.tab.line : null;
                             const promptStart = cursorRow - markedRow <= PROMPT_MAX_ROWS_BELOW_MARK
                                 ? Math.min(markedRow, cursorRow)
                                 : typedOnPromptRow(buffer, wrapped, markedRow, cursorRow)
-                                    ?? redrawnPromptRow(buffer, wrapped, markedRow, cursorRow) ?? cursorRow;
+                                    ?? redrawnPromptRow(buffer, wrapped, markedRow, cursorRow, tabRow) ?? cursorRow;
                             serializedContent = promptStart > 0
                                 ? addons.serializeAddon.serialize({ ...serializeOptions, range: { start: 0, end: promptStart - 1 } })
                                 : '';
