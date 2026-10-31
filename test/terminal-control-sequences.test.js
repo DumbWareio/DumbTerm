@@ -2142,6 +2142,8 @@ describe('terminal control sequences', () => {
         assert.equal(saves.at(-1), atPrompt);
     });
 
+    // Letters in an order that repeats every 26, for app lines that wrap onto several rows
+    const LETTERS_8 = Array.from({ length: 80 * 8 }, (_, i) => 'abcdefghijklmnopqrstuvwxyz'[(i * 7) % 26]).join('');
     // Wide characters, three-quarters of the CJK block's first part: 40 to a row
     const WIDE = Array.from({ length: 600 }, (_, i) => String.fromCodePoint(0x4e00 + i * 7)).join('');
 
@@ -2244,6 +2246,17 @@ describe('terminal control sequences', () => {
                 [`out ${lines - 1}`, '$ app', ...Array.from({ length: 6 }, (_, i) => NARROW_LINE.slice(40 * i, 40 * i + 40)), '']);
         });
     }
+
+    test('a saved session keeps the output of an app that rewrites a row it moved up over, then cuts the row below it', async () => {
+        // The cut keeps what is left of its own row in the row's record, and takes nothing new of the row above: that row
+        // no longer holds what it did when the cursor moved up over the cut one
+        const saves = recordSavedSessions();
+        const line = LETTERS_8.slice(0, 80 * 8 - 5);
+        await receiveOutput(`$ app\r\n\x1b[?2004h${line}\x1b[7A\x1b[7;1H${'Z'.repeat(80)}`);
+        await receiveOutput('\x1b[9;1H\x1b[A\x1b[6G\x1b[K\x1b[7;1H\n\x1b[8;5H');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', `${line.slice(0, 400)}${'Z'.repeat(80)}`, '']);
+    });
 
     test('a saved session keeps the output of an app that draws its first line and input line again over a row the cursor moved up over', async () => {
         // A progress line wrapped onto the next row, the cursor moved up over it, then the app's title, input line and

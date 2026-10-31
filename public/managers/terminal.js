@@ -878,18 +878,18 @@ export default class TerminalManager {
         // above or below the cursor's lose their markers with their text. An EL 0 or ED 0 from past the first column
         // drops the record where it leaves nothing left of the cursor; on the row the cursor last moved up onto with
         // CSI A or ESC M (readline's Backspace across the wrap), where what is left still starts the text recorded, the
-        // record keeps just that much, and takes the row above's text again (see cutClaim). The whole record goes with
-        // a new mark (see setMark) and when the columns change, which rewraps the rows (with rows alone the lines move
-        // whole, into the scrollback or out of it, and their markers with them). Each handler returns false so xterm.js
-        // still does its part. Known limits: a row's record stays where its wrap is cleared some other way (SL, SR,
-        // DECIC, DECDC, DECALN, a backspace that wraps back), and under a scroll region (DECSTBM) a move up that stops
-        // at its top margin, or an ESC M that scrolls the region, records rows the cursor did not move over, while the
-        // region's scrolling leaves the record on the rows it was on: such a row counts as wrapped though the terminal
-        // starts a line there, where it and the row above still start like the texts recorded and the row above reaches
-        // its last column. The other way, a key typed in the middle of a recorded row after the cursor moved down past
-        // it (Ctrl-E, then ← back across the wrap): readline draws the rest of the command again from that key without
-        // moving up over the row, so its record keeps the text it had, which the row no longer starts like, and the
-        // command no longer runs on across it
+        // record keeps just that much, and keeps the row above's text as it was (see cutClaim). The whole record goes
+        // with a new mark (see setMark) and when the columns change, which rewraps the rows (with rows alone the lines
+        // move whole, into the scrollback or out of it, and their markers with them). Each handler returns false so
+        // xterm.js still does its part. Known limits: a row's record stays where its wrap is cleared some other way
+        // (SL, SR, DECIC, DECDC, DECALN, a backspace that wraps back), and under a scroll region (DECSTBM) a move up
+        // that stops at its top margin, or an ESC M that scrolls the region, records rows the cursor did not move over,
+        // while the region's scrolling leaves the record on the rows it was on: such a row counts as wrapped though the
+        // terminal starts a line there, where it and the row above still start like the texts recorded and the row
+        // above reaches its last column. The other way, a key typed in the middle of a recorded row after the cursor
+        // moved down past it (Ctrl-E, then ← back across the wrap): readline draws the rest of the command again from
+        // that key without moving up over the row, so its record keeps the text it had, which the row no longer starts
+        // like, and the command no longer runs on across it
         // A marker on the row the cursor last moved up onto at a prompt, with CSI A or ESC M (see cutClaim): it follows
         // that row as the screen scrolls and the scrollback drops its oldest lines. At the screen's top the cursor moves
         // up no further, and the marker goes on the row it stays on
@@ -943,11 +943,10 @@ export default class TerminalManager {
             // A disposed marker's line is -1, so it matches no row
             const claim = promptMarkers.get(terminal)?.claims.find(({ marker }) => marker.line === row);
             if (!claim) return;
-            const buffer = terminal.buffer.active;
-            const kept = buffer.getLine(row)?.translateToString(true, 0, column) ?? '';
+            const kept = terminal.buffer.active.getLine(row)?.translateToString(true, 0, column) ?? '';
             if (kept === '') unclaim(row);
             else if (movedUpOnto && !movedUpOnto.isDisposed && movedUpOnto.line === row && claim.text.startsWith(kept)) {
-                Object.assign(claim, { text: kept, above: buffer.getLine(row - 1)?.translateToString(true) ?? '' });
+                claim.text = kept;
             }
         };
         const unclaimErased = (mode, display) => {
