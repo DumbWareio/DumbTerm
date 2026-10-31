@@ -24,10 +24,12 @@ const PROMPT_MAX_ROWS_BELOW_MARK = 4;
 // that fills its row), so known limits: a prompt with no blank first row (a plain one) redrawn with a command
 // typed past four rows after the listing, or after the cursor moved down across its command's wrap (Ctrl-E, End,
 // →), stays in the save, and so does any prompt where that wrap leaves the last column empty or blank (a wide
-// character that did not fit, a space) or the marked command filled its row. And the other way: an app that starts
-// with a blank row and later draws it, its title and an input line again, with the cursor on that line, or below it
-// where that line and each one after it above the cursor's end at their last column, reads as such a prompt, so its
-// output from the first blank row on is left out
+// character that did not fit, a space) or the marked command filled its row. And the other way: an app that draws
+// its first lines again in the rows a prompt reaches above, and on, the cursor's row, the cursor's line and the one
+// it repeats each starting like the other, reads as a redrawn prompt, so its output from its first line on is left
+// out; and so does one that starts with a blank row and later draws it, its title and an input line again, with the
+// cursor on that line, or below it where that line and each one after it above the cursor's end at their last
+// column, its output from the first blank row on
 function redrawnPromptRow(buffer, markedRow, cursorRow) {
     const text = (row) => buffer.getLine(row)?.translateToString(true) ?? '';
     const line = (row) => {

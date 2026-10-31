@@ -964,7 +964,9 @@ describe('terminal control sequences', () => {
         // Known limit: under a blank row, an app's title drawn again above an input line that ends at its last column,
         // with the cursor below it, reads as Starship's prompt redrawn below a listing and typed on, so the save stops
         // above the app's transcript, however far down the cursor is while each line between ends at its last column
-        // too (below one that does not, it is kept). Telling the two apart would also keep Starship's redrawn prompt.
+        // too (below one that does not, the search under a blank row keeps it, though the search in the rows a prompt
+        // reaches above the cursor's still matches an app that repeats its first lines there). Telling the two apart
+        // would also keep Starship's redrawn prompt.
         // Pinned so that changing it is deliberate
         const saves = recordSavedSessions();
         await receiveOutput(`$ app\r\n\x1b[?2004h\r\nTitle\r\n> \r\nr1\r\nr2\r\nr3\r\n\r\nTitle\r\n${filledInput}\r\nstatus`);
