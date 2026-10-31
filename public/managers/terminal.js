@@ -927,9 +927,9 @@ export default class TerminalManager {
         // erases (CSI A, then BS and EL 0): on that row, where what is left still starts what the row held, the record
         // keeps just that much
         const cutClaim = (row, column) => {
-            const claims = promptMarkers.get(terminal)?.claims ?? [];
-            const claim = claims.findLast(({ marker }) => !marker.isDisposed && marker.line <= row);
-            if (claim?.marker.line !== row) return;
+            // A disposed marker's line is -1, so it matches no row
+            const claim = promptMarkers.get(terminal)?.claims.find(({ marker }) => marker.line === row);
+            if (!claim) return;
             const kept = terminal.buffer.active.getLine(row)?.translateToString(true, 0, column) ?? '';
             if (kept === '') unclaim(row);
             else if (row === movedUpOnto && claim.text.startsWith(kept)) claim.text = kept;
@@ -1391,12 +1391,13 @@ export default class TerminalManager {
                             const claimed = new Map(mark?.claims.filter((claim) => !claim.marker.isDisposed)
                                 .map((claim) => [claim.marker.line, claim.text]));
                             // A recorded row counts as wrapped while it still starts like what it held then (typed on
-                            // at its end, or cut back by an erase: see cutClaim), below a row that reaches its last
-                            // column: a written cell there (a space too), the empty right half of a wide character, or,
-                            // where this row starts with a wide character that did not fit there, a written cell or a
-                            // wide character's right half in the column before it
-                            const holds = (row) => (buffer.getLine(row)?.translateToString(true) ?? '')
-                                .startsWith(claimed.get(row));
+                            // at its end, or cut back by an erase: see cutClaim), never where it held nothing (a blank
+                            // row marked as wrapped, which any text would start like), below a row that reaches its
+                            // last column: a written cell there (a space too), the empty right half of a wide
+                            // character, or, where this row starts with a wide character that did not fit there, a
+                            // written cell or a wide character's right half in the column before it
+                            const holds = (row) => claimed.get(row) !== ''
+                                && (buffer.getLine(row)?.translateToString(true) ?? '').startsWith(claimed.get(row));
                             const written = (cell) => !!cell && (cell.getChars() !== '' || cell.getWidth() === 0);
                             const reachesEnd = (row) => {
                                 const above = buffer.getLine(row - 1);

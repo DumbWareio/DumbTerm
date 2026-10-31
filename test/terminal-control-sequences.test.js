@@ -2118,6 +2118,16 @@ describe('terminal control sequences', () => {
         });
     }
 
+    test('a saved session keeps the output of an app that blanks the last row of its wrapped line, moves up over it, and writes a status there', async () => {
+        // EL 1 keeps the row marked as wrapped, so the cursor's move up over it records it with no text: a record with
+        // nothing to compare counts for no row
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n\x1b[?2004h\r\nTitle\r\n${LETTERS}`);
+        await receiveOutput('\x1b[80G\x1b[1K\x1b[A\r\n\rstatus: done');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '', 'Title', LETTERS.slice(0, 320), '']);
+    });
+
     test('a saved session keeps the output of an app that draws its first line and input line again over a row the cursor moved up over', async () => {
         // A progress line wrapped onto the next row, the cursor moved up over it, then the app's title, input line and
         // status drawn again as lines, the status on the row recorded: it no longer holds what it did
