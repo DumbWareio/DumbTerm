@@ -119,5 +119,59 @@
                 "output": "echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaa"
             }
         ]
+    },
+    "plainLongCtrlE": {
+        "columns": 80,
+        "steps": [
+            {
+                "keys": "(bash starts)",
+                "output": "\u001b[?2004hroot@box:/app# "
+            },
+            {
+                "keys": "echo out, Enter",
+                "output": "echo out\r\n\u001b[?2004l\rout\r\n\u001b[?2004hroot@box:/app# "
+            },
+            {
+                "keys": "echo , a × 400",
+                "output": "echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaa"
+            },
+            {
+                "keys": "Ctrl-A",
+                "output": "\u001b[A\u001b[A\u001b[A\u001b[A\u001b[A\b\b\b\b\b"
+            },
+            {
+                "keys": "Ctrl-E",
+                "output": "\r\n\r\n\r\n\r\n\r\n\r\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C"
+            }
+        ]
+    },
+    "plainLongCtrlAEdited": {
+        "columns": 80,
+        "steps": [
+            {
+                "keys": "(bash starts)",
+                "output": "\u001b[?2004hroot@box:/app# "
+            },
+            {
+                "keys": "echo out, Enter",
+                "output": "echo out\r\n\u001b[?2004l\rout\r\n\u001b[?2004hroot@box:/app# "
+            },
+            {
+                "keys": "echo , then alpha to omega four times (500 characters)",
+                "output": "echo alpha beta gamma delta epsilon zeta eta theta iota kappa lam \rbda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega alpha beta gamma \r delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma ta \ru upsilon phi chi psi omega alpha beta gamma delta epsilon zeta eta theta iota k \rappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega alpha be \rta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho  \rsigma tau upsilon phi chi psi omega"
+            },
+            {
+                "keys": "Ctrl-A",
+                "output": "\u001b[A\u001b[A\u001b[A\u001b[A\u001b[A\u001b[A\r\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C"
+            },
+            {
+                "keys": "M-c",
+                "output": "E\u001b[C\u001b[C\u001b[C"
+            },
+            {
+                "keys": "Ctrl-E",
+                "output": "\r\n\r\n\r\n\r\n\r\n\r\n\r\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C"
+            }
+        ]
     }
 }
