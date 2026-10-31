@@ -837,15 +837,17 @@ describe('terminal control sequences', () => {
     });
 
     // bash 5.2's output at each keystroke (test/fixtures/bash-completion-listings.json); the terminal takes the
-    // width it was captured at. With typeTabs, a step whose keys end with Tab, Tab has them typed where they were: the
-    // first rings the bell, the second lists the completions. Returns the content saved after each step
+    // width it was captured at, and a step with columns of its own is resized to them first. With typeTabs, a step
+    // whose keys end with Tab, Tab has them typed where they were: the first rings the bell, the second lists the
+    // completions. Returns the content saved after each step
     const LISTINGS = require('./fixtures/bash-completion-listings.json');
     async function replayCapture(name, stepCount, captures = LISTINGS, { typeTabs = false } = {}) {
         const { columns, steps } = captures[name];
         const saves = recordSavedSessions();
         terminal.resize(columns, terminal.rows);
         const savedAfter = [];
-        for (const { keys, output } of steps.slice(0, stepCount)) {
+        for (const { keys, output, columns: resized } of steps.slice(0, stepCount)) {
+            if (resized) terminal.resize(resized, terminal.rows);
             const bell = output.indexOf('\x07');
             if (typeTabs && keys.endsWith('Tab, Tab') && bell >= 0) {
                 await receiveOutput(output.slice(0, bell));
@@ -1172,6 +1174,24 @@ describe('terminal control sequences', () => {
         const saved = await replayCapture('starshipNarrow', 6);
 
         assert.equal(saved.at(-1), savedBeforeListing(saved));
+    });
+
+    test('a saved session keeps a Starship prompt redrawn below a completion listing once the terminal\'s columns changed after Ctrl-A and Ctrl-E, as bash prints it', async () => {
+        // Known limit: Ctrl-E's newline left the command's second row unmarked as wrapped, so the terminal rewraps the
+        // command at 60 columns as two lines, its first row on two rows, and bash, drawing the command again, starts one
+        // row lower than the command now does: the old command's first 60 columns stay on a row above it. That row is no
+        // redrawn prompt's, so the save keeps the listing and the redrawn prompt, which the tab shows again above its new
+        // prompt. Pinned so that changing it is deliberate
+        const saved = await replayCapture('starshipCtrlEResized', 7, LISTINGS, { typeTabs: true });
+
+        assert.deepEqual(saved.slice(2, 6), [2, 3, 4, 5].map(() => savedBeforeListing(saved)), 'up to Ctrl-E, it was left out');
+        const [, top] = savedLines(savedBeforeListing(saved));
+        const firstRow = `\u276f ls /tmp/e/${'a'.repeat(48)}`;
+        assert.deepEqual(savedLines(saved[6]).slice(4), ['', top, '\u276f ls /tmp/e/',
+            'alpha-a-rather-long-directory-name/ eta-a-rather-long-directory-name/',
+            'beta-a-rather-long-directory-name/  gamma-a-rather-long-directory-name/',
+            'delta-a-rather-long-directory-name/ theta-a-rather-long-directory-name/',
+            'eps-a-rather-long-directory-name/   zeta-a-rather-long-directory-name/', '', top, firstRow, firstRow, '']);
     });
 
     test('a saved session leaves out a Starship prompt redrawn below a completion listing at 40 columns after Ctrl-E, erasing back and typing on', async () => {

@@ -35,16 +35,17 @@ const MAX_WRAP_CLAIMS = 200;
 // the cursor's line (on rows the command was since erased back from), its command or the prompt's rows above it
 // starting higher than the cursor's four rows; a command whose marked one filled its row, typed on past it after a
 // listing asked for with no Tab (the space bash writes at the start of the next row is then compared, and the typed
-// text replaces it); and a command the cursor moved down across before the terminal's columns changed, which drops the
-// record of the rows it moved up over, or after it moved up some other way than CSI A or ESC M (CUP, VPA, CPL, DECRC),
-// which records none (see initTerminal). And the other way: an app that draws its first lines again in the rows a
-// prompt reaches above, and on, the cursor's row, the cursor's line and the one it repeats one starting like the other,
-// reads as a redrawn prompt, so its output from its first line on is left out; so does one in which Tab was typed, on
-// its last line or above it, and that draws up to three of its first lines again above a line starting like the one it
-// repeats, where that line runs past the cursor's four rows, or where the one it repeats ran on past its row with blank
-// rows only, which are not compared (an input line that filled its row and ran on with blanks onto the next, drawn
-// again with text there); and one that starts with one blank row and later draws it, its title (up to three rows) and
-// an input line again, with the cursor on that input line, its output from the first blank row on
+// text replaces it); and a command the cursor moved down across before the terminal's columns changed (the terminal
+// rewraps the rows the newline unmarked as lines of their own, and bash, drawing the command again, starts a row lower
+// than it now does, leaving its old first row above it), or after it moved up some other way than CSI A or ESC M (CUP,
+// VPA, CPL, DECRC), which records none (see initTerminal). And the other way: an app that draws its first lines again
+// in the rows a prompt reaches above, and on, the cursor's row, the cursor's line and the one it repeats one starting
+// like the other, reads as a redrawn prompt, so its output from its first line on is left out; so does one in which Tab
+// was typed, on its last line or above it, and that draws up to three of its first lines again above a line starting
+// like the one it repeats, where that line runs past the cursor's four rows, or where the one it repeats ran on past
+// its row with blank rows only, which are not compared (an input line that filled its row and ran on with blanks onto
+// the next, drawn again with text there); and one that starts with one blank row and later draws it, its title (up to
+// three rows) and an input line again, with the cursor on that input line, its output from the first blank row on
 function redrawnPromptRow(buffer, wrapped, markedRow, cursorRow, tabRow) {
     const text = (row) => buffer.getLine(row)?.translateToString(true) ?? '';
     const line = (row) => {
@@ -140,15 +141,16 @@ function redrawnPromptRow(buffer, wrapped, markedRow, cursorRow, tabRow) {
 // first row and a line above its command (a two-line plain prompt) stays in the save, as a background job's line
 // printed at a one-line prompt, with the command typed under it, looks the same; so does a prompt with two or more
 // lines above its command after a blank first row, and a command the cursor moved down across before the terminal's
-// columns changed, or after it moved up some other way than CSI A or ESC M (see initTerminal); and so does Starship's
-// prompt after output with no final newline (printf, curl), whose blank first row that output's row takes, as the mark
-// goes on the row below it. And the other way: an app that left bracketed paste on and printed, from its first row, a
-// line running past four rows, or a blank row and one line and then such a line, with the cursor at its end, reads as
-// such a command, so its output from the first row on is left out, and so does one that moved the cursor up over such a
-// line and back down with newlines, each row still starting like what it held. So is a background job's text printed
-// with no final newline at a one-line prompt, which the command typed after it runs on from as one line, and a job's
-// line under a blank marked row that is no Starship prompt's: output with no final newline puts the mark on the row
-// below, which may stay blank. Within four rows of the mark the save leaves all of these out already
+// columns changed (which drops the record and rewraps the rows the newline unmarked as lines of their own), or after it
+// moved up some other way than CSI A or ESC M (see initTerminal); and so does Starship's prompt after output with no
+// final newline (printf, curl), whose blank first row that output's row takes, as the mark goes on the row below it.
+// And the other way: an app that left bracketed paste on and printed, from its first row, a line running past four
+// rows, or a blank row and one line and then such a line, with the cursor at its end, reads as such a command, so its
+// output from the first row on is left out, and so does one that moved the cursor up over such a line and back down
+// with newlines, each row still starting like what it held. So is a background job's text printed with no final newline
+// at a one-line prompt, which the command typed after it runs on from as one line, and a job's line under a blank
+// marked row that is no Starship prompt's: output with no final newline puts the mark on the row below, which may stay
+// blank. Within four rows of the mark the save leaves all of these out already
 function typedOnPromptRow(buffer, wrapped, markedRow, cursorRow) {
     const blank = (row) => (buffer.getLine(row)?.translateToString(true) ?? '') === '';
     const first = blank(markedRow) ? markedRow + 1 : markedRow;
