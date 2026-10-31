@@ -23,7 +23,9 @@ const MAX_WRAP_CLAIMS = 200;
 // with a newline, which unmarks the row it moves to.
 // After a Tab typed at the prompt (tabRow, the row the cursor was on at the last one) on the cursor's line or above it,
 // the redrawn prompt is also looked for higher, wholly below the marked command: its command is the cursor's whole
-// line, however many rows it runs up onto, under up to three of the prompt's rows. So a Tab typed at the redrawn prompt
+// line, however many rows it runs up onto, under up to three of the prompt's rows, and the marked command is read
+// without the blank rows it ends with on rows it wraps onto (bash takes the cursor past a command that fills its row by
+// writing a space at the start of the next, which the command typed on replaces). So a Tab typed at the redrawn prompt
 // (a completion with no listing) keeps that reach.
 // A prompt that starts with a blank row, like Starship's, is looked for higher with no Tab too: redrawn under a blank
 // row, with the rows above its command (Starship's top line) repeating the marked one's, its command may start as high
@@ -31,19 +33,18 @@ const MAX_WRAP_CLAIMS = 200;
 // Known limits, where the redrawn prompt stays in the save and the tab shows it again above its new one: a prompt with
 // no blank first row redrawn below a listing asked for with no Tab (M-?, M-=, C-x /), or with the last Tab typed below
 // the cursor's line (on rows the command was since erased back from), its command or the prompt's rows above it
-// starting higher than the cursor's four rows; a command whose marked one filled its row, typed on past it after the
-// listing (bash moves past a full row by writing a space at the start of the next, which the terminal wraps onto and
-// the typed text replaces, so the two commands differ at that character; read without that space, the marked command
-// would also match an app's input line that filled its row and ran on with blanks onto the next, drawn again with text
-// there); and a command the cursor moved down across before the terminal was resized, which drops the record of the
-// rows it moved up over, or after it moved up some other way than CSI A or ESC M (CUP, VPA, CPL, DECRC), which records
-// none (see initTerminal). And the other way: an app that draws its first lines again in the rows a prompt reaches
-// above, and on, the cursor's row, the cursor's line and the one it repeats one starting like the other, reads as a
-// redrawn prompt, so its output from its first line on is left out; so does one in which Tab was typed, on its last
-// line or above it, and that draws up to three of its first lines again above a line the terminal wraps past the
-// cursor's four rows, starting like the line it repeats; and one that starts with one blank row and later draws it, its
-// title (up to three rows) and an input line again, with the cursor on that input line, its output from the first blank
-// row on
+// starting higher than the cursor's four rows; a command whose marked one filled its row, typed on past it after a
+// listing asked for with no Tab (the space bash writes at the start of the next row is then compared, and the typed
+// text replaces it); and a command the cursor moved down across before the terminal was resized, which drops the record
+// of the rows it moved up over, or after it moved up some other way than CSI A or ESC M (CUP, VPA, CPL, DECRC), which
+// records none (see initTerminal). And the other way: an app that draws its first lines again in the rows a prompt
+// reaches above, and on, the cursor's row, the cursor's line and the one it repeats one starting like the other, reads
+// as a redrawn prompt, so its output from its first line on is left out; so does one in which Tab was typed, on its
+// last line or above it, and that draws up to three of its first lines again above a line starting like the one it
+// repeats, where that line runs past the cursor's four rows, or where the one it repeats ran on past its row with blank
+// rows only, which are not compared (an input line that filled its row and ran on with blanks onto the next, drawn
+// again with text there); and one that starts with one blank row and later draws it, its title (up to three rows) and
+// an input line again, with the cursor on that input line, its output from the first blank row on
 function redrawnPromptRow(buffer, wrapped, markedRow, cursorRow, tabRow) {
     const text = (row) => buffer.getLine(row)?.translateToString(true) ?? '';
     const line = (row) => {
@@ -67,7 +68,11 @@ function redrawnPromptRow(buffer, wrapped, markedRow, cursorRow, tabRow) {
         if (same) return markedRow;
     }
     // After a Tab typed on the cursor's line or above it, the command is that whole line, however many rows it wraps
-    // up onto, and the prompt's rows above it may start higher than the cursor's rows, below the marked command
+    // up onto, and the prompt's rows above it may start higher than the cursor's rows, below the marked command. The
+    // marked command is read there without the blank rows it ends with on rows it wraps onto: bash takes the cursor
+    // past a command that fills its row by writing a space at the start of the next one, which the command typed on at
+    // the redrawn prompt replaces. The searches above and below read it whole: each of the first's candidates that a
+    // Tab admits is compared here too, and so is each of the second's whose command starts a line
     let end = cursorRow;
     while (tabRow !== null && wrapped(end + 1)) end++;
     if (tabRow !== null && tabRow <= end) {
@@ -76,10 +81,18 @@ function redrawnPromptRow(buffer, wrapped, markedRow, cursorRow, tabRow) {
         const typed = line(start);
         for (let above = 0; above < PROMPT_MAX_ROWS_BELOW_MARK; above++) {
             const top = start - above;
+            let marked = text(first + above);
             let markedEnd = first + above;
-            while (wrapped(markedEnd + 1)) markedEnd++;
+            for (let blanks = ''; wrapped(markedEnd + 1); markedEnd++) {
+                const part = text(markedEnd + 1);
+                if (part.trim() === '') blanks += part;
+                else {
+                    marked += blanks + part;
+                    blanks = '';
+                }
+            }
             if (top <= markedEnd) break;
-            let same = sameCommand(line(first + above), typed);
+            let same = sameCommand(marked, typed);
             for (let row = 0; same && row < above; row++) same = text(first + row) === text(top + row);
             if (same) return markedRow;
         }
