@@ -1958,6 +1958,19 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'Title', '>', 'log1', 'log2', 'Title', '> hi', '']);
     });
 
+    for (const [how, rows] of [['taller', 30], ['shorter', 18]]) {
+        test(`a saved session still follows a command across the rows the cursor moved up over once the terminal is made ${how}`, async () => {
+            // Only a change of columns rewraps the terminal's lines; with rows alone the lines move whole, into the
+            // scrollback or out of it, and their markers with them
+            const saves = recordSavedSessions();
+            const atPrompt = await plainCommandAfterCtrlAE(saves);
+            terminal.resize(terminal.cols, rows);
+            manager.saveSessionState();
+
+            assert.equal(saves.at(-1), atPrompt);
+        });
+    }
+
     test('a new prompt drops the record of the rows the cursor moved up over at the one before', async () => {
         const saves = recordSavedSessions();
         await plainCommandAfterCtrlAE(saves);

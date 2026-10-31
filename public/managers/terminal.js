@@ -35,12 +35,12 @@ const MAX_WRAP_CLAIMS = 200;
 // the cursor's line (on rows the command was since erased back from), its command or the prompt's rows above it
 // starting higher than the cursor's four rows; a command whose marked one filled its row, typed on past it after a
 // listing asked for with no Tab (the space bash writes at the start of the next row is then compared, and the typed
-// text replaces it); and a command the cursor moved down across before the terminal was resized, which drops the record
-// of the rows it moved up over, or after it moved up some other way than CSI A or ESC M (CUP, VPA, CPL, DECRC), which
-// records none (see initTerminal). And the other way: an app that draws its first lines again in the rows a prompt
-// reaches above, and on, the cursor's row, the cursor's line and the one it repeats one starting like the other, reads
-// as a redrawn prompt, so its output from its first line on is left out; so does one in which Tab was typed, on its
-// last line or above it, and that draws up to three of its first lines again above a line starting like the one it
+// text replaces it); and a command the cursor moved down across before the terminal's columns changed, which drops the
+// record of the rows it moved up over, or after it moved up some other way than CSI A or ESC M (CUP, VPA, CPL, DECRC),
+// which records none (see initTerminal). And the other way: an app that draws its first lines again in the rows a
+// prompt reaches above, and on, the cursor's row, the cursor's line and the one it repeats one starting like the other,
+// reads as a redrawn prompt, so its output from its first line on is left out; so does one in which Tab was typed, on
+// its last line or above it, and that draws up to three of its first lines again above a line starting like the one it
 // repeats, where that line runs past the cursor's four rows, or where the one it repeats ran on past its row with blank
 // rows only, which are not compared (an input line that filled its row and ran on with blanks onto the next, drawn
 // again with text there); and one that starts with one blank row and later draws it, its title (up to three rows) and
@@ -139,16 +139,16 @@ function redrawnPromptRow(buffer, wrapped, markedRow, cursorRow, tabRow) {
 // An app's output starts new lines as it prints, so its last line starts lower. Known limits: a prompt with no blank
 // first row and a line above its command (a two-line plain prompt) stays in the save, as a background job's line
 // printed at a one-line prompt, with the command typed under it, looks the same; so does a prompt with two or more
-// lines above its command after a blank first row, and a command the cursor moved down across before the terminal was
-// resized, or after it moved up some other way than CSI A or ESC M (see initTerminal); and so does Starship's prompt
-// after output with no final newline (printf, curl), whose blank first row that output's row takes, as the mark goes on
-// the row below it. And the other way: an app that left bracketed paste on and printed, from its first row, a line
-// running past four rows, or a blank row and one line and then such a line, with the cursor at its end, reads as such a
-// command, so its output from the first row on is left out, and so does one that moved the cursor up over such a line
-// and back down with newlines, each row still starting like what it held. So is a background job's text printed with no
-// final newline at a one-line prompt, which the command typed after it runs on from as one line, and a job's line under
-// a blank marked row that is no Starship prompt's: output with no final newline puts the mark on the row below, which
-// may stay blank. Within four rows of the mark the save leaves all of these out already
+// lines above its command after a blank first row, and a command the cursor moved down across before the terminal's
+// columns changed, or after it moved up some other way than CSI A or ESC M (see initTerminal); and so does Starship's
+// prompt after output with no final newline (printf, curl), whose blank first row that output's row takes, as the mark
+// goes on the row below it. And the other way: an app that left bracketed paste on and printed, from its first row, a
+// line running past four rows, or a blank row and one line and then such a line, with the cursor at its end, reads as
+// such a command, so its output from the first row on is left out, and so does one that moved the cursor up over such a
+// line and back down with newlines, each row still starting like what it held. So is a background job's text printed
+// with no final newline at a one-line prompt, which the command typed after it runs on from as one line, and a job's
+// line under a blank marked row that is no Starship prompt's: output with no final newline puts the mark on the row
+// below, which may stay blank. Within four rows of the mark the save leaves all of these out already
 function typedOnPromptRow(buffer, wrapped, markedRow, cursorRow) {
     const blank = (row) => (buffer.getLine(row)?.translateToString(true) ?? '') === '';
     const first = blank(markedRow) ? markedRow + 1 : markedRow;
@@ -864,13 +864,14 @@ export default class TerminalManager {
         // from the row's first column, EL 2, ED 0 from the first column, ED 1 and ED 2, and their selective forms (CSI
         // ? K, CSI ? J); the rows ED resets above or below the cursor's lose their markers with their text. An EL 0 or
         // ED 0 from past the first column keeps the record of what lies left of the cursor, where that still starts the
-        // text recorded (see cutClaim). The whole record goes with a new mark (see setMark) and on a resize, which
-        // rewraps the rows. Each handler returns false so xterm.js still does its part. Known limits: a row's record
-        // stays where its wrap is cleared some other way (SL, SR, DECIC, DECDC, DECALN, a backspace that wraps back),
-        // and under a scroll region (DECSTBM) a move up that stops at its top margin, or an ESC M that scrolls the
-        // region, records rows the cursor did not move over, while the region's scrolling leaves the record on the rows
-        // it was on: such a row counts as wrapped though the terminal starts a line there, where it still starts like
-        // the text recorded and the row above reaches its last column
+        // text recorded (see cutClaim). The whole record goes with a new mark (see setMark) and when the columns
+        // change, which rewraps the rows (with rows alone the lines move whole, into the scrollback or out of it, and
+        // their markers with them). Each handler returns false so xterm.js still does its part. Known limits: a row's
+        // record stays where its wrap is cleared some other way (SL, SR, DECIC, DECDC, DECALN, a backspace that wraps
+        // back), and under a scroll region (DECSTBM) a move up that stops at its top margin, or an ESC M that scrolls
+        // the region, records rows the cursor did not move over, while the region's scrolling leaves the record on the
+        // rows it was on: such a row counts as wrapped though the terminal starts a line there, where it still starts
+        // like the text recorded and the row above reaches its last column
         const claimWrappedRows = (count) => {
             const buffer = terminal.buffer.active;
             const claims = promptMarkers.get(terminal)?.claims;
@@ -933,8 +934,12 @@ export default class TerminalManager {
             terminal.parser.registerCsiHandler({ prefix, final: 'K' }, (params) => unclaimErased(params[0], false));
             terminal.parser.registerCsiHandler({ prefix, final: 'J' }, (params) => unclaimErased(params[0], true));
         }
-        terminal.onResize(() => {
-            promptMarkers.get(terminal)?.claims.splice(0).forEach((claim) => claim.marker.dispose());
+        let claimedColumns = terminal.cols;
+        terminal.onResize(({ cols }) => {
+            if (cols !== claimedColumns) {
+                promptMarkers.get(terminal)?.claims.splice(0).forEach((claim) => claim.marker.dispose());
+            }
+            claimedColumns = cols;
         });
 
         // Then load other addons
