@@ -189,6 +189,20 @@ function isStaleCache(key, cacheName) {
 }
 
 /**
+ * Whether a cache still holds every asset a fill put in it. A cache deleted while a fill wrote to it took what the
+ * fill wrote with it, and one made again under its name since (by the fetch handler, say) holds only what came after.
+ * caches.match with a cacheName looks in that cache alone, and makes no cache that isn't there.
+ * @param {string} cacheName - The fill's cache
+ * @param {string[]} urls - The assets the fill put in it
+ * @returns {Promise<boolean>} True if the cache holds each of them
+ */
+async function holdsAssets(cacheName, urls) {
+    // Ignoring Vary: the question is only whether the entry is there
+    const found = await Promise.all(urls.map(url => caches.match(url, { cacheName, ignoreVary: true })));
+    return found.every(Boolean);
+}
+
+/**
  * Whether this worker is still its registration's active worker. While a new version's worker activates, the worker
  * it replaces can still be filling a cache, and each one's cleanup would delete the cache the other fills, so only the
  * active worker clears caches. A worker registered as service-worker.js?v=<version> tells by its script URL. Under one
@@ -306,8 +320,8 @@ async function preload({ activating = false } = {}) {
  * @param {boolean} [options.activating=false] - True for a fill the activate event starts. The event fires only at the
  * worker becoming the active one, and no successor activates before the event's work ends, so the fill clears older
  * caches without asking isActiveWorker: a browser can name the worker as the registration's active one late
- * @returns {Promise<string>} 'filled' when the fill's cache is still there once the fill is done, 'lost' when it was
- * deleted while the fill filled it or cleared the older ones, 'failed' when the fill failed otherwise
+ * @returns {Promise<string>} 'filled' when the fill's cache still holds its assets once the fill is done, 'lost' when
+ * it was deleted while the fill filled it or cleared the older ones, 'failed' when the fill failed otherwise
  */
 async function installCache(isFirstInstall = false, requestId, { activating = false } = {}) {
     // In a worker registered without a release version, a page's SET_VERSION can change CACHE_VERSION and CACHE_NAME
@@ -318,6 +332,7 @@ async function installCache(isFirstInstall = false, requestId, { activating = fa
     CACHES_BEING_FILLED.push(cacheName);
     let outcome;
     let lost = false;
+    let assetsToCache;
     
     try {
         // Fetch and cache assets. The manifest comes first so that a failed request leaves no empty cache behind.
@@ -328,14 +343,15 @@ async function installCache(isFirstInstall = false, requestId, { activating = fa
         // Build the list for this fill only: addAll rejects a list that names an asset twice, so one
         // kept across fills would fail every fill after the first in this worker's lifetime
         const assets = await response.json();
-        const assetsToCache = assets.map(asset => getAssetPath(asset));
+        assetsToCache = assets.map(asset => getAssetPath(asset));
         
         console.log("Caching assets:", assetsToCache);
         const cache = await caches.open(cacheName);
         await cache.addAll(assetsToCache);
         // What a fill writes into a cache deleted meanwhile (by another worker's cleanup, say) goes with it, so a fill
-        // whose cache is gone has failed, and clears nothing: the older caches are what still works offline
-        if (!(await caches.has(cacheName))) {
+        // whose cache is gone, or made again without its assets, has failed, and clears nothing: the older caches are
+        // what still works offline
+        if (!(await holdsAssets(cacheName, assetsToCache))) {
             lost = true;
             throw new Error('The cache was deleted while it was being filled');
         }
@@ -418,7 +434,7 @@ async function installCache(isFirstInstall = false, requestId, { activating = fa
     }
     // Another worker's cleanup can delete the cache even after this fill checked it: one that can't tell it was
     // replaced does, when it runs while this fill clears the older caches, and leaves no cache at all
-    if (outcome === 'filled' && !(await caches.has(cacheName))) outcome = 'lost';
+    if (outcome === 'filled' && !(await holdsAssets(cacheName, assetsToCache))) outcome = 'lost';
     return outcome;
 }
 

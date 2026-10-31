@@ -62,6 +62,7 @@ function loadWorker({ version = '1.3.0', scope = '/', store = new Map(), config 
         const entries = store.get(name);
         return {
             put: async (request, response) => { entries.set(request.url, response); },
+            match: async (request) => entries.get(typeof request === 'string' ? request : request.url),
             // As in Chromium: a URL listed twice rejects the whole call, and so does any failed response,
             // in which case nothing is stored
             addAll: async (urls) => {
@@ -88,9 +89,11 @@ function loadWorker({ version = '1.3.0', scope = '/', store = new Map(), config 
             },
             has: async (name) => store.has(name),
             delete: async (name) => store.delete(name),
-            match: async (request) => {
+            // As in the browser: with a cacheName it looks in that cache alone, and makes no cache that isn't there
+            match: async (request, { cacheName } = {}) => {
                 const url = typeof request === 'string' ? request : request.url;
-                for (const entries of store.values()) if (entries.has(url)) return entries.get(url);
+                const searched = cacheName === undefined ? [...store.values()] : [store.get(cacheName)].filter(Boolean);
+                for (const entries of searched) if (entries.has(url)) return entries.get(url);
                 return undefined;
             },
         },
@@ -813,8 +816,8 @@ describe('service worker instances of one install during an upgrade', () => {
     }
 
     // The active worker of 1.3.1 with its offline copy, and the worker of 1.3.2 installed beside it. Each worker's
-    // asset requests wait on `held.old` or `held.new` while it is set to a promise. With `staleActive`, the old worker's
-    // view of the registration never learns that the new worker became the active one.
+    // requests for its asset wait on `held.old` or `held.new` while it is set to a promise; a page's requests don't.
+    // With `staleActive`, the old worker's view of the registration never learns the new worker became the active one.
     async function twoWorkers(options, { staleActive = false } = {}) {
         const store = new Map([[OLD_CACHE, new Map([[ORIGIN + 'index.html', fakeResponse('1.3.1')]])]]);
         const registration = { active: null };
@@ -822,7 +825,10 @@ describe('service worker instances of one install during an upgrade', () => {
         const held = { old: undefined, new: undefined };
         const workerOf = (version, which, workerRegistration) => loadWorker({
             ...options, version, store, registration: workerRegistration, manifest: ['index.html'],
-            network: async () => { await held[which]; return fakeResponse(version); },
+            network: async (request) => {
+                if (request === ORIGIN + 'index.html') await held[which];
+                return fakeResponse(version);
+            },
         });
         const oldWorker = workerOf('1.3.1', 'old', oldRegistration);
         registration.active = oldWorker.serviceWorker;
@@ -937,6 +943,81 @@ describe('service worker instances of one install during an upgrade', () => {
             await Promise.all(pending);
             await settle();
             assert.deepEqual(cacheSizes(newWorker), { [NEW_CACHE]: 1 });
+            assert.equal(store.get(NEW_CACHE).get(ORIGIN + 'index.html').body, '1.3.2');
+        });
+
+        test(`an old worker's cleanup that deletes the new cache after the new worker's fill checked it, which a page's request then makes again, leaves the new cache, ${label}`, async () => {
+            // As above, and while the new worker's fill waits on Cache Storage, a page's request to the new worker
+            // makes the deleted cache again, holding that response alone
+            const { store, registration, held, oldWorker, newWorker } = await twoWorkers(options);
+            const oldAssets = hold();
+            const newAssets = hold();
+            const newKeys = hold();
+            held.old = oldAssets.promise;
+            held.new = newAssets.promise;
+            const update = oldWorker.listeners.message({ data: { type: 'PERFORM_UPDATE', requestId: 'old-tab' } });
+            await assetRequested(oldWorker);
+            registration.active = newWorker.serviceWorker;
+            const pending = [];
+            newWorker.listeners.activate({ waitUntil(promise) { pending.push(promise); } });
+            await assetRequested(newWorker);
+            newWorker.cacheStorage.nextKeysHeld = newKeys.promise;
+            newAssets.release();
+            for (let i = 0; i < 10; i++) await settle();
+            oldAssets.release();
+            await update;
+            await dispatchFetch(newWorker, get('page.js'));
+            newKeys.release();
+            await Promise.all(pending);
+            await settle();
+            assert.deepEqual(Object.keys(cacheSizes(newWorker)), [NEW_CACHE]);
+            assert.deepEqual(cachedUrls(newWorker, NEW_CACHE), [ORIGIN + 'index.html', ORIGIN + 'page.js']);
+            assert.equal(store.get(NEW_CACHE).get(ORIGIN + 'index.html').body, '1.3.2');
+        });
+
+        test(`an old worker's Update Now whose deleted cache a page's request made again reports failure and leaves the new cache, ${label}`, async () => {
+            // The new worker's fill deletes the old worker's cache; a request the old worker still handles caches its
+            // response under the old cache's name, which makes that cache again, holding that response alone
+            const { store, registration, held, oldWorker, newWorker } = await twoWorkers(options);
+            const oldAssets = hold();
+            held.old = oldAssets.promise;
+            const update = oldWorker.listeners.message({ data: { type: 'PERFORM_UPDATE', requestId: 'old-tab' } });
+            await assetRequested(oldWorker);
+            registration.active = newWorker.serviceWorker;
+            await activate(newWorker);
+            await dispatchFetch(oldWorker, get('page.js'));
+            oldAssets.release();
+            await update;
+            await settle();
+            assert.deepEqual(answers(oldWorker), [[false, 'old-tab']]);
+            assert.deepEqual(cachedUrls(newWorker, NEW_CACHE), [ORIGIN + 'index.html']);
+            assert.equal(store.get(NEW_CACHE).get(ORIGIN + 'index.html').body, '1.3.2');
+            assert.deepEqual(cachedUrls(oldWorker, OLD_CACHE), [ORIGIN + 'page.js']);
+        });
+
+        test(`a new worker's fill whose deleted cache a page's request made again fills it, ${label}`, async () => {
+            // Where the old worker can't tell it was replaced, its fill deletes the cache the new worker fills; a page's
+            // request to the new worker then makes that cache again, holding that response alone
+            const { store, registration, held, oldWorker, newWorker } = await twoWorkers(options);
+            const oldAssets = hold();
+            const newAssets = hold();
+            held.old = oldAssets.promise;
+            held.new = newAssets.promise;
+            const update = oldWorker.listeners.message({ data: { type: 'PERFORM_UPDATE', requestId: 'old-tab' } });
+            await assetRequested(oldWorker);
+            registration.active = newWorker.serviceWorker;
+            const pending = [];
+            newWorker.listeners.activate({ waitUntil(promise) { pending.push(promise); } });
+            await assetRequested(newWorker);
+            oldAssets.release();
+            await update;
+            await settle();
+            await dispatchFetch(newWorker, get('page.js'));
+            newAssets.release();
+            await Promise.all(pending);
+            await settle();
+            assert.deepEqual(Object.keys(cacheSizes(newWorker)), [NEW_CACHE]);
+            assert.deepEqual(cachedUrls(newWorker, NEW_CACHE), [ORIGIN + 'index.html', ORIGIN + 'page.js']);
             assert.equal(store.get(NEW_CACHE).get(ORIGIN + 'index.html').body, '1.3.2');
         });
 
