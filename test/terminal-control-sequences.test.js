@@ -2070,6 +2070,40 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)), ['$ app', ...Array.from({ length: 5 }, (_, i) => WIDE.slice(40 * i, 40 * i + 3)), '']);
     });
 
+    // An app that draws a box at full width, row after row, the terminal wrapping each onto the next, then moves up and,
+    // a row at a time, clears the box's inside (past the border, with EL 0) and draws it again
+    const boxRow = (text) => `\u2502 ${text}`.padEnd(79) + '\u2502';
+    const BOX_EDGE = '\u2500'.repeat(78);
+    const BOX = `\u250c${BOX_EDGE}\u2510${Array.from({ length: 5 }, (_, i) => boxRow(`item ${i}`)).join('')}\u2514${BOX_EDGE}\u2518`;
+    const boxRedraw = (tag) => `\x1b[5A${Array.from({ length: 5 }, (_, i) => `\r\x1b[2C\x1b[K${`${tag} ${i}`.padEnd(77)}\u2502`).join('\r\n')}\r\n`;
+    for (const [times, redraws] of [['once', ['changed']], ['twice', ['changed', 'again']]]) {
+        test(`a saved session keeps the output of an app that draws a box and the inside of its rows again ${times}`, async () => {
+            // The erase past each row's first column cuts no record: the cursor moved up onto none of those rows, as
+            // readline's Backspace does across the wrap
+            const saves = recordSavedSessions();
+            await receiveOutput(`$ app\r\n\x1b[?2004h${BOX}`);
+            for (const tag of redraws) await receiveOutput(boxRedraw(tag));
+
+            const tag = redraws.at(-1);
+            assert.deepEqual(savedLines(saves.at(-1)), ['$ app', `\u250c${BOX_EDGE}\u2510${boxRow(`${tag} 0`)}`,
+                ...[1, 2, 3, 4].map((i) => boxRow(`${tag} ${i}`)), '']);
+        });
+    }
+
+    // An app's title under a blank row, then a line wrapped onto five rows, the cursor moved up over its last
+    const LETTERS = Array.from({ length: 390 }, (_, i) => 'abcdefghijklmnopqrstuvwxyz'[(i * 7) % 26]).join('');
+    for (const [erase, sequence] of [['EL 1 from the row\'s end, then EL 0', '\x1b[75C\x1b[1K\x1b[K'],
+        ['ECH over the row\'s start, then EL 0 past it', '\x1b[70X\x1b[75C\x1b[K'], ['EL 2', '\x1b[2K'], ['EL 0 from its first column', '\r\x1b[K']]) {
+        test(`a saved session keeps the output of an app that erases the last row of its wrapped line with ${erase} and writes a status there`, async () => {
+            // An erase that leaves nothing of the row left of the cursor drops the row's record
+            const saves = recordSavedSessions();
+            await receiveOutput(`$ app\r\n\x1b[?2004h\r\nTitle\r\n${LETTERS}`);
+            await receiveOutput(`\x1b[A\r\n${sequence}\rstatus: done`);
+
+            assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '', 'Title', LETTERS.slice(0, 320), '']);
+        });
+    }
+
     test('a saved session keeps the output of an app that draws its first line and input line again over a row the cursor moved up over', async () => {
         // A progress line wrapped onto the next row, the cursor moved up over it, then the app's title, input line and
         // status drawn again as lines, the status on the row recorded: it no longer holds what it did

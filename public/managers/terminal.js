@@ -876,11 +876,14 @@ export default class TerminalManager {
         // the region, records rows the cursor did not move over, while the region's scrolling leaves the record on the
         // rows it was on: such a row counts as wrapped though the terminal starts a line there, where it still starts
         // like the text recorded and the row above reaches its last column
+        // The row the cursor last moved up onto at a prompt, with CSI A or ESC M (see cutClaim)
+        let movedUpOnto = null;
         const claimWrappedRows = (count) => {
             const buffer = terminal.buffer.active;
             const claims = promptMarkers.get(terminal)?.claims;
             if (!claims || !terminal.modes.bracketedPasteMode || buffer.type !== 'normal') return;
             const cursorRow = buffer.baseY + buffer.cursorY;
+            movedUpOnto = cursorRow - Math.min(count, buffer.cursorY);
             for (let up = 0; up < Math.min(count, buffer.cursorY); up++) {
                 const row = cursorRow - up;
                 const line = buffer.getLine(row);
@@ -914,13 +917,17 @@ export default class TerminalManager {
                 if (marker.isDisposed || marker.line === row) claims.splice(at, 1)[0].marker.dispose();
             }
         };
-        // An erase from past a recorded row's first column (readline's Backspace: BS, then EL 0) keeps what lies left
-        // of the cursor: where that still starts what the row held, the record keeps just that much
+        // An erase from past a recorded row's first column keeps what lies left of the cursor. Where nothing is left
+        // there, the row's record goes. readline's Backspace across the wrap moves the cursor up onto the row before it
+        // erases (CSI A, then BS and EL 0): on that row, where what is left still starts what the row held, the record
+        // keeps just that much
         const cutClaim = (row, column) => {
             const claims = promptMarkers.get(terminal)?.claims ?? [];
             const claim = claims.findLast(({ marker }) => !marker.isDisposed && marker.line <= row);
+            if (claim?.marker.line !== row) return;
             const kept = terminal.buffer.active.getLine(row)?.translateToString(true, 0, column) ?? '';
-            if (claim?.marker.line === row && claim.text.startsWith(kept)) claim.text = kept;
+            if (kept === '') unclaim(row);
+            else if (row === movedUpOnto && claim.text.startsWith(kept)) claim.text = kept;
         };
         const unclaimErased = (mode, display) => {
             const buffer = terminal.buffer.active;
