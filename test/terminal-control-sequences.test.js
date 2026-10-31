@@ -962,11 +962,20 @@ describe('terminal control sequences', () => {
 
     test('a saved session leaves out the output of an app that starts with a blank row and draws it, its first line and a filled input line again', async () => {
         // Known limit: under a blank row, an app's title drawn again above an input line that ends at its last column,
-        // with the cursor on the row below it, reads as Starship's prompt redrawn below a listing and typed on, so the
-        // save stops above the app's transcript (with the cursor a row further down, it is kept). Telling the two apart
-        // would also keep Starship's redrawn prompt. Pinned so that changing it is deliberate
+        // with the cursor below it, reads as Starship's prompt redrawn below a listing and typed on, so the save stops
+        // above the app's transcript, however far down the cursor is while each line between ends at its last column
+        // too (below one that does not, it is kept). Telling the two apart would also keep Starship's redrawn prompt.
+        // Pinned so that changing it is deliberate
         const saves = recordSavedSessions();
         await receiveOutput(`$ app\r\n\x1b[?2004h\r\nTitle\r\n> \r\nr1\r\nr2\r\nr3\r\n\r\nTitle\r\n${filledInput}\r\nstatus`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '']);
+    });
+
+    test('a saved session leaves out the output of an app that starts with a blank row and draws it, its first line and a filled input line again, then a filled row and another', async () => {
+        // The known limit above, the cursor two rows below the input line: the row between ends at its last column too
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n\x1b[?2004h\r\nTitle\r\n> \r\nr1\r\nr2\r\nr3\r\n\r\nTitle\r\n${filledInput}\r\n${'S'.repeat(80)}\r\nmore`);
 
         assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '']);
     });
