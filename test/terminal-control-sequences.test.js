@@ -998,12 +998,12 @@ describe('terminal control sequences', () => {
     });
 
     // Run a save with its work counted: the rows it reads, its startsWith calls with the characters of both strings, its
-    // slice calls with the characters of the strings sliced, and its join calls with the characters joined. Strings
-    // built some other way (with + alone, or a template) go uncounted
+    // slice, substring and substr calls with the characters of the strings they cut from, and its join calls with the
+    // characters joined. Strings built some other way (with + alone, or a template) go uncounted
     function countedSave() {
         const buffer = terminal.buffer.active;
         const getLine = buffer.getLine.bind(buffer);
-        const { startsWith, slice } = String.prototype;
+        const { startsWith, slice, substring, substr } = String.prototype;
         const { join } = Array.prototype;
         const work = { reads: 0, comparisons: 0, compared: 0, slices: 0, sliced: 0, joins: 0, joined: 0 };
         buffer.getLine = (row) => {
@@ -1015,11 +1015,13 @@ describe('terminal control sequences', () => {
             work.compared += this.length + String(search).length;
             return startsWith.call(this, search, ...rest);
         };
-        String.prototype.slice = function (...range) {
-            work.slices++;
-            work.sliced += this.length;
-            return slice.apply(this, range);
-        };
+        for (const [name, cut] of Object.entries({ slice, substring, substr })) {
+            String.prototype[name] = function (...range) {
+                work.slices++;
+                work.sliced += this.length;
+                return cut.apply(this, range);
+            };
+        }
         Array.prototype.join = function (...separator) {
             const joined = join.apply(this, separator);
             work.joins++;
@@ -1029,7 +1031,7 @@ describe('terminal control sequences', () => {
         try {
             manager.saveSessionState();
         } finally {
-            Object.assign(String.prototype, { startsWith, slice });
+            Object.assign(String.prototype, { startsWith, slice, substring, substr });
             Array.prototype.join = join;
             delete buffer.getLine;
         }
