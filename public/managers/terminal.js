@@ -155,10 +155,12 @@ function redrawnPromptRow(buffer, wrapped, markedRow, cursorRow, tabRow) {
 // output from the first row on is left out; so does one that printed a blank row, such a line and then a short line,
 // with the cursor on the short one (the long line reads as the top line of a prompt like Starship's, the short one as
 // its command), as it did before the rows the cursor moved up over were recorded, and so does one that moved the cursor
-// up over such a line and back down with newlines, each row still starting like what it held. So is a background job's
-// text printed with no final newline at a one-line prompt, which the command typed after it runs on from as one line,
-// and a job's line under a blank marked row that is no Starship prompt's: output with no final newline puts the mark on
-// the row below, which may stay blank. Within four rows of the mark the save leaves all of these out already
+// up over such a line and back down with newlines, each row it moved up over still starting like what it held, below a
+// row that reaches its last column whatever that row now holds (one the app drew again with other text, padded to the
+// last column). So is a background job's text printed with no final newline at a one-line prompt, which the command
+// typed after it runs on from as one line, and a job's line under a blank marked row that is no Starship prompt's:
+// output with no final newline puts the mark on the row below, which may stay blank. Within four rows of the mark the
+// save leaves all of these out already
 function typedOnPromptRow(buffer, wrapped, markedRow, cursorRow) {
     const blank = (row) => (buffer.getLine(row)?.translateToString(true) ?? '') === '';
     const first = blank(markedRow) ? markedRow + 1 : markedRow;
