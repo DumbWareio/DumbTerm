@@ -927,9 +927,14 @@ describe('terminal control sequences', () => {
     // Apps that start with a blank row, as Starship's prompt does, and draw rows like it again under another: only
     // a redrawn prompt's rows match, and only the rows the command was typed onto run on
     const filledInput = `> ${'x'.repeat(78)}`;
+    const wrappedInput = `> ${'x'.repeat(150)}`;
     for (const [shape, output, kept] of [
         ['draws its first line and input line again above a status row',
             'Title\r\n> \r\nr1\r\nr2\r\n\r\nTitle\r\n> hi\r\nstatus', ['Title', '>', 'r1', 'r2', '', 'Title', '> hi']],
+        ['draws it, its first line and a filled input line again, then two rows',
+            `Title\r\n> \r\nr1\r\nr2\r\nr3\r\n\r\nTitle\r\n${filledInput}\r\nstatus\r\nmore`, ['Title', '>', 'r1', 'r2', 'r3', '', 'Title', filledInput, 'status']],
+        ['draws it, its first line and a wrapped input line ending short of the last column again, then a row',
+            `Title\r\n> \r\nr1\r\nr2\r\nr3\r\n\r\nTitle\r\n${wrappedInput}\r\nstatus`, ['Title', '>', 'r1', 'r2', 'r3', '', 'Title', wrappedInput]],
         ['draws its first five lines again',
             'A\r\nB\r\nC\r\nD\r\nE\r\nr1\r\n\r\nA\r\nB\r\nC\r\nD\r\nE', ['A', 'B', 'C', 'D', 'E', 'r1', '', 'A', 'B', 'C', 'D']],
         ['draws its input line again under a different first line',
@@ -956,14 +961,48 @@ describe('terminal control sequences', () => {
     }
 
     test('a saved session leaves out the output of an app that starts with a blank row and draws it, its first line and a filled input line again', async () => {
-        // Known limit: under a blank row, an app's title drawn again above an input line that fills its row (or wraps)
-        // reads as Starship's prompt redrawn below a listing and typed on, so the save stops above the app's
-        // transcript. Telling the two apart would also keep Starship's redrawn prompt. Pinned so that changing it is
-        // deliberate
+        // Known limit: under a blank row, an app's title drawn again above an input line that ends at its last column,
+        // where the input line it first drew ended short of it (here `> `; one first drawn filled is kept, as pinned
+        // below), with the cursor below it, reads as Starship's prompt redrawn below a listing and typed on, so the
+        // save stops above the app's transcript, however far down the cursor is while each line between ends at its
+        // last column too (below one that does not, the search under a blank row keeps it, though the search in the
+        // rows a prompt reaches above the cursor's still matches an app that repeats its first lines there). Telling
+        // the two apart would also keep Starship's redrawn prompt.
+        // Pinned so that changing it is deliberate
         const saves = recordSavedSessions();
         await receiveOutput(`$ app\r\n\x1b[?2004h\r\nTitle\r\n> \r\nr1\r\nr2\r\nr3\r\n\r\nTitle\r\n${filledInput}\r\nstatus`);
 
         assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '']);
+    });
+
+    test('a saved session leaves out the output of an app that starts with a blank row and draws it, its first line and a filled input line again, then a filled row and another', async () => {
+        // The known limit above, the cursor two rows below the input line: the row between ends at its last column too
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n\x1b[?2004h\r\nTitle\r\n> \r\nr1\r\nr2\r\nr3\r\n\r\nTitle\r\n${filledInput}\r\n${'S'.repeat(80)}\r\nmore`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '']);
+    });
+
+    test('a saved session leaves out the output of an app that starts with a blank row, its first line and a blank row and draws them again above a blank line that wraps', async () => {
+        // The known limit above, with a blank input line: an empty command matches another empty one, though no other.
+        // Pinned so that changing it is deliberate
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n\x1b[?2004h\r\nTitle\r\n\r\n\r\nTitle\r\n${`${'x'.repeat(80)}\x1b[1K`.repeat(5)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '']);
+    });
+
+    test('a saved session keeps the output of an app that starts with a blank row and draws it, its first line and a filled input line again, then a line wrapped onto them once more', async () => {
+        // Whether the marked command fills its row is read along with it, whatever the search has gone past by then:
+        // the lower copy reads it, before the search goes up past the row the last line starts on, which is not marked
+        // as wrapped. The upper copy's input line runs on into that row from a filled one, which no command typed at a
+        // prompt does once the marked one filled its row
+        const saves = recordSavedSessions();
+        const top = 'H'.repeat(80);
+        await receiveOutput(`$ app\r\n\x1b[?2004h\r\n${top}\r\n${filledInput}\r\nr1\r\nr2\r\nr3\r\n\r\n${top}\r\n${filledInput}\r\n`
+            + `${'q'.repeat(80)}${'x'.repeat(80)}\x1b[1K${top}> zzz`);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(0, 10), ['$ app', '', top, filledInput, 'r1', 'r2', 'r3', '', top, filledInput]);
     });
 
     test('a saved session keeps the output of an app that starts with a blank row and draws a wrapped line again, the cursor moved up into it', async () => {
@@ -983,47 +1022,97 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)).slice(0, 6), ['$ app', '', 'A', '', 'A', '']);
     });
 
+    // Run a save with its work counted: the rows it reads, its startsWith calls with the characters of both strings, its
+    // slice, substring and substr calls with the characters of the strings they cut from, and its join calls with the
+    // characters joined. Strings built some other way (with + alone, or a template) go uncounted
+    function countedSave() {
+        const buffer = terminal.buffer.active;
+        const getLine = buffer.getLine.bind(buffer);
+        const { startsWith, slice, substring, substr } = String.prototype;
+        const { join } = Array.prototype;
+        const work = { reads: 0, comparisons: 0, compared: 0, slices: 0, sliced: 0, joins: 0, joined: 0 };
+        buffer.getLine = (row) => {
+            work.reads++;
+            return getLine(row);
+        };
+        String.prototype.startsWith = function (search, ...rest) {
+            work.comparisons++;
+            work.compared += this.length + String(search).length;
+            return startsWith.call(this, search, ...rest);
+        };
+        for (const [name, cut] of Object.entries({ slice, substring, substr })) {
+            String.prototype[name] = function (...range) {
+                work.slices++;
+                work.sliced += this.length;
+                return cut.apply(this, range);
+            };
+        }
+        Array.prototype.join = function (...separator) {
+            const joined = join.apply(this, separator);
+            work.joins++;
+            work.joined += joined.length;
+            return joined;
+        };
+        try {
+            manager.saveSessionState();
+        } finally {
+            Object.assign(String.prototype, { startsWith, slice, substring, substr });
+            Array.prototype.join = join;
+            delete buffer.getLine;
+        }
+        return work;
+    }
+
     test('a save reads a long wrapped line\'s rows a few times each and compares only the start of each command', async () => {
         // An app's line wrapped onto 2,000 rows, every other one erased back to blank (EL 1 keeps the wrap) and the
         // rest repeating the marked prompt's top line: each row there starts a redrawn prompt's command to compare
         // with the marked one. Building that command afresh at each row would read ~500 rows per row, comparing it
         // whole would go through ~80,000 characters each time, and taking its start from every row gathered so far
-        // would slice ~500 rows each time; counted, not timed
+        // would slice ~500 rows each time, or slice it from them all joined, or added one to the front of the rest;
+        // counted, not timed. The save's work is counted with the line half as long too: twice as long, the line
+        // takes no count to more than three times as much
         const saves = recordSavedSessions();
         const top = 'H'.repeat(80);
-        await receiveOutput(`$ app\r\n\x1b[?2004h\r\n${top}\r\n> \r\n${`${'x'.repeat(80)}\x1b[1K${top}`.repeat(1000)}`);
+        const appRows = (count) => `${'x'.repeat(80)}\x1b[1K${top}`.repeat(count / 2);
+        await receiveOutput(`$ app\r\n\x1b[?2004h\r\n${top}\r\n> \r\n${appRows(1000)}`);
+        const half = countedSave();
+        await receiveOutput(appRows(1000));
         const buffer = terminal.buffer.active;
-        const getLine = buffer.getLine.bind(buffer);
-        const { startsWith, slice } = String.prototype;
-        let reads = 0;
-        let slices = 0;
-        let comparisons = 0;
-        let compared = 0;
-        buffer.getLine = (row) => {
-            reads++;
-            return getLine(row);
-        };
-        String.prototype.startsWith = function (search, ...rest) {
-            comparisons++;
-            compared += this.length + String(search).length;
-            return startsWith.call(this, search, ...rest);
-        };
-        String.prototype.slice = function (...range) {
-            slices++;
-            return slice.apply(this, range);
-        };
-        try {
-            manager.saveSessionState();
-        } finally {
-            Object.assign(String.prototype, { startsWith, slice });
-            delete buffer.getLine;
-        }
+        const cells = buffer.length * terminal.cols;
+        const work = countedSave();
 
         assert.ok(savedLines(saves.at(-1)).includes(top), 'the app\'s output is kept');
-        assert.ok(reads < 50 * buffer.length, `${reads} row reads for ${buffer.length} rows`);
-        assert.ok(comparisons > 0, 'the commands are compared');
-        assert.ok(compared < 20 * comparisons, `${compared} characters compared in ${comparisons} comparisons`);
-        assert.ok(slices < 10 * comparisons, `${slices} slices for ${comparisons} comparisons`);
+        assert.ok(work.reads < 50 * buffer.length, `${work.reads} row reads for ${buffer.length} rows`);
+        assert.ok(work.comparisons > 0, 'the commands are compared');
+        assert.ok(work.compared < 20 * work.comparisons, `${work.compared} characters compared in ${work.comparisons} comparisons`);
+        assert.ok(work.slices < 10 * work.comparisons, `${work.slices} slices for ${work.comparisons} comparisons`);
+        assert.ok(work.sliced < 10 * cells, `${work.sliced} characters sliced from for ${cells} cells`);
+        assert.ok(work.joined < 10 * cells, `${work.joined} characters joined in ${work.joins} joins for ${cells} cells`);
+        for (const [count, done] of Object.entries(work)) {
+            assert.ok(done <= 3 * half[count], `${count}: ${done} for the whole line, ${half[count]} for half of it`);
+        }
+    });
+
+    test('a save reads a long marked command\'s rows a few times in all and compares each command no further than the row where it differs', async () => {
+        // The marked prompt's command wrapped onto 200 rows, under an app's lines each wrapped onto two rows, the first
+        // erased back to blank and the second repeating the prompt's top line: each line's second row starts a
+        // redrawn prompt's command to compare with the marked one, and each newline after a filled row leaves that
+        // command reading as typed on. Reading the marked command afresh for each would read ~200 rows each time, as
+        // would asking each time whether it ends at its last column, and building the redrawn one's start as long as
+        // the marked one would slice ~200 rows each time; counted, not timed. startsWith's characters count the
+        // marked command whole each time, so they are not bounded here
+        const saves = recordSavedSessions();
+        const top = 'H'.repeat(80);
+        await receiveOutput(`$ app\r\n\x1b[?2004h\r\n${top}\r\n> ${'y'.repeat(80 * 200)}\r\n${`${'x'.repeat(80)}\x1b[1K${top}\r\n`.repeat(1000)}`);
+        const buffer = terminal.buffer.active;
+        const cells = buffer.length * terminal.cols;
+        const work = countedSave();
+
+        assert.ok(savedLines(saves.at(-1)).includes(top), 'the app\'s output is kept');
+        assert.ok(work.reads < 50 * buffer.length, `${work.reads} row reads for ${buffer.length} rows`);
+        assert.ok(work.comparisons > 0, 'the commands are compared');
+        assert.ok(work.slices < 10 * work.comparisons, `${work.slices} slices for ${work.comparisons} comparisons`);
+        assert.ok(work.sliced < 10 * cells, `${work.sliced} characters sliced from for ${cells} cells`);
     });
 
     // The save at the prompt after `echo out`, before the listing: what each later save should equal
@@ -1050,6 +1139,16 @@ describe('terminal control sequences', () => {
         const saved = await replayCapture('starshipFourRows', 4);
 
         assert.equal(saved.at(-1), savedBeforeListing(saved));
+    });
+
+    test('a saved session leaves out a Starship prompt redrawn below a completion listing with a long command erased back', async () => {
+        // The redrawn command wraps onto more rows than a prompt reaches, and is shorter than the marked one: it need
+        // only start like it
+        const saves = recordSavedSessions();
+        await receiveOutput(`\r\n\x1b[?2004h\r\n\x1b[1mdir\x1b[0m on main\r\n\u276f echo ${'y'.repeat(500)}\r\nf1  f2  f3\r\n\r\n`
+            + `dir on main\r\n\u276f echo ${'y'.repeat(420)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['']);
     });
 
     test('a saved session leaves out a Starship prompt redrawn below a completion listing for a command three rows long at 40 columns', async () => {
