@@ -980,6 +980,19 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '']);
     });
 
+    test('a saved session keeps the output of an app that starts with a blank row and draws it, its first line and a filled input line again, then a line wrapped onto them once more', async () => {
+        // Whether the marked command fills its row is read along with it, whatever the search has gone past by then:
+        // the lower copy reads it, before the search goes up past the row the last line starts on, which is not marked
+        // as wrapped. The upper copy's input line runs on into that row from a filled one, which no command typed at a
+        // prompt does once the marked one filled its row
+        const saves = recordSavedSessions();
+        const top = 'H'.repeat(80);
+        await receiveOutput(`$ app\r\n\x1b[?2004h\r\n${top}\r\n${filledInput}\r\nr1\r\nr2\r\nr3\r\n\r\n${top}\r\n${filledInput}\r\n`
+            + `${'q'.repeat(80)}${'x'.repeat(80)}\x1b[1K${top}> zzz`);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(0, 10), ['$ app', '', top, filledInput, 'r1', 'r2', 'r3', '', top, filledInput]);
+    });
+
     test('a saved session keeps the output of an app that starts with a blank row and draws a wrapped line again, the cursor moved up into it', async () => {
         // The cursor's line runs on below it: compared whole, the two lines differ
         const saves = recordSavedSessions();
