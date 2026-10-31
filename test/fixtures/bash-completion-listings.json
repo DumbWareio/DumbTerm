@@ -1,5 +1,5 @@
 {
-    "description": "What bash 5.2 wrote to the terminal at each step, captured from DumbTerm's Docker image in a throwaway container (issue #44): with ENABLE_STARSHIP and the shipped starship.toml, or with the default prompt under the hostname box. /tmp/d holds alpha, beta, delta and gamma; /tmp/e eight directories with long names. The sessions ending WideCtrlE, SpaceCtrlE and FilledCtrlE, and starshipCtrlEResized, were captured for issue #64, each key typed on its own; for those, /tmp/ followed by 56 or 69 x's holds alpha and beta. A step with columns of its own was captured after the terminal was resized to that width, which the replay does before it",
+    "description": "What bash 5.2 wrote to the terminal at each step, captured from DumbTerm's Docker image in a throwaway container (issue #44): with ENABLE_STARSHIP and the shipped starship.toml, or with the default prompt under the hostname box. /tmp/d holds alpha, beta, delta and gamma; /tmp/e eight directories with long names. The sessions ending WideCtrlE, SpaceCtrlE and FilledCtrlE, and starshipCtrlEResized and plainCtrlEEdited, were captured for issue #64, each key typed on its own; for those, /tmp/ followed by 56 or 69 x's holds alpha and beta. A step with columns of its own was captured after the terminal was resized to that width, which the replay does before it",
     "starshipCtrlE": {
         "columns": 80,
         "steps": [
@@ -392,6 +392,47 @@
                 "keys": "(the terminal resized to 60 columns; bash draws its line again)",
                 "columns": 60,
                 "output": "\r\u001b[K\r\u001b[A\u001b[K\r\u001b[1;32m❯\u001b[0m ls /tmp/e/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+        ]
+    },
+    "plainCtrlEEdited": {
+        "columns": 80,
+        "steps": [
+            {
+                "keys": "(bash starts)",
+                "output": "\u001b[?2004hroot@box:/app# "
+            },
+            {
+                "keys": "echo out, Enter",
+                "output": "echo out\r\n\u001b[?2004l\rout\r\n\u001b[?2004hroot@box:/app# "
+            },
+            {
+                "keys": "ls /tmp/d/, Tab, Tab",
+                "output": "ls /tmp/d/\u0007\r\nalpha/ beta/  delta/ gamma/ \r\nroot@box:/app# ls /tmp/d/"
+            },
+            {
+                "keys": "a × 400",
+                "output": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            {
+                "keys": "Ctrl-A",
+                "output": "\u001b[A\u001b[A\u001b[A\u001b[A\u001b[A\b\b\b\b\b\b\b\b\b\b"
+            },
+            {
+                "keys": "Ctrl-E",
+                "output": "\r\n\r\n\r\n\r\n\r\n\r\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C"
+            },
+            {
+                "keys": "← × 100",
+                "output": "\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\r\u001b[A\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b"
+            },
+            {
+                "keys": "X",
+                "output": "Xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[Ca\u001b[A\r\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C"
+            },
+            {
+                "keys": "Ctrl-E",
+                "output": "\r\n\r\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C"
             }
         ]
     }

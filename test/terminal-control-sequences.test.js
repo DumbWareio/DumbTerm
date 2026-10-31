@@ -1194,6 +1194,20 @@ describe('terminal control sequences', () => {
             'eps-a-rather-long-directory-name/   zeta-a-rather-long-directory-name/', '', top, firstRow, firstRow, '']);
     });
 
+    test('a saved session keeps a plain prompt redrawn below a completion listing once a key was typed in the middle of its command after Ctrl-E, as bash prints it', async () => {
+        // Known limit: ← went back across the wrap and X was typed there, in a row Ctrl-A had moved up over and Ctrl-E's
+        // newline had unmarked as wrapped. readline draws the rest of the command again from X without moving up over
+        // that row, so its record keeps the text it had, which the row no longer starts like, and the command no longer
+        // runs on across it. The save keeps the listing and the redrawn prompt, which the tab shows again above its new
+        // prompt, as before #64. Pinned so that changing it is deliberate
+        const saved = await replayCapture('plainCtrlEEdited', 9, LISTINGS, { typeTabs: true });
+
+        assert.deepEqual(saved.slice(2, 7), [2, 3, 4, 5, 6].map(() => savedBeforeListing(saved)), 'up to ← it was left out');
+        const prompt = 'root@box:/app# ';
+        assert.deepEqual(savedLines(saved[8]), [`${prompt}echo out`, 'out', `${prompt}ls /tmp/d/`, 'alpha/ beta/  delta/ gamma/',
+            `${prompt}ls /tmp/d/${'a'.repeat(55)}`, 'a'.repeat(80), 'a'.repeat(80), 'a'.repeat(80), `${'a'.repeat(5)}X${'a'.repeat(74)}`, '']);
+    });
+
     test('a saved session leaves out a Starship prompt redrawn below a completion listing at 40 columns after Ctrl-E, erasing back and typing on', async () => {
         // Backspace erased the command back across its wrap (BS, then EL 0 at the cursor) before more was typed: a row
         // recorded when the cursor moved up over it keeps what the erase left of it

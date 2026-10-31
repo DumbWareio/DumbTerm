@@ -867,15 +867,20 @@ export default class TerminalManager {
         // of them: past that the highest goes. A row's record goes when an erase clears its wrap as xterm.js does: EL 0
         // from the row's first column, EL 2, ED 0 from the first column, ED 1 and ED 2, and their selective forms (CSI
         // ? K, CSI ? J); the rows ED resets above or below the cursor's lose their markers with their text. An EL 0 or
-        // ED 0 from past the first column keeps the record of what lies left of the cursor, where that still starts the
-        // text recorded (see cutClaim). The whole record goes with a new mark (see setMark) and when the columns
-        // change, which rewraps the rows (with rows alone the lines move whole, into the scrollback or out of it, and
-        // their markers with them). Each handler returns false so xterm.js still does its part. Known limits: a row's
-        // record stays where its wrap is cleared some other way (SL, SR, DECIC, DECDC, DECALN, a backspace that wraps
-        // back), and under a scroll region (DECSTBM) a move up that stops at its top margin, or an ESC M that scrolls
-        // the region, records rows the cursor did not move over, while the region's scrolling leaves the record on the
-        // rows it was on: such a row counts as wrapped though the terminal starts a line there, where it still starts
-        // like the text recorded and the row above reaches its last column
+        // ED 0 from past the first column drops the record where it leaves nothing left of the cursor; on the row the
+        // cursor last moved up onto with CSI A or ESC M (readline's Backspace across the wrap), where what is left
+        // still starts the text recorded, the record keeps just that much (see cutClaim). The whole record goes with a
+        // new mark (see setMark) and when the columns change, which rewraps the rows (with rows alone the lines move
+        // whole, into the scrollback or out of it, and their markers with them). Each handler returns false so xterm.js
+        // still does its part. Known limits: a row's record stays where its wrap is cleared some other way (SL, SR,
+        // DECIC, DECDC, DECALN, a backspace that wraps back), and under a scroll region (DECSTBM) a move up that stops
+        // at its top margin, or an ESC M that scrolls the region, records rows the cursor did not move over, while the
+        // region's scrolling leaves the record on the rows it was on: such a row counts as wrapped though the terminal
+        // starts a line there, where it still starts like the text recorded and the row above reaches its last column.
+        // The other way, a key typed in the middle of a recorded row after the cursor moved down past it (Ctrl-E, then
+        // ← back across the wrap): readline draws the rest of the command again from that key without moving up over
+        // the row, so its record keeps the text it had, which the row no longer starts like, and the command no longer
+        // runs on across it
         // The row the cursor last moved up onto at a prompt, with CSI A or ESC M (see cutClaim)
         let movedUpOnto = null;
         const claimWrappedRows = (count) => {
