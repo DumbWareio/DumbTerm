@@ -2210,13 +2210,27 @@ describe('terminal control sequences', () => {
     });
 
     test('a saved session keeps the output of an app whose line of wide characters it moved up over runs on from a first row it cut short', async () => {
-        // The rows below the first still hold what they did, but the first no longer reaches its last column: the wide
-        // character starting the second row did not fit there only if the column before the first row's last is written
+        // The rows below the first still hold what they did, but the first, cut after the move up, no longer holds what it
+        // did then, which the second row's record keeps. (Cut before the move up, the first row holds just that, and only
+        // its reach keeps the output: see the tests after this one)
         const saves = recordSavedSessions();
         await receiveOutput(`$ app\r\n\x1b[?2004h${WIDE.slice(0, 40 * 6 - 3)}\x1b[5A\r\x1b[6C\x1b[K${'\r\n'.repeat(5)}`);
 
         assert.deepEqual(savedLines(saves.at(-1)), ['$ app', WIDE.slice(0, 3), ...[1, 2, 3, 4].map((i) => WIDE.slice(40 * i, 40 * i + 40)), '']);
     });
+
+    for (const [chars, line, column, cut] of [['wide characters', WIDE.slice(0, 40 * 8 - 3), 6, (i) => WIDE.slice(40 * i, 40 * i + 3)],
+        ['letters, cut at the last column', 'abcdefghi'.repeat(80).slice(0, 80 * 8 - 5), 79, (i) => 'abcdefghi'.repeat(80).slice(80 * i, 80 * i + 79)]]) {
+        test(`a saved session keeps the output of an app that cuts short the rows of its line of ${chars}, then moves up over them`, async () => {
+            // Recorded after the cut, each row and the one above it hold what they did, but the row above reaches its
+            // last column no more: its last cell is empty and, below a wide character, so is the one before
+            const saves = recordSavedSessions();
+            await receiveOutput(`$ app\r\n\x1b[?2004h${line}\x1b[7A${Array.from({ length: 8 }, () => `\r\x1b[${column}C\x1b[K`).join('\x1b[B')}`);
+            await receiveOutput(`\x1b[7A${'\r\n'.repeat(7)}`);
+
+            assert.deepEqual(savedLines(saves.at(-1)), ['$ app', ...Array.from({ length: 7 }, (_, i) => cut(i)), '']);
+        });
+    }
 
     test('a saved session keeps the output of an app that moves up over its wrapped line and draws its first row again with a status padded to the last column', async () => {
         // The rows below the first still hold what they did, and the first still reaches its last column, but it no longer
