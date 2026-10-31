@@ -68,12 +68,14 @@ function redrawnPromptRow(buffer, wrapped, markedRow, cursorRow, tabRow) {
         }
         if (same) return markedRow;
     }
-    // After a Tab typed on the cursor's line or above it, the command is that whole line, however many rows it wraps
-    // up onto, and the prompt's rows above it may start higher than the cursor's rows, below the marked command. The
+    // After a Tab typed on the cursor's line or above it, the command is that whole line, however many rows it wraps up
+    // onto, and the prompt's rows above it may start higher than the cursor's rows, below the marked command. The
     // marked command is read there without the blank rows it ends with on rows it wraps onto: bash takes the cursor
     // past a command that fills its row by writing a space at the start of the next one, which the command typed on at
-    // the redrawn prompt replaces. The searches above and below read it whole: each of the first's candidates that a
-    // Tab admits is compared here too, and so is each of the second's whose command starts a line
+    // the redrawn prompt replaces. The searches above and below read it whole. That loses nothing only for their
+    // candidates below the marked command's last row that a Tab admits: each such candidate of the first is compared
+    // here too, and so is each such candidate of the second whose command starts a line. A candidate of theirs at or
+    // above that row, or of the second whose command starts partway through a line, is compared with the blanks
     let end = cursorRow;
     while (tabRow !== null && wrapped(end + 1)) end++;
     if (tabRow !== null && tabRow <= end) {
