@@ -1233,10 +1233,13 @@ describe('terminal control sequences', () => {
 
     test('a saved session keeps a Starship prompt redrawn below a completion listing for a command whose marked one filled its row, once typed on, as bash prints it', async () => {
         // Known limit: bash takes the cursor past a command that fills its row by writing a space at the start of the
-        // next row. The marked command keeps that space; typed on at the redrawn prompt, the command's next character
-        // replaces it, so neither starts like the other and the save keeps the listing and the redrawn prompt, which the
-        // tab shows again above its new prompt (a plain prompt below a listing one row tall is left out within four rows
-        // of the marked one). Pinned so that changing it is deliberate
+        // next row, which the terminal wraps onto. The marked command keeps that space, so it reads as the 80 columns of
+        // its row and a space (81 characters); typed on at the redrawn prompt, the command's next character replaces the
+        // space, so the two differ at that character and neither starts like the other: in the rows a prompt reaches
+        // above the cursor's, and under the blank row. Leaving the space out of the marked command would read an app's
+        // input line that filled its row and ran on with blanks onto the next as no longer than its row (pinned below).
+        // The save keeps the listing and the redrawn prompt, which the tab shows again above its new prompt. Pinned so
+        // that changing it is deliberate
         const saved = await replayCapture('starshipFilledCtrlE', 6);
 
         const top = savedLines(savedBeforeListing(saved))[1];
@@ -1244,6 +1247,22 @@ describe('terminal control sequences', () => {
         assert.equal(saved[2], savedBeforeListing(saved), 'before it was typed on, it was left out');
         assert.deepEqual(savedLines(saved[5]), ['', top, '\u276f echo out', 'out', '', top, command, 'alpha/ beta/', '', top, command, '']);
     });
+
+    // An app's input line that fills its row and runs on with blanks onto the next, drawn again with text there
+    const paddedInput = `> ${'x'.repeat(78)}${' '.repeat(10)}`;
+    for (const [shape, output, kept] of [
+        ['starts with a blank row and draws it, its first line and', `\r\nTitle\r\n${paddedInput}\r\nr1\r\nr2\r\nr3\r\n\r\nTitle\r\n> ${'x'.repeat(78)}${'z'.repeat(90)}`,
+            ['', 'Title', `> ${'x'.repeat(78)}`, 'r1', 'r2', 'r3', '', 'Title']],
+        ['draws its first line and', `Title\r\n${paddedInput}\r\nr1\r\nr2\r\nr3\r\nTitle\r\n> ${'x'.repeat(78)}zzz`,
+            ['Title', `> ${'x'.repeat(78)}`, 'r1', 'r2', 'r3', 'Title']],
+    ]) {
+        test(`a saved session keeps the output of an app that ${shape} an input line again, where it first ran on with blanks past its row`, async () => {
+            const saves = recordSavedSessions();
+            await receiveOutput(`$ app\r\n\x1b[?2004h${output}`);
+
+            assert.deepEqual(savedLines(saves.at(-1)).slice(0, kept.length + 1), ['$ app', ...kept]);
+        });
+    }
 
     test('a saved session leaves out a prompt with a blank row and three lines above its command redrawn below a completion listing once the cursor moved down across the command\'s wrap', async () => {
         // Three rows above the command, the most a prompt has

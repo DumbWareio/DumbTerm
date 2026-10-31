@@ -31,15 +31,17 @@ const MAX_WRAP_CLAIMS = 200;
 // no blank first row redrawn below a listing asked for with no Tab (M-?, M-=, C-x /), or with the last Tab typed on the
 // redrawn prompt's own rows (a completion with no listing), its command or the prompt's rows above it starting higher
 // than the cursor's four rows; a command whose marked one filled its row, typed on past it after the listing (bash
-// moves past a full row by writing a space at the start of the next, which the typed text replaces, so neither command
-// starts like the other); and a command the cursor moved down across before the terminal was resized, which drops the
-// record of the rows it moved up over, or after it moved up some other way than CSI A or ESC M (CUP, VPA, CPL, DECRC),
-// which records none (see initTerminal). And the other way: an app that draws its first lines again in the rows a
-// prompt reaches above, and on, the cursor's row, the cursor's line and the one it repeats one starting like the other,
-// reads as a redrawn prompt, so its output from its first line on is left out; so does one in which Tab was typed and
-// that then draws up to three of its first lines again above a line the terminal wraps past the cursor's four rows,
-// starting like the line it repeats; and one that starts with one blank row and later draws it, its title (up to three
-// rows) and an input line again, with the cursor on that input line, its output from the first blank row on
+// moves past a full row by writing a space at the start of the next, which the terminal wraps onto and the typed text
+// replaces, so the two commands differ at that character; read without that space, the marked command would also match
+// an app's input line that filled its row and ran on with blanks onto the next, drawn again with text there); and a
+// command the cursor moved down across before the terminal was resized, which drops the record of the rows it moved up
+// over, or after it moved up some other way than CSI A or ESC M (CUP, VPA, CPL, DECRC), which records none (see
+// initTerminal). And the other way: an app that draws its first lines again in the rows a prompt reaches above, and on,
+// the cursor's row, the cursor's line and the one it repeats one starting like the other, reads as a redrawn prompt, so
+// its output from its first line on is left out; so does one in which Tab was typed and that then draws up to three of
+// its first lines again above a line the terminal wraps past the cursor's four rows, starting like the line it repeats;
+// and one that starts with one blank row and later draws it, its title (up to three rows) and an input line again, with
+// the cursor on that input line, its output from the first blank row on
 function redrawnPromptRow(buffer, wrapped, markedRow, cursorRow, tabRow) {
     const text = (row) => buffer.getLine(row)?.translateToString(true) ?? '';
     const line = (row) => {
