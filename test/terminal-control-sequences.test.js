@@ -1952,7 +1952,7 @@ describe('terminal control sequences', () => {
         const row = terminal.buffer.active.baseY + terminal.buffer.active.cursorY;
         await receiveOutput('\x1b[J\x1b[1K\x1b[K');
 
-        assert.ok(!markedRows().includes(row), `no record of row ${row} in ${markedRows()}`);
+        assert.equal(markersOn(row), 1, `only the marker of the row last moved up onto on row ${row}: ${markedRows()}`);
     });
 
     test('a change of rows keeps the record of the rows the cursor moved up over after the columns changed once', async () => {
@@ -2016,11 +2016,14 @@ describe('terminal control sequences', () => {
         });
     }
 
-    // The rows of the buffer that markers are on
+    // The rows of the buffer that markers are on, and how many are on a row: besides the prompt's mark and the record
+    // of the rows the cursor moved up over, a marker follows the row it last moved up onto (see cutClaim)
     const markedRows = () => terminal.markers.map((marker) => marker.line);
+    const markersOn = (row) => markedRows().filter((line) => line === row).length;
 
-    for (const [erase, sequence] of [['ED 1', '\x1b[5C\x1b[1J'], ['DECSED 1 (CSI ? 1 J)', '\x1b[5C\x1b[?1J'],
-        ['ED 2', '\x1b[2J'], ['DECSED 2 (CSI ? 2 J)', '\x1b[?2J']]) {
+    // ED 2 also resets the cursor's row, and the marker of the row last moved up onto with it
+    for (const [erase, sequence, left] of [['ED 1', '\x1b[5C\x1b[1J', 1], ['DECSED 1 (CSI ? 1 J)', '\x1b[5C\x1b[?1J', 1],
+        ['ED 2', '\x1b[2J', 0], ['DECSED 2 (CSI ? 2 J)', '\x1b[?2J', 0]]) {
         test(`${erase} drops the record of the cursor's row, which it erases`, async () => {
             // The erase takes the prompt's marked row with it, so no save can tell
             const saves = recordSavedSessions();
@@ -2028,7 +2031,7 @@ describe('terminal control sequences', () => {
             const row = terminal.buffer.active.baseY + terminal.buffer.active.cursorY - 2;
             await receiveOutput(`\x1b[2A\r${sequence}`);
 
-            assert.ok(!markedRows().includes(row), `no record of row ${row} in ${markedRows()}`);
+            assert.equal(markersOn(row), left, `no record of row ${row}: ${markedRows()}`);
         });
     }
 
@@ -2075,8 +2078,8 @@ describe('terminal control sequences', () => {
             await receiveOutput(`${ctrlA(5, ROOT_PROMPT.length)}\r${ROOT_PROMPT}${typedCommand(400)}${ctrlA(5, ROOT_PROMPT.length)}${ctrlE(5, 20)}`);
         }
 
-        assert.deepEqual(markedRows(), recorded);
-        assert.equal(recorded.length, 6, 'the marked row and the five the command wraps onto');
+        assert.deepEqual(markedRows().sort(), recorded.sort());
+        assert.equal(recorded.length, 7, 'the marked row, the five the command wraps onto, and the one last moved up onto');
     });
 
     test('an app that keeps bracketed paste on and moves up over a wrapped row again and again leaves a bounded record', async () => {
@@ -2087,7 +2090,7 @@ describe('terminal control sequences', () => {
         const buffer = terminal.buffer.active;
         const cursorRow = buffer.baseY + buffer.cursorY;
 
-        assert.ok(terminal.markers.length <= 201, `${terminal.markers.length} markers`);
+        assert.ok(terminal.markers.length <= 202, `${terminal.markers.length} markers`);
         assert.ok(markedRows().includes(cursorRow - 1), 'the last row moved up over is recorded');
         assert.ok(savedLines(saves.at(-1)).includes('$ app'), 'the app\'s output is kept');
     });
@@ -2224,6 +2227,24 @@ describe('terminal control sequences', () => {
             LETTERS.slice(240, 320), '']);
     });
 
+    // At 40 columns and 12 rows: an app's line wrapped onto eight rows, the cursor moved up over seven of them and back
+    // down, six status lines that scroll the screen, then the line's sixth row cut short (CUP, EL 0) and written on
+    const NARROW_LINE = Array.from({ length: 40 * 8 - 3 }, (_, i) => 'abcdefghijklmnopqrstuvwxyz'[(i * 7) % 26]).join('');
+    for (const [scrollback, lines] of [['full', 5100], ['with room', 30]]) {
+        test(`a saved session keeps the output of an app that cuts short a row it moved up over, with the scrollback ${scrollback}`, async () => {
+            // The cut applies only on the row the cursor last moved up onto, which a marker follows as the screen scrolls
+            // and the scrollback drops its oldest lines; a row number would name another row once those lines go
+            terminal.resize(40, 12);
+            const saves = recordSavedSessions();
+            await receiveOutput(Array.from({ length: lines }, (_, i) => `out ${i}\r\n`).join(''));
+            await receiveOutput(`$ app\r\n\x1b[?2004h${NARROW_LINE}\x1b[7A${'\r\n'.repeat(7)}\x1b[37C`);
+            await receiveOutput(`\r\n${Array.from({ length: 6 }, (_, i) => `status ${i}`).join('\r\n')}\x1b[5;6H\x1b[KXY`);
+
+            assert.deepEqual(savedLines(saves.at(-1)).slice(-9),
+                [`out ${lines - 1}`, '$ app', ...Array.from({ length: 6 }, (_, i) => NARROW_LINE.slice(40 * i, 40 * i + 40)), '']);
+        });
+    }
+
     test('a saved session keeps the output of an app that draws its first line and input line again over a row the cursor moved up over', async () => {
         // A progress line wrapped onto the next row, the cursor moved up over it, then the app's title, input line and
         // status drawn again as lines, the status on the row recorded: it no longer holds what it did
@@ -2262,8 +2283,8 @@ describe('terminal control sequences', () => {
         recordSavedSessions();
         await receiveOutput(`$ app\r\n\x1b[?2004h${'x'.repeat(80 * 40)}\x1b[65535A`);
 
-        assert.equal(terminal.markers.filter((marker) => !marker.isDisposed).length, 1 + terminal.rows - 1,
-            'the mark and the rows from the cursor\'s up to the screen\'s top');
+        assert.equal(terminal.markers.filter((marker) => !marker.isDisposed).length, 1 + terminal.rows - 1 + 1,
+            'the mark, the rows from the cursor\'s up to the screen\'s top, and the one last moved up onto');
     });
 
     test('a saved session leaves out a plain prompt with a half-typed command twenty-two rows long after Ctrl-A and Ctrl-E', async () => {
@@ -2295,10 +2316,10 @@ describe('terminal control sequences', () => {
         const saves = recordSavedSessions();
         await plainCommandAfterCtrlAE(saves);
         terminal.resize(terminal.cols, 30);
-        assert.equal(terminal.markers.length, 6, 'the mark and the five rows, after a change of rows');
+        assert.equal(terminal.markers.length, 7, 'the mark, the five rows and the one last moved up onto, after a change of rows');
         terminal.resize(100, 30);
 
-        assert.equal(terminal.markers.length, 1, 'the mark, after a change of columns');
+        assert.equal(terminal.markers.length, 2, 'the mark and the row last moved up onto, after a change of columns');
     });
 
     test('a new prompt drops the record of the rows the cursor moved up over at the one before', async () => {

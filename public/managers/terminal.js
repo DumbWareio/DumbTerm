@@ -829,6 +829,7 @@ export default class TerminalManager {
             old?.marker?.dispose();
             old?.claims.forEach((claim) => claim.marker.dispose());
             old?.tab?.dispose();
+            movedUpOnto?.dispose();
             promptMarkers.set(terminal, { ...mark, claims: [] });
         };
 
@@ -889,14 +890,17 @@ export default class TerminalManager {
         // it (Ctrl-E, then ← back across the wrap): readline draws the rest of the command again from that key without
         // moving up over the row, so its record keeps the text it had, which the row no longer starts like, and the
         // command no longer runs on across it
-        // The row the cursor last moved up onto at a prompt, with CSI A or ESC M (see cutClaim)
+        // A marker on the row the cursor last moved up onto at a prompt, with CSI A or ESC M (see cutClaim): it follows
+        // that row as the screen scrolls and the scrollback drops its oldest lines. At the screen's top the cursor moves
+        // up no further, and the marker goes on the row it stays on
         let movedUpOnto = null;
         const claimWrappedRows = (count) => {
             const buffer = terminal.buffer.active;
             const claims = promptMarkers.get(terminal)?.claims;
             if (!claims || !terminal.modes.bracketedPasteMode || buffer.type !== 'normal') return;
             const cursorRow = buffer.baseY + buffer.cursorY;
-            movedUpOnto = cursorRow - Math.min(count, buffer.cursorY);
+            movedUpOnto?.dispose();
+            movedUpOnto = terminal.registerMarker(-Math.min(count, buffer.cursorY));
             for (let up = 0; up < Math.min(count, buffer.cursorY); up++) {
                 const row = cursorRow - up;
                 const line = buffer.getLine(row);
@@ -942,7 +946,7 @@ export default class TerminalManager {
             const buffer = terminal.buffer.active;
             const kept = buffer.getLine(row)?.translateToString(true, 0, column) ?? '';
             if (kept === '') unclaim(row);
-            else if (row === movedUpOnto && claim.text.startsWith(kept)) {
+            else if (movedUpOnto && !movedUpOnto.isDisposed && movedUpOnto.line === row && claim.text.startsWith(kept)) {
                 Object.assign(claim, { text: kept, above: buffer.getLine(row - 1)?.translateToString(true) ?? '' });
             }
         };
