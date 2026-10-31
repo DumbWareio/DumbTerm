@@ -2378,6 +2378,21 @@ describe('terminal control sequences', () => {
         assert.equal(terminal.markers.length, 1, `markers on rows ${markedRows()}`);
     });
 
+    test('a saved session keeps a plain prompt with a half-typed command seven rows long after Ctrl-A, M-c and Ctrl-E, as bash prints it', async () => {
+        // Known limit: M-c capitalises the command's first word where it stands, on the prompt's row, which is the row
+        // above the first row Ctrl-A moved up over. readline moves up over no row after the edit, so that row's record
+        // keeps the text the row above held, which it no longer holds, and the command no longer runs on across it. A
+        // same-length edit on that row (M-u, Ctrl-T, a Tab completion in the middle of the line) does the same. The
+        // save keeps the prompt and the command's rows, as before #64. Pinned so that changing it is deliberate
+        const saved = await replayCapture('plainLongCtrlAEdited', 6, LONG_COMMANDS);
+
+        const words = Array(4).fill('alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega').join(' ');
+        const line = `${ROOT_PROMPT}Echo ${words}`;
+        assert.deepEqual(saved.slice(2, 4), [saved[1], saved[1]], 'typed, and after Ctrl-A, it was left out');
+        assert.deepEqual(savedLines(saved[5]), [`${ROOT_PROMPT}echo out`, 'out',
+            ...Array.from({ length: 6 }, (_, i) => line.slice(80 * i, 80 * i + 80).trimEnd()), '']);
+    });
+
     test('a saved session leaves out the prompt redrawn at the top of a cleared screen', async () => {
         // Ctrl-L clears the screen, and with it the row the shell marked, and redraws the prompt without
         // turning bracketed paste on again
