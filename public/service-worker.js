@@ -13,7 +13,8 @@ const BASE_PATH = self.registration.scope;
 // served under ('/' or '/a/'), and an install deletes only its own caches
 const SCOPE_PATH = new URL(BASE_PATH).pathname;
 let CACHE_NAME = cacheNameFor(CACHE_VERSION);
-// Names of the caches fills are still filling (a name appears once per fill), so no fill deletes another's cache
+// Names of the caches this worker's fills are still filling (a name appears once per fill), so no fill deletes another's
+// cache. Another worker of this install can't see the list, which is why only the active worker clears caches.
 const CACHES_BEING_FILLED = [];
 
 /**
@@ -188,6 +189,21 @@ function isStaleCache(key, cacheName) {
 }
 
 /**
+ * Whether this worker is still its registration's active worker. While a new version's worker activates, the worker
+ * it replaces can still be filling a cache, and each one's cleanup would delete the cache the other fills, so only the
+ * active worker clears caches. A worker registered as service-worker.js?v=<version> tells by its script URL. Under one
+ * URL for every version (an old page's bare registration) its own ServiceWorker object tells: a worker has one such
+ * object per service worker, so self.serviceWorker is the registration's active one only while this worker is. A
+ * browser without self.serviceWorker (Firefox) can't tell there, and the worker counts as active, as every worker did.
+ * @returns {boolean} True if this worker is the registration's active worker, or can't tell it isn't
+ */
+function isActiveWorker() {
+    const active = self.registration.active;
+    if (!active || active.scriptURL !== self.location.href) return false;
+    return !self.serviceWorker || self.serviceWorker === active;
+}
+
+/**
  * Determines if an update notification should be shown
  * @param {string} currentVersion - Current installed version
  * @param {string} newVersion - New available version
@@ -307,18 +323,24 @@ async function installCache(isFirstInstall = false, requestId) {
         console.log("Caching assets:", assetsToCache);
         const cache = await caches.open(cacheName);
         await cache.addAll(assetsToCache);
+        // What a fill writes into a cache deleted meanwhile (by another worker's cleanup, say) goes with it, so a fill
+        // whose cache is gone has failed, and clears nothing: the older caches are what still works offline
+        if (!(await caches.has(cacheName))) throw new Error('The cache was deleted while it was being filled');
         console.log("Assets cached successfully");
-        
+
         // Clear old caches only now that the new one is filled: until then they are what works offline.
         // A cache another fill is still filling is left alone: that fill keeps it if it succeeds, and the next fill
-        // clears it if it fails.
-        const oldCaches = (await caches.keys())
-            .filter(key => isStaleCache(key, cacheName) && !CACHES_BEING_FILLED.includes(key));
-        if (oldCaches.length > 0) {
-            console.log(`Deleting old caches: ${oldCaches}`);
-            await Promise.all(
-                oldCaches.map(key => caches.delete(key))
-            );
+        // clears it if it fails. Only the active worker clears them: a worker whose successor has activated can't see
+        // which caches the successor's fills are filling, and the successor's next fill clears what it leaves.
+        if (isActiveWorker()) {
+            const oldCaches = (await caches.keys())
+                .filter(key => isStaleCache(key, cacheName) && !CACHES_BEING_FILLED.includes(key));
+            if (oldCaches.length > 0) {
+                console.log(`Deleting old caches: ${oldCaches}`);
+                await Promise.all(
+                    oldCaches.map(key => caches.delete(key))
+                );
+            }
         }
         
         // Notify clients
