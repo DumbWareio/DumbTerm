@@ -208,14 +208,17 @@ async function holdsAssets(cacheName, urls) {
  * active worker clears caches. A worker registered as service-worker.js?v=<version> tells by its script URL. Under one
  * URL for every version (an old page's bare registration) its own ServiceWorker object tells: a worker has one such
  * object per service worker, so self.serviceWorker is the registration's active one only while this worker is. A
- * browser without self.serviceWorker (Firefox) can't tell there, and the worker counts as active, as every worker did.
+ * browser that hands out another object still shows the worker's state, 'activated' only while it is active (a
+ * waiting worker is 'installed', a replaced one 'redundant'). A browser without self.serviceWorker (Firefox) can't
+ * tell there, and the worker counts as active, as every worker did.
  * A fill the activate event starts doesn't ask (see installCache's activating).
  * @returns {boolean} True if this worker is the registration's active worker, or can't tell it isn't
  */
 function isActiveWorker() {
     const active = self.registration.active;
     if (!active || active.scriptURL !== self.location.href) return false;
-    return !self.serviceWorker || self.serviceWorker === active;
+    const own = self.serviceWorker;
+    return !own || own === active || own.state === 'activated';
 }
 
 /**
