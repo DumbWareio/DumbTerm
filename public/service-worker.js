@@ -2,10 +2,49 @@
 // The page registers this worker as service-worker.js?v=<app version>, so read the version from there:
 // a worker the browser restarts after idling would otherwise start at 1.0.0 and cache into a stray cache
 const REGISTERED_VERSION = new URL(self.location.href).searchParams.get('v');
-let CACHE_VERSION = /^\d+\.\d+\.\d+/.test(REGISTERED_VERSION || '') ? REGISTERED_VERSION : "1.0.0"; // Default fallback version
-let CACHE_NAME = `DUMBTERM_CACHE_V${CACHE_VERSION}`; // Default format, will be overridden
-const ASSETS_TO_CACHE = [];
+// A worker registered with a release version keeps it, whatever version config.js or a page's SET_VERSION names:
+// pages show their own version, and the next release's page registers a worker of its own. A worker registered
+// without one (an old page's bare registration, or a page that could not read config.js) takes the version they name.
+// 1.0.0 is the version a worker without one starts at, so it counts as none.
+const HAS_RELEASE_VERSION = /^\d+\.\d+\.\d+/.test(REGISTERED_VERSION || '') && REGISTERED_VERSION !== "1.0.0";
+let CACHE_VERSION = HAS_RELEASE_VERSION ? REGISTERED_VERSION : "1.0.0"; // Default fallback version
 const BASE_PATH = self.registration.scope;
+// Cache Storage is shared by every install on the origin, so each cache name carries the path this install is
+// served under ('/' or '/a/'), and an install deletes only its own caches
+const SCOPE_PATH = new URL(BASE_PATH).pathname;
+let CACHE_NAME = cacheNameFor(CACHE_VERSION);
+// Names of the caches fills are still filling (a name appears once per fill), so no fill deletes another's cache
+const CACHES_BEING_FILLED = [];
+
+/**
+ * Names this install's cache for a version: DUMBTERM_CACHE_<scope path>_V<version>
+ * @param {string} version - App version
+ * @returns {string} Cache name
+ */
+function cacheNameFor(version) {
+    return `DUMBTERM_CACHE_${SCOPE_PATH}_V${version}`;
+}
+
+/**
+ * Whether a cache is one of this install's. The scope path ends in / and a version holds none, so the last _V
+ * splits the name even when the path holds a _V of its own
+ * @param {string} key - Cache name
+ * @returns {boolean} True if the cache belongs to this install
+ */
+function isOwnCache(key) {
+    const match = key.match(/^DUMBTERM_CACHE_(.*)_V[^/]+$/);
+    return !!match && match[1] === SCOPE_PATH;
+}
+
+/**
+ * Whether a cache has a name DumbTerm used before names carried the install's path: DUMBTERM_CACHE_V<version>,
+ * and earlier DUMBTERM_CACHE_<version> and DUMBTERM_PWA_CACHE_V<version>. It can't tell which install made it.
+ * @param {string} key - Cache name
+ * @returns {boolean} True if the cache has an unscoped DumbTerm name
+ */
+function isLegacyCache(key) {
+    return /^DUMBTERM_(PWA_)?CACHE_V?\d/.test(key);
+}
 
 /**
  * Gets app configuration from config.js
@@ -47,7 +86,7 @@ async function initializeVersion() {
         if (currentCacheExists && existingVersion) {
             console.log(`Using existing cache version: ${existingVersion}`);
             CACHE_VERSION = existingVersion;
-            CACHE_NAME = `DUMBTERM_CACHE_V${CACHE_VERSION}`; // Fallback format
+            CACHE_NAME = cacheNameFor(CACHE_VERSION);
             
             // Send a notification to let clients know about this existing version
             setTimeout(() => notifyClients(), 1000);
@@ -60,35 +99,16 @@ async function initializeVersion() {
         if (appConfig) {
             console.log("Got app config:", JSON.stringify(appConfig, null, 2));
             
-            if (appConfig.cacheName) {
-                console.log(`Found cacheName in config.js: ${appConfig.cacheName}`);
-                CACHE_NAME = appConfig.cacheName;
-                
-                // Extract version from cacheName if possible
-                const versionMatch = CACHE_NAME.match(/.*_V(.+)$/);
-                if (versionMatch && versionMatch[1]) {
-                    CACHE_VERSION = versionMatch[1];
-                    console.log(`Extracted version from cacheName: ${CACHE_VERSION}`);
-                } else if (appConfig.version) {
-                    CACHE_VERSION = appConfig.version;
-                    console.log(`Using version from config.js: ${CACHE_VERSION}`);
-                }
-                
-                // If we have an existing version that's different from what we just loaded,
-                // we should notify clients about an available update
-                if (existingVersion && existingVersion !== CACHE_VERSION) {
-                    console.log(`Different version detected: existing=${existingVersion}, new=${CACHE_VERSION}`);
-                    setTimeout(() => notifyClients(), 1000);
-                }
-                
-                return CACHE_VERSION;
-            } else if (appConfig.version) {
+            // Take only the version: a server from before scoped names also sends a cacheName, without the path
+            if (appConfig.version) {
                 console.log(`Found version in config.js: ${appConfig.version}`);
-                CACHE_VERSION = appConfig.version;
-                CACHE_NAME = appConfig.cacheName || `DUMBTERM_CACHE_V${CACHE_VERSION}`; // Fallback format
-                
-                // If we have an existing version that's different from what we just loaded,
-                // we should notify clients about an available update
+                if (!HAS_RELEASE_VERSION) {
+                    CACHE_VERSION = appConfig.version;
+                    CACHE_NAME = cacheNameFor(CACHE_VERSION);
+                }
+
+                // If the existing cache holds another version than the one this worker caches (config.js's, or
+                // the one it was registered with), notify clients about an available update
                 if (existingVersion && existingVersion !== CACHE_VERSION) {
                     console.log(`Different version detected: existing=${existingVersion}, new=${CACHE_VERSION}`);
                     setTimeout(() => notifyClients(), 1000);
@@ -126,10 +146,12 @@ async function checkCacheVersion() {
     const keys = await caches.keys();
     console.log("All cache keys:", keys);
     
-    // Find any existing DumbTerm cache - support both formats: DUMBTERM_PWA_CACHE_V* and DUMBTERM_CACHE_V*
+    // Find this install's cache: the current one, else its newest (keys come in the order the caches were made),
+    // else one named before names carried the install's path, which an upgrade from it migrates. Another install's
+    // caches on this origin are not this one's.
     const existingCache = keys.find(key => key === CACHE_NAME) || 
-                          keys.find(key => key.startsWith('DUMBTERM_CACHE_V')) ||
-                          keys.find(key => key.startsWith('DUMBTERM_PWA_CACHE_V'));
+                          keys.filter(isOwnCache).pop() ||
+                          keys.find(isLegacyCache);
     
     console.log(`Found existing cache: ${existingCache || 'none'}`);
     
@@ -145,23 +167,24 @@ async function checkCacheVersion() {
     // Check if current version cache exists
     const currentCacheExists = keys.includes(CACHE_NAME);
     
-    // Check for old versions - be flexible with the cache naming format
-    const oldCaches = keys.filter(key => 
-        key !== CACHE_NAME && (key.startsWith('DUMBTERM_') && 
-        ((key.includes('_CACHE_') || key.includes('PWA_CACHE')) && key.includes('V'))) 
-    );
-    
-    console.log(
-        `Cache check: existingVersion=${existingVersion}, ` +
-        `currentCacheExists=${currentCacheExists}, hasOldVersions=${oldCaches.length > 0}`
-    );
+    console.log(`Cache check: existingVersion=${existingVersion}, currentCacheExists=${currentCacheExists}`);
     
     return {
         currentCacheExists,
-        oldCaches,
         existingVersion,
         isFirstInstall: !existingCache
     };
+}
+
+/**
+ * Whether a cache is one this install clears: one of its own other than the given one, or one with a name from before
+ * names carried the install's path. Another install's caches on this origin are never cleared.
+ * @param {string} key - Cache name
+ * @param {string} cacheName - The cache to keep
+ * @returns {boolean} True if the cache is to be cleared
+ */
+function isStaleCache(key, cacheName) {
+    return key !== cacheName && (isOwnCache(key) || isLegacyCache(key));
 }
 
 /**
@@ -255,35 +278,48 @@ async function preload() {
 
 /**
  * Installs or updates the service worker cache
- * @param {boolean} isFirstInstall - Whether this is a first-time installation
+ * @param {boolean} isFirstInstall - True for a fill the worker starts itself (activating a version, or the first
+ * install a page's SET_VERSION starts), false for one the user asked for with Update Now. Only a failed fill the
+ * user asked for is reported to the page.
+ * @param {string} [requestId] - The id of the Update Now that asked for this fill. Every tab hears the answer, so it
+ * names the request, and the tab that sent it knows the answer is its own
  * @returns {Promise<void>}
  */
-async function installCache(isFirstInstall = false) {
-    console.log(`${isFirstInstall ? 'First-time installation' : 'Updating'} cache to version ${CACHE_VERSION}`);
-    const cache = await caches.open(CACHE_NAME);
+async function installCache(isFirstInstall = false, requestId) {
+    // In a worker registered without a release version, a page's SET_VERSION can change CACHE_VERSION and CACHE_NAME
+    // while this fill waits on the network, so fill, keep and report the version this fill started with
+    const version = CACHE_VERSION;
+    const cacheName = CACHE_NAME;
+    console.log(`${isFirstInstall ? 'First-time installation' : 'Updating'} cache to version ${version}`);
+    CACHES_BEING_FILLED.push(cacheName);
     
     try {
-        // Clear old caches
-        const { oldCaches } = await checkCacheVersion();
+        // Fetch and cache assets. The manifest comes first so that a failed request leaves no empty cache behind.
+        console.log("Fetching asset manifest...");
+        const response = await fetch(getAssetPath("assets/asset-manifest.json"));
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        
+        // Build the list for this fill only: addAll rejects a list that names an asset twice, so one
+        // kept across fills would fail every fill after the first in this worker's lifetime
+        const assets = await response.json();
+        const assetsToCache = assets.map(asset => getAssetPath(asset));
+        
+        console.log("Caching assets:", assetsToCache);
+        const cache = await caches.open(cacheName);
+        await cache.addAll(assetsToCache);
+        console.log("Assets cached successfully");
+        
+        // Clear old caches only now that the new one is filled: until then they are what works offline.
+        // A cache another fill is still filling is left alone: that fill keeps it if it succeeds, and the next fill
+        // clears it if it fails.
+        const oldCaches = (await caches.keys())
+            .filter(key => isStaleCache(key, cacheName) && !CACHES_BEING_FILLED.includes(key));
         if (oldCaches.length > 0) {
             console.log(`Deleting old caches: ${oldCaches}`);
             await Promise.all(
                 oldCaches.map(key => caches.delete(key))
             );
         }
-
-        // Fetch and cache assets
-        console.log("Fetching asset manifest...");
-        const response = await fetch(getAssetPath("assets/asset-manifest.json"));
-        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-        
-        const assets = await response.json();
-        const processedAssets = assets.map(asset => getAssetPath(asset));
-        ASSETS_TO_CACHE.push(...processedAssets);
-        
-        console.log("Caching assets:", ASSETS_TO_CACHE);
-        await cache.addAll(ASSETS_TO_CACHE);
-        console.log("Assets cached successfully");
         
         // Notify clients
         self.clients.matchAll().then(clients => {
@@ -292,23 +328,24 @@ async function installCache(isFirstInstall = false) {
                     // For first-time installations, just update the version display
                     client.postMessage({
                         type: 'CACHE_VERSION_INFO',
-                        currentVersion: CACHE_VERSION,
-                        cacheName: CACHE_NAME
+                        currentVersion: version,
+                        cacheName
                     });
                 } else {
                     // For updates, notify about completion and update version display
                     client.postMessage({
                         type: 'UPDATE_COMPLETE',
-                        version: CACHE_VERSION,
-                        cacheName: CACHE_NAME,
+                        version,
+                        cacheName,
+                        requestId,
                         success: true
                     });
                     
                     // Also send specific version info message to maintain compatibility
                     client.postMessage({
                         type: 'CACHE_VERSION_INFO',
-                        currentVersion: CACHE_VERSION,
-                        cacheName: CACHE_NAME
+                        currentVersion: version,
+                        cacheName
                     });
                 }
             });
@@ -316,25 +353,31 @@ async function installCache(isFirstInstall = false) {
     } catch (error) {
         console.error("Failed to cache assets:", error);
         
-        // Notify clients of failure
+        // Notify clients of failure, but only when the user asked for the update: nobody is waiting on a fill
+        // the worker started itself, and the previous version's cache is still there to fall back on
         self.clients.matchAll().then(clients => {
             clients.forEach(client => {
-                client.postMessage({
-                    type: 'UPDATE_COMPLETE',
-                    version: CACHE_VERSION,
-                    cacheName: CACHE_NAME,
-                    success: false,
-                    error: error.message
-                });
+                if (!isFirstInstall) {
+                    client.postMessage({
+                        type: 'UPDATE_COMPLETE',
+                        version,
+                        cacheName,
+                        requestId,
+                        success: false,
+                        error: error.message
+                    });
+                }
                 
                 // Still send version info for UI consistency
                 client.postMessage({
                     type: 'CACHE_VERSION_INFO',
-                    currentVersion: CACHE_VERSION,
-                    cacheName: CACHE_NAME
+                    currentVersion: version,
+                    cacheName
                 });
             });
         });
+    } finally {
+        CACHES_BEING_FILLED.splice(CACHES_BEING_FILLED.indexOf(cacheName), 1);
     }
 }
 
@@ -362,17 +405,20 @@ self.addEventListener("activate", event => {
                 await self.clients.claim();
                 console.log("Service worker has claimed clients");
 
-                // Fetches are network-first, so pages already run this version and older caches are only
-                // dead weight; removing them also stops them being reported as the installed version
+                // Fetches are network-first, so pages already run this version: fill its cache now, which also
+                // deletes the older caches once it succeeds. A successful fill leaves no older cache of this install
+                // (unless another fill was running), so one still there means this version's last fill failed or never
+                // ran and is worth another try.
                 if (CACHE_VERSION !== "1.0.0") {
-                    const staleCaches = (await caches.keys())
-                        .filter(key => key.startsWith('DUMBTERM_') && key !== CACHE_NAME);
-                    await Promise.all(staleCaches.map(key => caches.delete(key)));
-                    if (staleCaches.length > 0) {
-                        console.log(`Deleted old caches: ${staleCaches}`);
+                    const keys = await caches.keys();
+                    if (!keys.includes(CACHE_NAME) || keys.some(key => isStaleCache(key, CACHE_NAME))) {
+                        await installCache(true);
+                    } else {
+                        await notifyClients();
                     }
+                    return;
                 }
-                
+
                 // Check cache status
                 const { isFirstInstall, existingVersion } = await checkCacheVersion();
                 
@@ -392,7 +438,7 @@ self.addEventListener("activate", event => {
                             const appConfig = await getAppConfig();
                             if (appConfig && appConfig.version) {
                                 CACHE_VERSION = appConfig.version;
-                                CACHE_NAME = appConfig.cacheName || `DUMBTERM_CACHE_V${CACHE_VERSION}`;
+                                CACHE_NAME = cacheNameFor(CACHE_VERSION);
                                 console.log(`Updated version from config: ${CACHE_VERSION}`);
                             }
                         } catch (error) {
@@ -464,7 +510,7 @@ self.addEventListener('message', async event => {
     
     switch (data.type) {
         case 'SET_VERSION':
-            await handleSetVersion(data.version, data.cacheName);
+            await handleSetVersion(data.version);
             break;
             
         case 'GET_VERSION':
@@ -472,7 +518,7 @@ self.addEventListener('message', async event => {
             break;
             
         case 'PERFORM_UPDATE':
-            await handlePerformUpdate();
+            await handlePerformUpdate(data.requestId);
             break;
             
         case 'CHECK_FOR_UPDATES':
@@ -484,38 +530,24 @@ self.addEventListener('message', async event => {
 });
 
 /**
- * Handles SET_VERSION messages from the client
- * @param {string} version - Version sent from client
- * @param {string} cacheName - Optional cache name from client
+ * Handles SET_VERSION messages from the client. A worker registered with a release version keeps it, so it takes
+ * the version only when registered without one (see HAS_RELEASE_VERSION)
+ * @param {string} version - Version sent from client. A cacheName beside it (pages before scoped names sent one) is
+ * ignored: this install's cache is named after its path
  */
-async function handleSetVersion(version, cacheName) {
+async function handleSetVersion(version) {
     if (!version) return;
     
-    console.log(`Received version from client: ${version}${cacheName ? `, cacheName: ${cacheName}` : ''}`);
+    console.log(`Received version from client: ${version}`);
     
     // Check current cache status
     const { existingVersion, isFirstInstall } = await checkCacheVersion();
     
-    // Only update if non-default version and different from current
-    if (version !== CACHE_VERSION) {
+    // Only update if different from current, and only in a worker registered without a release version
+    if (version !== CACHE_VERSION && !HAS_RELEASE_VERSION) {
         const previousVersion = CACHE_VERSION;
         CACHE_VERSION = version;
-        
-        // Use cacheName if provided directly in the message
-        if (cacheName) {
-            CACHE_NAME = cacheName;
-            console.log(`Using cacheName from message: ${CACHE_NAME}`);
-        } else {
-            // Try to get cache name from config as fallback
-            try {
-                const appConfig = await getAppConfig();
-                CACHE_NAME = appConfig?.cacheName || `DUMBTERM_CACHE_V${CACHE_VERSION}`;
-            } catch (error) {
-                // Fall back to constructed cache name on error
-                CACHE_NAME = `DUMBTERM_CACHE_V${CACHE_VERSION}`;
-                console.log(`Error getting config, using constructed cache name: ${CACHE_NAME}`);
-            }
-        }
+        CACHE_NAME = cacheNameFor(CACHE_VERSION);
         
         console.log(`Updated cache version from ${previousVersion} to ${CACHE_VERSION}`);
         
@@ -534,7 +566,7 @@ async function handleSetVersion(version, cacheName) {
             await notifyClients();
         }
     } else {
-        console.log(`No version change needed, current: ${CACHE_VERSION}`);
+        console.log(`Keeping version ${CACHE_VERSION}`);
         await notifyClients();
     }
 }
@@ -552,26 +584,10 @@ async function handleGetVersion(event) {
     if (CACHE_VERSION === "1.0.0") {
         try {
             const appConfig = await getAppConfig();
-            if (appConfig) {
-                if (appConfig.cacheName) {
-                    console.log(`Using cacheName from config: ${appConfig.cacheName}`);
-                    CACHE_NAME = appConfig.cacheName;
-                    
-                    // Try to extract version from cacheName
-                    const versionMatch = CACHE_NAME.match(/.*_V(.+)$/) || CACHE_NAME.match(/DUMBTERM_CACHE_(.+)$/);
-                    if (versionMatch && versionMatch[1]) {
-                        CACHE_VERSION = versionMatch[1];
-                        console.log(`Extracted version from cacheName: ${CACHE_VERSION}`);
-                    }
-                }
-                
-                if (appConfig.version && (CACHE_VERSION === "1.0.0" || !appConfig.cacheName)) {
-                    CACHE_VERSION = appConfig.version;
-                    if (!appConfig.cacheName) {
-                        CACHE_NAME = `DUMBTERM_CACHE_V${CACHE_VERSION}`;
-                    }
-                    console.log(`Using version from config: ${CACHE_VERSION}`);
-                }
+            if (appConfig && appConfig.version) {
+                CACHE_VERSION = appConfig.version;
+                CACHE_NAME = cacheNameFor(CACHE_VERSION);
+                console.log(`Using version from config: ${CACHE_VERSION}`);
             }
         } catch (error) {
             console.error("Error getting config version:", error);
@@ -625,8 +641,9 @@ async function handleGetVersion(event) {
 
 /**
  * Handles PERFORM_UPDATE messages from the client
+ * @param {string} [requestId] - The page's id for this Update Now, named in the answer
  */
-async function handlePerformUpdate() {
+async function handlePerformUpdate(requestId) {
     console.log("User confirmed update, installing cache");
-    await installCache(false);
+    await installCache(false, requestId);
 }

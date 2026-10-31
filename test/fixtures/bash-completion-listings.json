@@ -1,0 +1,190 @@
+{
+    "description": "What bash 5.2 wrote to the terminal at each step, captured from DumbTerm's Docker image in a throwaway container (issue #44): with ENABLE_STARSHIP and the shipped starship.toml, or with the default prompt under the hostname box. /tmp/d holds alpha, beta, delta and gamma; /tmp/e eight directories with long names",
+    "starshipCtrlE": {
+        "columns": 80,
+        "steps": [
+            {
+                "keys": "(bash starts)",
+                "output": "\u001b[?2004h\r\n\u001b[38;2;163;174;210m░▒▓\u001b[48;2;163;174;210;38;2;9;12;12m  \u001b[48;2;118;159;240;38;2;163;174;210m\u001b[38;2;227;229;229m /app \u001b[48;2;57;66;96;38;2;118;159;240m\u001b[48;2;33;39;54;38;2;57;66;96m\u001b[38;2;118;159;240m  v24.22.1 \u001b[48;2;29;34;48;38;2;33;39;54m\u001b[38;2;160;169;203m  03:19 AM \u001b[0m\u001b[38;2;29;34;48m \u001b[0m\r\n\u001b[1;32m❯\u001b[0m "
+            },
+            {
+                "keys": "echo out, Enter",
+                "output": "echo out\r\n\u001b[?2004l\rout\r\n\u001b[?2004h\r\n\u001b[38;2;163;174;210m░▒▓\u001b[48;2;163;174;210;38;2;9;12;12m  \u001b[48;2;118;159;240;38;2;163;174;210m\u001b[38;2;227;229;229m /app \u001b[48;2;57;66;96;38;2;118;159;240m\u001b[48;2;33;39;54;38;2;57;66;96m\u001b[38;2;118;159;240m  v24.22.1 \u001b[48;2;29;34;48;38;2;33;39;54m\u001b[38;2;160;169;203m  03:19 AM \u001b[0m\u001b[38;2;29;34;48m \u001b[0m\r\n\u001b[1;32m❯\u001b[0m "
+            },
+            {
+                "keys": "ls /tmp/d/, Tab, Tab",
+                "output": "ls /tmp/d/\u0007\r\nalpha/ beta/  delta/ gamma/ \r\n\r\n\u001b[38;2;163;174;210m░▒▓\u001b[48;2;163;174;210;38;2;9;12;12m  \u001b[48;2;118;159;240;38;2;163;174;210m\u001b[38;2;227;229;229m /app \u001b[48;2;57;66;96;38;2;118;159;240m\u001b[48;2;33;39;54;38;2;57;66;96m\u001b[38;2;118;159;240m  v24.22.1 \u001b[48;2;29;34;48;38;2;33;39;54m\u001b[38;2;160;169;203m  03:19 AM \u001b[0m\u001b[38;2;29;34;48m \u001b[0m\r\n\u001b[1;32m❯\u001b[0m ls /tmp/d/"
+            },
+            {
+                "keys": "a × 94",
+                "output": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            {
+                "keys": "Ctrl-A",
+                "output": "\u001b[A\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b"
+            },
+            {
+                "keys": "Ctrl-E",
+                "output": "\r\n\r\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C"
+            }
+        ]
+    },
+    "starshipArrows": {
+        "columns": 80,
+        "steps": [
+            {
+                "keys": "(bash starts)",
+                "output": "\u001b[?2004h\r\n\u001b[38;2;163;174;210m░▒▓\u001b[48;2;163;174;210;38;2;9;12;12m  \u001b[48;2;118;159;240;38;2;163;174;210m\u001b[38;2;227;229;229m /app \u001b[48;2;57;66;96;38;2;118;159;240m\u001b[48;2;33;39;54;38;2;57;66;96m\u001b[38;2;118;159;240m  v24.22.1 \u001b[48;2;29;34;48;38;2;33;39;54m\u001b[38;2;160;169;203m  03:20 AM \u001b[0m\u001b[38;2;29;34;48m \u001b[0m\r\n\u001b[1;32m❯\u001b[0m "
+            },
+            {
+                "keys": "echo out, Enter",
+                "output": "echo out\r\n\u001b[?2004l\rout\r\n\u001b[?2004h\r\n\u001b[38;2;163;174;210m░▒▓\u001b[48;2;163;174;210;38;2;9;12;12m  \u001b[48;2;118;159;240;38;2;163;174;210m\u001b[38;2;227;229;229m /app \u001b[48;2;57;66;96;38;2;118;159;240m\u001b[48;2;33;39;54;38;2;57;66;96m\u001b[38;2;118;159;240m  v24.22.1 \u001b[48;2;29;34;48;38;2;33;39;54m\u001b[38;2;160;169;203m  03:20 AM \u001b[0m\u001b[38;2;29;34;48m \u001b[0m\r\n\u001b[1;32m❯\u001b[0m "
+            },
+            {
+                "keys": "ls /tmp/d/, Tab, Tab",
+                "output": "ls /tmp/d/\u0007\r\nalpha/ beta/  delta/ gamma/ \r\n\r\n\u001b[38;2;163;174;210m░▒▓\u001b[48;2;163;174;210;38;2;9;12;12m  \u001b[48;2;118;159;240;38;2;163;174;210m\u001b[38;2;227;229;229m /app \u001b[48;2;57;66;96;38;2;118;159;240m\u001b[48;2;33;39;54;38;2;57;66;96m\u001b[38;2;118;159;240m  v24.22.1 \u001b[48;2;29;34;48;38;2;33;39;54m\u001b[38;2;160;169;203m  03:20 AM \u001b[0m\u001b[38;2;29;34;48m \u001b[0m\r\n\u001b[1;32m❯\u001b[0m ls /tmp/d/"
+            },
+            {
+                "keys": "a × 94",
+                "output": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            {
+                "keys": "← × 30",
+                "output": "\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\r\u001b[A\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\b\b\b"
+            },
+            {
+                "keys": "→ × 30",
+                "output": "\u001b[C\u001b[C\u001b[C\r\n\r\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C"
+            }
+        ]
+    },
+    "starshipFourRows": {
+        "columns": 80,
+        "steps": [
+            {
+                "keys": "(bash starts)",
+                "output": "\u001b[?2004h\r\n\u001b[38;2;163;174;210m░▒▓\u001b[48;2;163;174;210;38;2;9;12;12m  \u001b[48;2;118;159;240;38;2;163;174;210m\u001b[38;2;227;229;229m /app \u001b[48;2;57;66;96;38;2;118;159;240m\u001b[48;2;33;39;54;38;2;57;66;96m\u001b[38;2;118;159;240m  v24.22.1 \u001b[48;2;29;34;48;38;2;33;39;54m\u001b[38;2;160;169;203m  03:17 AM \u001b[0m\u001b[38;2;29;34;48m \u001b[0m\r\n\u001b[1;32m❯\u001b[0m "
+            },
+            {
+                "keys": "echo out, Enter",
+                "output": "echo out\r\n\u001b[?2004l\rout\r\n\u001b[?2004h\r\n\u001b[38;2;163;174;210m░▒▓\u001b[48;2;163;174;210;38;2;9;12;12m  \u001b[48;2;118;159;240;38;2;163;174;210m\u001b[38;2;227;229;229m /app \u001b[48;2;57;66;96;38;2;118;159;240m\u001b[48;2;33;39;54;38;2;57;66;96m\u001b[38;2;118;159;240m  v24.22.1 \u001b[48;2;29;34;48;38;2;33;39;54m\u001b[38;2;160;169;203m  03:17 AM \u001b[0m\u001b[38;2;29;34;48m \u001b[0m\r\n\u001b[1;32m❯\u001b[0m "
+            },
+            {
+                "keys": "ls /tmp/d/, Tab, Tab",
+                "output": "ls /tmp/d/\u0007\r\nalpha/ beta/  delta/ gamma/ \r\n\r\n\u001b[38;2;163;174;210m░▒▓\u001b[48;2;163;174;210;38;2;9;12;12m  \u001b[48;2;118;159;240;38;2;163;174;210m\u001b[38;2;227;229;229m /app \u001b[48;2;57;66;96;38;2;118;159;240m\u001b[48;2;33;39;54;38;2;57;66;96m\u001b[38;2;118;159;240m  v24.22.1 \u001b[48;2;29;34;48;38;2;33;39;54m\u001b[38;2;160;169;203m  03:17 AM \u001b[0m\u001b[38;2;29;34;48m \u001b[0m\r\n\u001b[1;32m❯\u001b[0m ls /tmp/d/"
+            },
+            {
+                "keys": "a × 260",
+                "output": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+        ]
+    },
+    "starshipNarrow": {
+        "columns": 40,
+        "steps": [
+            {
+                "keys": "(bash starts)",
+                "output": "\u001b[?2004h\r\n\u001b[38;2;163;174;210m░▒▓\u001b[48;2;163;174;210;38;2;9;12;12m  \u001b[48;2;118;159;240;38;2;163;174;210m\u001b[38;2;227;229;229m /app \u001b[48;2;57;66;96;38;2;118;159;240m\u001b[48;2;33;39;54;38;2;57;66;96m\u001b[38;2;118;159;240m  v24.22.1 \u001b[48;2;29;34;48;38;2;33;39;54m\u001b[38;2;160;169;203m  03:18 AM \u001b[0m\u001b[38;2;29;34;48m \u001b[0m\r\n\u001b[1;32m❯\u001b[0m "
+            },
+            {
+                "keys": "echo out, Enter",
+                "output": "echo out\r\n\u001b[?2004l\rout\r\n\u001b[?2004h\r\n\u001b[38;2;163;174;210m░▒▓\u001b[48;2;163;174;210;38;2;9;12;12m  \u001b[48;2;118;159;240;38;2;163;174;210m\u001b[38;2;227;229;229m /app \u001b[48;2;57;66;96;38;2;118;159;240m\u001b[48;2;33;39;54;38;2;57;66;96m\u001b[38;2;118;159;240m  v24.22.1 \u001b[48;2;29;34;48;38;2;33;39;54m\u001b[38;2;160;169;203m  03:18 AM \u001b[0m\u001b[38;2;29;34;48m \u001b[0m\r\n\u001b[1;32m❯\u001b[0m "
+            },
+            {
+                "keys": "ls /tmp/d/, Tab, Tab",
+                "output": "ls /tmp/d/\u0007\r\nalpha/ beta/  delta/ gamma/ \r\n\r\n\u001b[38;2;163;174;210m░▒▓\u001b[48;2;163;174;210;38;2;9;12;12m  \u001b[48;2;118;159;240;38;2;163;174;210m\u001b[38;2;227;229;229m /app \u001b[48;2;57;66;96;38;2;118;159;240m\u001b[48;2;33;39;54;38;2;57;66;96m\u001b[38;2;118;159;240m  v24.22.1 \u001b[48;2;29;34;48;38;2;33;39;54m\u001b[38;2;160;169;203m  03:18 AM \u001b[0m\u001b[38;2;29;34;48m \u001b[0m\r\n\u001b[1;32m❯\u001b[0m ls /tmp/d/"
+            },
+            {
+                "keys": "a × 94",
+                "output": "aaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            {
+                "keys": "Ctrl-A",
+                "output": "\u001b[A\u001b[A\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b"
+            },
+            {
+                "keys": "Ctrl-E, then Backspace × 60",
+                "output": "\r\n\r\n\r\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\r\u001b[K\u001b[A\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[K\r\n\r\u001b[K\u001b[A\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K\b\u001b[K"
+            }
+        ]
+    },
+    "starshipWrappedCtrlE": {
+        "columns": 80,
+        "steps": [
+            {
+                "keys": "(bash starts)",
+                "output": "\u001b[?2004h\r\n\u001b[38;2;163;174;210m░▒▓\u001b[48;2;163;174;210;38;2;9;12;12m  \u001b[48;2;118;159;240;38;2;163;174;210m\u001b[38;2;227;229;229m /app \u001b[48;2;57;66;96;38;2;118;159;240m\u001b[48;2;33;39;54;38;2;57;66;96m\u001b[38;2;118;159;240m  v24.22.1 \u001b[48;2;29;34;48;38;2;33;39;54m\u001b[38;2;160;169;203m  10:02 AM \u001b[0m\u001b[38;2;29;34;48m \u001b[0m\r\n\u001b[1;32m❯\u001b[0m "
+            },
+            {
+                "keys": "echo out, Enter",
+                "output": "echo out\r\n\u001b[?2004l\rout\r\n\u001b[?2004h\r\n\u001b[38;2;163;174;210m░▒▓\u001b[48;2;163;174;210;38;2;9;12;12m  \u001b[48;2;118;159;240;38;2;163;174;210m\u001b[38;2;227;229;229m /app \u001b[48;2;57;66;96;38;2;118;159;240m\u001b[48;2;33;39;54;38;2;57;66;96m\u001b[38;2;118;159;240m  v24.22.1 \u001b[48;2;29;34;48;38;2;33;39;54m\u001b[38;2;160;169;203m  10:02 AM \u001b[0m\u001b[38;2;29;34;48m \u001b[0m\r\n\u001b[1;32m❯\u001b[0m "
+            },
+            {
+                "keys": "echo, a × 94, /tmp/d/, Tab, Tab",
+                "output": "echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa /tmp/d/\u0007\r\nalpha/ beta/  delta/ gamma/ \r\n\r\n\u001b[38;2;163;174;210m░▒▓\u001b[48;2;163;174;210;38;2;9;12;12m  \u001b[48;2;118;159;240;38;2;163;174;210m\u001b[38;2;227;229;229m /app \u001b[48;2;57;66;96;38;2;118;159;240m\u001b[48;2;33;39;54;38;2;57;66;96m\u001b[38;2;118;159;240m  v24.22.1 \u001b[48;2;29;34;48;38;2;33;39;54m\u001b[38;2;160;169;203m  10:02 AM \u001b[0m\u001b[38;2;29;34;48m \u001b[0m\r\n\u001b[1;32m❯\u001b[0m echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa /tmp/d/"
+            },
+            {
+                "keys": "x",
+                "output": "x"
+            },
+            {
+                "keys": "Ctrl-A",
+                "output": "\u001b[A\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b"
+            },
+            {
+                "keys": "Ctrl-E",
+                "output": "\r\n\r\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C"
+            }
+        ]
+    },
+    "plainCtrlE": {
+        "columns": 80,
+        "steps": [
+            {
+                "keys": "(bash starts)",
+                "output": "\u001b[?2004hroot@box:/app# "
+            },
+            {
+                "keys": "echo out, Enter",
+                "output": "echo out\r\n\u001b[?2004l\rout\r\n\u001b[?2004hroot@box:/app# "
+            },
+            {
+                "keys": "ls /tmp/e/, Tab, Tab",
+                "output": "ls /tmp/e/\u0007\r\nalpha-a-rather-long-directory-name/ eta-a-rather-long-directory-name/\r\nbeta-a-rather-long-directory-name/  gamma-a-rather-long-directory-name/\r\ndelta-a-rather-long-directory-name/ theta-a-rather-long-directory-name/\r\neps-a-rather-long-directory-name/   zeta-a-rather-long-directory-name/\r\nroot@box:/app# ls /tmp/e/"
+            },
+            {
+                "keys": "a × 80",
+                "output": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            {
+                "keys": "Ctrl-A",
+                "output": "\u001b[A\b\b\b\b\b\b\b\b\b\b"
+            },
+            {
+                "keys": "Ctrl-E",
+                "output": "\r\n\r\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C\u001b[C"
+            }
+        ]
+    },
+    "plainSixRows": {
+        "columns": 80,
+        "steps": [
+            {
+                "keys": "(bash starts)",
+                "output": "\u001b[?2004hroot@box:/app# "
+            },
+            {
+                "keys": "echo out, Enter",
+                "output": "echo out\r\n\u001b[?2004l\rout\r\n\u001b[?2004hroot@box:/app# "
+            },
+            {
+                "keys": "ls /tmp/d/, Tab, Tab",
+                "output": "ls /tmp/d/\u0007\r\nalpha/ beta/  delta/ gamma/ \r\nroot@box:/app# ls /tmp/d/"
+            },
+            {
+                "keys": "a × 390",
+                "output": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \raaaaaaaaaaaaaaa"
+            }
+        ]
+    }
+}

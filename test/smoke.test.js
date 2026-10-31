@@ -93,7 +93,7 @@ async function startServer(extraEnv = () => ({}), nodeArgs = []) {
 // Open a terminal WebSocket and collect everything the server sends until it closes.
 function openTerminal(server, headers) {
     const ws = new WebSocket(`ws://localhost:${server.port}/`, { headers });
-    const state = { output: '', closeCode: null, rejectedStatus: null };
+    const state = { output: '', closeCode: null, closeReason: null, rejectedStatus: null };
     ws.on('message', (raw) => {
         const message = JSON.parse(raw.toString());
         if (message.type === 'output') state.output += message.data;
@@ -103,8 +103,9 @@ function openTerminal(server, headers) {
         ws.terminate();
     });
     ws.on('error', () => {});
-    const closed = new Promise((resolve) => ws.on('close', (code) => {
+    const closed = new Promise((resolve) => ws.on('close', (code, reason) => {
         state.closeCode = code;
+        state.closeReason = reason.toString();
         resolve(code);
     }));
     return { ws, state, closed };
@@ -192,6 +193,23 @@ describe('DumbTerm server', () => {
     before(async () => { server = await startServer(); });
     after(async () => { await server.stop(); });
 
+    // An open page asks for the server's version this way: the service worker passes a HEAD request to the network
+    // without caching it, and a signed-out page can ask too
+    test('answers a HEAD of config.js with the version it runs', async () => {
+        const res = await fetch(`${server.baseUrl}/config.js`, { method: 'HEAD' });
+        assert.equal(res.status, 200);
+        assert.equal(res.headers.get('x-dumbterm-version'), require('../package.json').version);
+    });
+
+    // Cache Storage is shared by every install on the origin, and only the service worker knows the path it was
+    // registered under, so it names its caches itself
+    test('serves config.js without a cache name', async () => {
+        const res = await fetch(`${server.baseUrl}/config.js`, { headers: { Cookie: PIN_COOKIE } });
+        const appConfig = JSON.parse((await res.text()).match(/window\.appConfig = ({.*});/)[1]);
+        assert.equal(appConfig.version, require('../package.json').version);
+        assert.equal('cacheName' in appConfig, false);
+    });
+
     test('serves the login page when a PIN is configured', async () => {
         const res = await fetch(`${server.baseUrl}/login`);
         assert.equal(res.status, 200);
@@ -230,6 +248,26 @@ describe('DumbTerm server', () => {
         terminal.ws.send(JSON.stringify({ type: 'input', data: 'echo smoke-$((6*7))\r' }));
         await waitFor(() => terminal.state.output.includes('smoke-42'), 5000,
             () => `no shell output, got: ${JSON.stringify(terminal.state.output)}`);
+        terminal.ws.close();
+        await terminal.closed;
+    });
+
+    // xterm sends mouse reports in its default encoding as binary data, a character per byte (#45). The server
+    // writes them to the pty as those bytes, where a string would go as UTF-8 (0x85 as c2 85), and ignores data
+    // that is not a string
+    test('writes binary data to the shell as its bytes', async () => {
+        const terminal = openTerminal(server, { Cookie: PIN_COOKIE, Origin: server.baseUrl });
+        await new Promise((resolve) => terminal.ws.once('open', resolve));
+        // A raw terminal hands the shell the bytes as they come; RE''ADY appears as READY only once the shell ran it
+        terminal.ws.send(JSON.stringify({ type: 'input',
+            data: "stty raw -echo; echo RE''ADY; head -c 6 | od -An -tx1; stty sane\r" }));
+        await waitFor(() => terminal.state.output.includes('READY'), 5000,
+            () => `the shell did not get ready, got: ${JSON.stringify(terminal.state.output)}`);
+        terminal.ws.send(JSON.stringify({ type: 'binary', data: [0x41, 0x42] }));
+        terminal.ws.send(JSON.stringify({ type: 'binary', data: 66 }));
+        terminal.ws.send(JSON.stringify({ type: 'binary', data: '\x1b[M \x85\xa0' }));
+        await waitFor(() => /1b\s+5b\s+4d\s+20\s+85\s+a0\s/.test(terminal.state.output), 5000,
+            () => `the shell did not read the bytes, got: ${JSON.stringify(terminal.state.output)}`);
         terminal.ws.close();
         await terminal.closed;
     });
@@ -317,6 +355,12 @@ describe('DumbTerm server under a BASE_URL sub-path', () => {
         ]);
     });
 
+    test('answers a HEAD of config.js under the sub-path with the version it runs', async () => {
+        const res = await fetch(`${server.baseUrl}/dumbterm/config.js`, { method: 'HEAD' });
+        assert.equal(res.status, 200);
+        assert.equal(res.headers.get('x-dumbterm-version'), require('../package.json').version);
+    });
+
     test('redirects the sub-path without a trailing slash, so relative asset URLs resolve', async () => {
         // Served at /dumbterm, "styles.css" would resolve to /styles.css instead of /dumbterm/styles.css
         const res = await fetch(`${server.baseUrl}/dumbterm?tab=1`, { headers: { Cookie: PIN_COOKIE }, redirect: 'manual' });
@@ -371,10 +415,123 @@ describe('DumbTerm server when the pty cannot be spawned', () => {
     test('closes the terminal WebSocket with 1011 and keeps running', async () => {
         const terminal = openTerminal(server, { Cookie: PIN_COOKIE, Origin: server.baseUrl });
         assert.equal(await closeCodeWithin(terminal), 1011);
+        assert.equal(terminal.state.closeReason, 'Failed to start terminal');
         await new Promise((resolve) => setTimeout(resolve, 300));
         assert.ok(server.isRunning(), `server crashed:\n${server.output()}`);
         const res = await fetch(`${server.baseUrl}/login`);
         assert.equal(res.status, 200);
+    });
+});
+
+// DEMO_MODE runs a stand-in for the shell that takes typed text only (#45)
+describe('DumbTerm server in demo mode', () => {
+    let server;
+
+    before(async () => { server = await startServer(() => ({ DEMO_MODE: 'true' })); });
+    after(async () => { await server.stop(); });
+
+    test('leaves binary data out of what the demo shell is typed', async () => {
+        const terminal = openTerminal(server, { Cookie: PIN_COOKIE, Origin: server.baseUrl });
+        await new Promise((resolve) => terminal.ws.once('open', resolve));
+        terminal.ws.send(JSON.stringify({ type: 'binary', data: '\x1b[M \x85\xa0' }));
+        terminal.ws.send(JSON.stringify({ type: 'input', data: 'pwd' }));
+        terminal.ws.send(JSON.stringify({ type: 'input', data: '\r' }));
+        await waitFor(() => terminal.state.output.includes('$ pwd\r\n'), 5000,
+            () => `the demo shell did not run pwd, got: ${JSON.stringify(terminal.state.output)}`);
+        await waitFor(() => terminal.state.output.endsWith('$ '), 5000,
+            () => `the demo shell did not answer, got: ${JSON.stringify(terminal.state.output)}`);
+        assert.match(terminal.state.output, /\$ pwd\r\n\/home\/demo\r\n/);
+        assert.ok(server.isRunning(), `server crashed:\n${server.output()}`);
+        terminal.ws.close();
+        await terminal.closed;
+    });
+});
+
+// A shell that fails to start (#46) mostly does not make spawn() throw: node-pty starts it, prints why it could not
+// run it (on Linux; on macOS it prints nothing), and the shell exits with code 1. On macOS spawn() may throw instead,
+// and the close says 'Failed to start terminal'; Linux (CI and the Docker image) runs the exit path
+for (const [what, env, nodePtyLine] of [
+    ['SHELL does not exist', { SHELL: '/nonexistent' }, 'execvp(3) failed.: No such file or directory'],
+    ['HOME does not exist', { HOME: '/nonexistent' }, 'chdir(2) failed.: No such file or directory'],
+]) {
+    describe(`DumbTerm server when the ${what}`, () => {
+        let server;
+
+        before(async () => { server = await startServer(() => env); });
+        after(async () => { await server.stop(); });
+
+        test('closes the terminal WebSocket with 1011, saying why, and keeps running', async () => {
+            const terminal = openTerminal(server, { Cookie: PIN_COOKIE, Origin: server.baseUrl });
+            assert.equal(await closeCodeWithin(terminal), 1011);
+            if (process.platform === 'linux') {
+                assert.ok(terminal.state.output.includes(nodePtyLine),
+                    `no "${nodePtyLine}" before the close, got: ${JSON.stringify(terminal.state.output)}`);
+                assert.equal(terminal.state.closeReason, 'Shell exited with code 1');
+            } else {
+                assert.ok(['Shell exited with code 1', 'Failed to start terminal'].includes(terminal.state.closeReason),
+                    `unexpected reason ${JSON.stringify(terminal.state.closeReason)}`);
+            }
+            await new Promise((resolve) => setTimeout(resolve, 300));
+            assert.ok(server.isRunning(), `server crashed:\n${server.output()}`);
+        });
+    });
+}
+
+// Any shell that ends within a second of its spawn without exiting cleanly never started: one that fails late in
+// that second, and one killed by a signal (which node-pty reports as code 0 and the signal)
+for (const [what, fixture, reason] of [
+    ['fails 0.6 s after it starts', 'slow-failing-shell.sh', 'Shell exited with code 2'],
+    ['is killed by a signal as it starts', 'self-killing-shell.sh', 'Shell was killed by signal 9'],
+]) {
+    describe(`DumbTerm server when the shell ${what}`, () => {
+        let server;
+
+        before(async () => { server = await startServer(() => ({ SHELL: path.join(__dirname, 'fixtures', fixture) })); });
+        after(async () => { await server.stop(); });
+
+        test('closes the terminal WebSocket with 1011, saying why', async () => {
+            const terminal = openTerminal(server, { Cookie: PIN_COOKIE, Origin: server.baseUrl });
+            assert.equal(await closeCodeWithin(terminal), 1011);
+            assert.equal(terminal.state.closeReason, reason);
+        });
+    });
+}
+
+// A shell the user ends closes as it always has, without a status (1005), whatever its exit code once it has been
+// up a while (#46)
+describe('DumbTerm server when the shell exits', () => {
+    let server;
+
+    before(async () => { server = await startServer(); });
+    after(async () => { await server.stop(); });
+
+    async function shellEndedWith(command, upForMs) {
+        const terminal = openTerminal(server, { Cookie: PIN_COOKIE, Origin: server.baseUrl });
+        await new Promise((resolve) => terminal.ws.once('open', resolve));
+        await new Promise((resolve) => setTimeout(resolve, upForMs));
+        terminal.ws.send(JSON.stringify({ type: 'input', data: `${command}\r` }));
+        return closeCodeWithin(terminal);
+    }
+
+    test('closes without a status on exit', async () => {
+        assert.equal(await shellEndedWith('exit', 0), 1005);
+    });
+
+    test('closes without a status on a non-zero exit after the shell has been up a while', async () => {
+        assert.equal(await shellEndedWith('exit 3', 1500), 1005);
+    });
+
+    test('closes without a status when the shell is killed by a signal after it has been up a while', async () => {
+        assert.equal(await shellEndedWith('kill -9 $$', 1500), 1005);
+    });
+
+    // The rule is any non-zero code within a second of the spawn, not only node-pty's 1
+    test('closes with 1011 and the exit code on a non-zero exit as the shell starts', async () => {
+        const terminal = openTerminal(server, { Cookie: PIN_COOKIE, Origin: server.baseUrl });
+        await new Promise((resolve) => terminal.ws.once('open', resolve));
+        terminal.ws.send(JSON.stringify({ type: 'input', data: 'exit 3\r' }));
+        assert.equal(await closeCodeWithin(terminal), 1011);
+        assert.equal(terminal.state.closeReason, 'Shell exited with code 3');
     });
 });
 

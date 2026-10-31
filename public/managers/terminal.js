@@ -6,14 +6,31 @@ const IS_MAC = /mac/i.test(navigator.userAgentData?.platform || navigator.platfo
 // marker for the buffer's first row
 const promptMarkers = new WeakMap();
 // The furthest the cursor gets below that row at a prompt: the tallest prompt plus a little typed input.
-// Further down, the row is an app's that left bracketed paste on and kept printing (Claude Code)
+// Further down, the row is an app's that left bracketed paste on and kept printing (Claude Code), unless a long
+// command typed at the prompt runs on that far (see typedOnPromptRow) or the prompt was redrawn below (see
+// redrawnPromptRow)
 const PROMPT_MAX_ROWS_BELOW_MARK = 4;
 // readline redraws its whole prompt below a completion listing without turning bracketed paste on again, so
 // the cursor ends up further below the marked row than that. The redrawn prompt repeats the marked one row for
 // row: look for it, from its first line (after a blank one, Starship's) down to the command, starting in the
 // rows a prompt reaches above, and on, the cursor's row. The command is the cursor's whole line, wrapped onto
 // as many rows as it takes (one that starts above those rows is no command), and may have been typed on (or
-// erased back) since the listing, so there one line need only start like the other
+// erased back) since the listing, so there one line need only start like the other.
+// A prompt that starts with a blank row, like Starship's, is also looked for higher: redrawn under a blank row, with
+// the rows above its command (Starship's top line) repeating the marked one's, its command may start as high as it
+// is long and, where it was typed on past the marked one's end, run on from a row filled to its last column into
+// one not marked as wrapped: readline moves the cursor down a wrapped command with a newline, which unmarks the row
+// it moves to. Without the blank rows an app's rows would pass for a prompt (its title redrawn above an input line
+// that fills its row), so known limits: a prompt with no blank first row (a plain one) redrawn with a command
+// typed past four rows after the listing, or after the cursor moved down across its command's wrap (Ctrl-E, End,
+// →), stays in the save, and so does any prompt where that wrap leaves the last column empty or blank (a wide
+// character that did not fit, a space) or the marked command filled its row. And the other way: an app that draws
+// its first lines again in the rows a prompt reaches above, and on, the cursor's row, the cursor's line and the one
+// it repeats one starting like the other, reads as a redrawn prompt, so its output from its first line on is left
+// out; and so does one that starts with one blank row and later draws it, its title (up to three rows) and an input
+// line again, with the cursor on that line, or below it where the input line it first drew ended short of its last
+// column and the redrawn one and each line after it above the cursor's end at theirs, its output from the first
+// blank row on
 function redrawnPromptRow(buffer, markedRow, cursorRow) {
     const text = (row) => buffer.getLine(row)?.translateToString(true) ?? '';
     const line = (row) => {
@@ -36,7 +53,82 @@ function redrawnPromptRow(buffer, markedRow, cursorRow) {
         }
         if (same) return markedRow;
     }
+    // Whether a row's last cell holds text, or the right half of a wide character (which has none of its own)
+    const filled = (row) => {
+        const cells = buffer.getLine(row);
+        const last = cells?.getCell(cells.length - 1);
+        return !!last && (last.getWidth() === 0 || last.getChars().trim() !== '');
+    };
+    // Whether the line starting on a row ends at its last row's last column
+    const lineFilled = (row) => {
+        while (buffer.getLine(row + 1)?.isWrapped) row++;
+        return filled(row);
+    };
+    // Whether a command, from its rows listed last row first, starts like the marked one as sameCommand has it: one
+    // need only start like the other, and an empty one matches only another. Its rows are compared from the first,
+    // down to the first that differs or, past the marked command's end, the first with any text
+    const startsLike = (marked, rows) => {
+        let length = 0;
+        for (let i = rows.length - 1; i >= 0; i--) {
+            if (rows[i] === '') continue;
+            if (length === marked.length) return length > 0;
+            const part = rows[i].slice(0, marked.length - length);
+            if (!marked.startsWith(part, length)) return false;
+            length += part.length;
+        }
+        return (length > 0) === (marked !== '');
+    };
+    // The marked command for each number of rows above it, and whether it ends at its last column, read once each
+    const markedCommands = [];
+    // The redrawn prompt's rows lie wholly below the marked command's first row. A row not marked as wrapped runs
+    // on from a filled one only where the command was typed on: the marked one ended short of the last column. The
+    // command's rows, from the cursor's line (with the rows it wraps onto) up to the row it starts on, are gathered a
+    // row at a time as the search moves up, and only its start is compared: one line starting like the other reads
+    // no more of it than the marked command's length
+    for (let start = cursorRow, unmarked = false, rows = [line(cursorRow)]; first > markedRow && start > first + 2;
+        rows.push(text(--start))) {
+        for (let above = 1; above < PROMPT_MAX_ROWS_BELOW_MARK && start - above > first + above; above++) {
+            let same = text(start - above - 1) === '';
+            for (let row = 0; same && row < above; row++) same = text(first + row) === text(start - above + row);
+            if (!same) continue;
+            const marked = (markedCommands[above] ??= { line: line(first + above), filled: lineFilled(first + above) });
+            if (unmarked && marked.filled) continue;
+            if (startsLike(marked.line, rows)) return markedRow;
+        }
+        if (!buffer.getLine(start)?.isWrapped) {
+            if (!filled(start - 1)) break;
+            unmarked = true;
+        }
+    }
     return null;
+}
+
+// A command typed at the prompt and not run takes the cursor further below the marked row than that too, once it wraps
+// onto enough rows. The terminal wraps it, so every row it runs onto is marked as wrapped, back up to the row it
+// starts on. That row starts the prompt's first line, as a one-line prompt's command does, or, after a blank first
+// row like Starship's, the line after it, its command's, each line on as many rows as it wraps onto (at 40 columns
+// Starship's top line wraps its last space onto a row of its own). No prompt starts with two blank rows. An app's
+// output starts new lines as it prints, so its last line starts lower. Known limits: a prompt with no blank first
+// row and a line above its command (a two-line plain prompt) stays in the save, as a background job's line printed
+// at a one-line prompt, with the command typed under it, looks the same; so does a prompt with two or more lines
+// above its command after a blank first row, and a command not marked as wrapped all the way up from the cursor:
+// the cursor moved down across its wrap (Ctrl-E, End, →), which readline does with a newline, or a wide character
+// that did not fit; and so does Starship's prompt after output with no final newline (printf, curl), whose blank
+// first row that output's row takes, as the mark goes on the row below it. And the other way: an app that left bracketed paste on and printed, from its first row, a line
+// running past four rows, or a blank row and one line and then such a line, with the cursor at its end, reads as
+// such a command, so its output from the first row on is left out. So is a background job's text printed with no
+// final newline at a one-line prompt, which the command typed after it runs on from as one line, and a job's line
+// under a blank marked row that is no Starship prompt's: output with no final newline puts the mark on the row below,
+// which may stay blank. Within four rows of the mark the save leaves all of these out already
+function typedOnPromptRow(buffer, markedRow, cursorRow) {
+    const blank = (row) => (buffer.getLine(row)?.translateToString(true) ?? '') === '';
+    const first = blank(markedRow) ? markedRow + 1 : markedRow;
+    if (blank(first)) return null;
+    let second = first + 1;
+    while (buffer.getLine(second)?.isWrapped) second++;
+    let start = cursorRow;
+    while (buffer.getLine(start)?.isWrapped) start--;
+    return start === first || (first > markedRow && start === second) ? markedRow : null;
 }
 
 // How to end each terminal's connection to the server (see initTerminal), for when its tab closes
@@ -794,6 +886,10 @@ export default class TerminalManager {
         let reconnectAttempts = 0;
         // Whether the tab has said it is reconnecting since it was last connected: once is enough
         let outageReported = false;
+        // Whether the tab has been connected before, so that its next connection is a reconnect
+        let connectedBefore = false;
+        // Whether the tab's last shell failed to start (1011), so that coming back to the page leaves it for a key
+        let shellFailedToStart = false;
         const self = this; // Store reference to 'this' for use in callbacks
 
         function connectionUnderway() {
@@ -864,6 +960,13 @@ export default class TerminalManager {
                     }
                 }, 100);
                 startHeartbeat(socket);
+
+                // A reconnect can be to a server that was upgraded meanwhile, so the page checks its version. Last,
+                // once the new connection is set up
+                if (connectedBefore) {
+                    window.dispatchEvent(new Event('dumbterm:reconnected'));
+                }
+                connectedBefore = true;
             };
 
             socket.onclose = (event) => {
@@ -926,7 +1029,13 @@ export default class TerminalManager {
 
             // A clean close is final (the shell exited, or failed to start), unless the server is going away
             // (1001, shutting down) or restarting (1012): the tab then reconnects once it is back, as it does
-            // after a dropped connection
+            // after a dropped connection. A shell that failed to start (1011) says why, as retrying would fail
+            // the same way
+            if (event.wasClean && event.code === 1011) {
+                shellFailedToStart = true;
+                terminal.writeln(`\r\nThe server could not start a shell: ${event.reason || 'Failed to start terminal'}.`);
+                return;
+            }
             if (event.wasClean && event.code !== 1001 && event.code !== 1012) {
                 terminal.writeln('\r\nConnection closed normally.');
                 return;
@@ -969,8 +1078,9 @@ export default class TerminalManager {
 
         // Handle terminal input with connection check. A key typed with no connection is dropped. While one is
         // underway it says nothing, as the close still to come may be final; otherwise it says so and starts one,
-        // with its retries renewed: that is how a tab whose shell exited gets a new one, and how one whose retries
-        // ran out before the server came back reconnects
+        // with its retries renewed: that is how a tab whose shell exited or failed to start gets a new one, and how
+        // one whose retries ran out before the server came back reconnects. An attempt a key started after a failed
+        // start is like any other: if it meets an outage, coming back to the page reconnects it
         terminal.onData(data => {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
@@ -980,11 +1090,24 @@ export default class TerminalManager {
             } else if (!connectionUnderway()) {
                 reportOutage('\r\nConnection not available. Attempting to reconnect...');
                 reconnectAttempts = 0;
+                shellFailedToStart = false;
                 connectWebSocket();
             }
             
             // Save session state on terminal input
             this.saveSessionState();
+        });
+
+        // Mouse reports in xterm's default encoding (a program that turns them on without ?1006h) come as binary
+        // data, a character per byte, which the server writes to the shell as those bytes. They are no keys: with
+        // no connection they are dropped, and never start one
+        terminal.onBinary(data => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'binary',
+                    data: data
+                }));
+            }
         });
 
         // Handle terminal resize with connection check
@@ -1004,9 +1127,10 @@ export default class TerminalManager {
 
         // Handle page visibility changes: coming back to the page reconnects a tab whose connection ended, with
         // its retries renewed. A retry waiting out its backoff is called off for it, as the page may have been
-        // away (a laptop asleep) for longer than the wait; a socket connecting or open is left to finish
+        // away (a laptop asleep) for longer than the wait; a socket connecting or open is left to finish. A tab
+        // whose shell failed to start is left for a key, as each return would fail the same way
         const onVisibilityChange = () => {
-            if (document.visibilityState !== 'visible') {
+            if (document.visibilityState !== 'visible' || shellFailedToStart) {
                 return;
             }
             clearTimeout(reconnectTimer);
@@ -1106,9 +1230,10 @@ export default class TerminalManager {
                             // The prompt starts on the row marked when the shell turned bracketed paste on, or on
                             // the cursor's row if that is higher (zsh marks after its prompt), the marked row is
                             // gone (erased by a screen clear, or out of the scrollback) or it is too far up to be
-                            // the prompt's, unless the prompt was redrawn below. Rows above it are all kept, so no
-                            // prompt patterns here. Known limit: zsh turns it on after the prompt, so the upper
-                            // lines of a multi-line zsh prompt stay in the save
+                            // the prompt's, unless a command typed at the prompt runs on that far down or the prompt
+                            // was redrawn below. Rows above it are all kept, so no prompt patterns here. Known limit:
+                            // zsh turns it on after the prompt, so the upper lines of a multi-line zsh prompt stay in
+                            // the save
                             const cursorRow = buffer.baseY + buffer.cursorY;
                             const mark = promptMarkers.get(terminal);
                             const markedRow = !mark ? cursorRow
@@ -1116,7 +1241,8 @@ export default class TerminalManager {
                                 : mark.marker.isDisposed ? cursorRow : mark.marker.line + mark.rowsBelow;
                             const promptStart = cursorRow - markedRow <= PROMPT_MAX_ROWS_BELOW_MARK
                                 ? Math.min(markedRow, cursorRow)
-                                : redrawnPromptRow(buffer, markedRow, cursorRow) ?? cursorRow;
+                                : typedOnPromptRow(buffer, markedRow, cursorRow)
+                                    ?? redrawnPromptRow(buffer, markedRow, cursorRow) ?? cursorRow;
                             serializedContent = promptStart > 0
                                 ? addons.serializeAddon.serialize({ ...serializeOptions, range: { start: 0, end: promptStart - 1 } })
                                 : '';
