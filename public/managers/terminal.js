@@ -943,12 +943,12 @@ export default class TerminalManager {
         // erases (CSI A, then BS and EL 0): on that row, which the marker movedUpOnto is on, where what is left still
         // starts what the row held, the record keeps just that much of the row's own text
         const cutClaim = (row, column) => {
-            // A disposed marker's line is -1, so it matches no row
+            // A disposed marker's line is -1, so it matches no row: neither a record's nor movedUpOnto's
             const claim = promptMarkers.get(terminal)?.claims.find(({ marker }) => marker.line === row);
             if (!claim) return;
             const kept = terminal.buffer.active.getLine(row)?.translateToString(true, 0, column) ?? '';
             if (kept === '') unclaim(row);
-            else if (!movedUpOnto?.isDisposed && movedUpOnto?.line === row && claim.text.startsWith(kept)) {
+            else if (movedUpOnto?.line === row && claim.text.startsWith(kept)) {
                 claim.text = kept;
             }
         };
