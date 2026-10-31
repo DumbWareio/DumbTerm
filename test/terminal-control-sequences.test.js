@@ -2213,6 +2213,17 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)), ['$ app', WIDE.slice(0, 3), ...[1, 2, 3, 4].map((i) => WIDE.slice(40 * i, 40 * i + 40)), '']);
     });
 
+    test('a saved session keeps the output of an app that moves up over its wrapped line and draws its first row again with a status padded to the last column', async () => {
+        // The rows below the first still hold what they did, and the first still reaches its last column, but it no longer
+        // holds what it did when the cursor moved up over the row below it
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n\x1b[?2004h\r\nTitle\r\n${LETTERS}`);
+        await receiveOutput(`\x1b[4A\r${'status: done'.padEnd(80)}${[1, 2, 3, 4].map((i) => `\r\n\r${LETTERS.slice(80 * i, 80 * i + 80)}`).join('')}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '', 'Title', 'status: done', LETTERS.slice(80, 160), LETTERS.slice(160, 240),
+            LETTERS.slice(240, 320), '']);
+    });
+
     test('a saved session keeps the output of an app that draws its first line and input line again over a row the cursor moved up over', async () => {
         // A progress line wrapped onto the next row, the cursor moved up over it, then the app's title, input line and
         // status drawn again as lines, the status on the row recorded: it no longer holds what it did

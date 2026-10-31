@@ -139,28 +139,27 @@ function redrawnPromptRow(buffer, wrapped, markedRow, cursorRow, tabRow) {
 // onto enough rows. The terminal wraps it, so every row it runs onto counts as wrapped, back up to the row it starts
 // on, where the terminal marks it so or the cursor moved up over it at the prompt (wrapped, see saveSessionState)
 // before moving back down with readline's newline (Ctrl-E, End, →), while the row starts like what it held then (or
-// like what an erase left of it on the row the cursor last moved up onto: readline's Backspace across the wrap) and the
-// row above reaches its last column. That row starts the prompt's first line, as a one-line prompt's command does, or,
-// after a blank first row like Starship's, the line after it, its command's, each line on as many rows as it wraps onto
-// (at 40 columns Starship's top line wraps its last space onto a row of its own). No prompt starts with two blank rows.
-// An app's output starts new lines as it prints, so its last line starts lower. Known limits: a prompt with no blank
-// first row and a line above its command (a two-line plain prompt) stays in the save, as a background job's line
-// printed at a one-line prompt, with the command typed under it, looks the same; so does a prompt with two or more
-// lines above its command after a blank first row, and a command the cursor moved down across before the terminal's
-// columns changed (which drops the record and rewraps the rows the newline unmarked as lines of their own), or after it
-// moved up some other way than CSI A or ESC M (see initTerminal); and so does Starship's prompt after output with no
-// final newline (printf, curl), whose blank first row that output's row takes, as the mark goes on the row below it.
-// And the other way: an app that left bracketed paste on and printed, from its first row, a line running past four
-// rows, or a blank row and one line and then such a line, with the cursor at its end, reads as such a command, so its
-// output from the first row on is left out; so does one that printed a blank row, such a line and then a short line,
-// with the cursor on the short one (the long line reads as the top line of a prompt like Starship's, the short one as
-// its command), as it did before the rows the cursor moved up over were recorded, and so does one that moved the cursor
-// up over such a line and back down with newlines, each row it moved up over still starting like what it held, below a
-// row that reaches its last column whatever that row now holds (one the app drew again with other text, padded to the
-// last column). So is a background job's text printed with no final newline at a one-line prompt, which the command
-// typed after it runs on from as one line, and a job's line under a blank marked row that is no Starship prompt's:
-// output with no final newline puts the mark on the row below, which may stay blank. Within four rows of the mark the
-// save leaves all of these out already
+// like what an erase left of it on the row the cursor last moved up onto: readline's Backspace across the wrap), the
+// row above starts like what it held then too, and reaches its last column. That row starts the prompt's first line, as
+// a one-line prompt's command does, or, after a blank first row like Starship's, the line after it, its command's, each
+// line on as many rows as it wraps onto (at 40 columns Starship's top line wraps its last space onto a row of its own).
+// No prompt starts with two blank rows. An app's output starts new lines as it prints, so its last line starts lower.
+// Known limits: a prompt with no blank first row and a line above its command (a two-line plain prompt) stays in the
+// save, as a background job's line printed at a one-line prompt, with the command typed under it, looks the same; so
+// does a prompt with two or more lines above its command after a blank first row, and a command the cursor moved down
+// across before the terminal's columns changed (which drops the record and rewraps the rows the newline unmarked as
+// lines of their own), or after it moved up some other way than CSI A or ESC M (see initTerminal); and so does
+// Starship's prompt after output with no final newline (printf, curl), whose blank first row that output's row takes,
+// as the mark goes on the row below it. And the other way: an app that left bracketed paste on and printed, from its
+// first row, a line running past four rows, or a blank row and one line and then such a line, with the cursor at its
+// end, reads as such a command, so its output from the first row on is left out; so does one that printed a blank row,
+// such a line and then a short line, with the cursor on the short one (the long line reads as the top line of a prompt
+// like Starship's, the short one as its command), as it did before the rows the cursor moved up over were recorded, and
+// so does one that moved the cursor up over such a line and back down with newlines, each row it moved up over, and the
+// row above each, still starting like what they held. So is a background job's text printed with no final newline at a
+// one-line prompt, which the command typed after it runs on from as one line, and a job's line under a blank marked row
+// that is no Starship prompt's: output with no final newline puts the mark on the row below, which may stay blank.
+// Within four rows of the mark the save leaves all of these out already
 function typedOnPromptRow(buffer, wrapped, markedRow, cursorRow) {
     const blank = (row) => (buffer.getLine(row)?.translateToString(true) ?? '') === '';
     const first = blank(markedRow) ? markedRow + 1 : markedRow;
@@ -867,28 +866,29 @@ export default class TerminalManager {
 
         // readline moves the cursor up a wrapped command with CSI A (Ctrl-A, ←, Backspace) and back down with a newline
         // (Ctrl-E, End, →), which unmarks each row it moves to as a wrapped one. So at a prompt, each row the cursor
-        // moves up over (CSI A, ESC M) while it is marked as wrapped is recorded with a marker and the text it holds,
-        // kept with the prompt's mark, and the save counts it as wrapped still while it starts like that text and the
-        // row above reaches its last column (see wrapped in saveSessionState). The record holds each row once, in the
-        // order of the rows, its text taken again each time the cursor moves up over it while it is marked as wrapped
-        // (readline draws a command again from a key typed in it, then moves back up), and no more than MAX_WRAP_CLAIMS
-        // of them: past that the highest goes. A row's record goes when an erase clears its wrap as xterm.js does: EL 0
-        // from the row's first column, EL 2, ED 0 from the first column, ED 1 and ED 2, and their selective forms (CSI
-        // ? K, CSI ? J); the rows ED resets above or below the cursor's lose their markers with their text. An EL 0 or
-        // ED 0 from past the first column drops the record where it leaves nothing left of the cursor; on the row the
-        // cursor last moved up onto with CSI A or ESC M (readline's Backspace across the wrap), where what is left
-        // still starts the text recorded, the record keeps just that much (see cutClaim). The whole record goes with a
-        // new mark (see setMark) and when the columns change, which rewraps the rows (with rows alone the lines move
+        // moves up over (CSI A, ESC M) while it is marked as wrapped is recorded with a marker, the text it holds and
+        // the text the row above it holds, kept with the prompt's mark, and the save counts it as wrapped still while
+        // it starts like its text, the row above starts like its own, and that row reaches its last column (see wrapped
+        // in saveSessionState). The record holds each row once, in the order of the rows, both texts taken again each
+        // time the cursor moves up over it while it is marked as wrapped (readline draws a command again from a key
+        // typed in it, then moves back up), and no more than MAX_WRAP_CLAIMS of them: past that the highest goes. A
+        // row's record goes when an erase clears its wrap as xterm.js does: EL 0 from the row's first column, EL 2, ED
+        // 0 from the first column, ED 1 and ED 2, and their selective forms (CSI ? K, CSI ? J); the rows ED resets
+        // above or below the cursor's lose their markers with their text. An EL 0 or ED 0 from past the first column
+        // drops the record where it leaves nothing left of the cursor; on the row the cursor last moved up onto with
+        // CSI A or ESC M (readline's Backspace across the wrap), where what is left still starts the text recorded, the
+        // record keeps just that much, and takes the row above's text again (see cutClaim). The whole record goes with
+        // a new mark (see setMark) and when the columns change, which rewraps the rows (with rows alone the lines move
         // whole, into the scrollback or out of it, and their markers with them). Each handler returns false so xterm.js
         // still does its part. Known limits: a row's record stays where its wrap is cleared some other way (SL, SR,
         // DECIC, DECDC, DECALN, a backspace that wraps back), and under a scroll region (DECSTBM) a move up that stops
         // at its top margin, or an ESC M that scrolls the region, records rows the cursor did not move over, while the
         // region's scrolling leaves the record on the rows it was on: such a row counts as wrapped though the terminal
-        // starts a line there, where it still starts like the text recorded and the row above reaches its last column.
-        // The other way, a key typed in the middle of a recorded row after the cursor moved down past it (Ctrl-E, then
-        // ← back across the wrap): readline draws the rest of the command again from that key without moving up over
-        // the row, so its record keeps the text it had, which the row no longer starts like, and the command no longer
-        // runs on across it
+        // starts a line there, where it and the row above still start like the texts recorded and the row above reaches
+        // its last column. The other way, a key typed in the middle of a recorded row after the cursor moved down past
+        // it (Ctrl-E, then ← back across the wrap): readline draws the rest of the command again from that key without
+        // moving up over the row, so its record keeps the text it had, which the row no longer starts like, and the
+        // command no longer runs on across it
         // The row the cursor last moved up onto at a prompt, with CSI A or ESC M (see cutClaim)
         let movedUpOnto = null;
         const claimWrappedRows = (count) => {
@@ -902,14 +902,15 @@ export default class TerminalManager {
                 const line = buffer.getLine(row);
                 if (!line?.isWrapped) continue;
                 const text = line.translateToString(true);
+                const above = buffer.getLine(row - 1)?.translateToString(true) ?? '';
                 // Rows below this one are on the screen, and markers erased with their rows are let go on the way
                 let at = claims.length;
                 for (; at > 0 && (claims[at - 1].marker.isDisposed || claims[at - 1].marker.line > row); at--) {
                     if (claims[at - 1].marker.isDisposed) claims.splice(at - 1, 1);
                 }
-                if (claims[at - 1]?.marker.line === row) claims[at - 1].text = text;
+                if (claims[at - 1]?.marker.line === row) Object.assign(claims[at - 1], { text, above });
                 else {
-                    claims.splice(at, 0, { marker: terminal.registerMarker(-up), text });
+                    claims.splice(at, 0, { marker: terminal.registerMarker(-up), text, above });
                     if (claims.length > MAX_WRAP_CLAIMS) claims.shift().marker.dispose();
                 }
             }
@@ -938,9 +939,12 @@ export default class TerminalManager {
             // A disposed marker's line is -1, so it matches no row
             const claim = promptMarkers.get(terminal)?.claims.find(({ marker }) => marker.line === row);
             if (!claim) return;
-            const kept = terminal.buffer.active.getLine(row)?.translateToString(true, 0, column) ?? '';
+            const buffer = terminal.buffer.active;
+            const kept = buffer.getLine(row)?.translateToString(true, 0, column) ?? '';
             if (kept === '') unclaim(row);
-            else if (row === movedUpOnto && claim.text.startsWith(kept)) claim.text = kept;
+            else if (row === movedUpOnto && claim.text.startsWith(kept)) {
+                Object.assign(claim, { text: kept, above: buffer.getLine(row - 1)?.translateToString(true) ?? '' });
+            }
         };
         const unclaimErased = (mode, display) => {
             const buffer = terminal.buffer.active;
@@ -1397,15 +1401,19 @@ export default class TerminalManager {
                                 : !mark.marker ? 0
                                 : mark.marker.isDisposed ? cursorRow : mark.marker.line + mark.rowsBelow;
                             const claimed = new Map(mark?.claims.filter((claim) => !claim.marker.isDisposed)
-                                .map((claim) => [claim.marker.line, claim.text]));
+                                .map((claim) => [claim.marker.line, claim]));
                             // A recorded row counts as wrapped while it still starts like what it held then (typed on
                             // at its end, or cut back by an erase: see cutClaim), never where it held nothing (a blank
-                            // row marked as wrapped, which any text would start like), below a row that reaches its
-                            // last column: a written cell there (a space too), the empty right half of a wide
-                            // character, or, where this row starts with a wide character that did not fit there, a
-                            // written cell or a wide character's right half in the column before it
-                            const holds = (row) => claimed.get(row) !== ''
-                                && (buffer.getLine(row)?.translateToString(true) ?? '').startsWith(claimed.get(row));
+                            // row marked as wrapped, which any text would start like), while the row above still starts
+                            // like what it held then too (an app may draw it again with other text that reaches its
+                            // last column), and only below a row that reaches its last column: a written cell there (a
+                            // space too), the empty right half of a wide character, or, where this row starts with a
+                            // wide character that did not fit there, a written cell or a wide character's right half in
+                            // the column before it
+                            const startsLike = (row, text) => (buffer.getLine(row)?.translateToString(true) ?? '')
+                                .startsWith(text);
+                            const holds = (row) => claimed.get(row).text !== ''
+                                && startsLike(row, claimed.get(row).text) && startsLike(row - 1, claimed.get(row).above);
                             const written = (cell) => !!cell && (cell.getChars() !== '' || cell.getWidth() === 0);
                             const reachesEnd = (row) => {
                                 const above = buffer.getLine(row - 1);
