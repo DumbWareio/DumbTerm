@@ -1358,6 +1358,16 @@ describe('terminal control sequences', () => {
         });
     }
 
+    test('a saved session leaves out a Starship prompt redrawn below a completion listing once the cursor moved down across a wide character that did not fit, the last column left empty', async () => {
+        // Nothing was written in the row's last column: the wide character that starts the next row counts as reaching it
+        const saves = recordSavedSessions();
+        await receiveOutput(`${starshipCompletion('ls /tmp/d/')}${'a'.repeat(67)}日bb`);
+        await receiveOutput(ctrlA(1, 2));
+        await receiveOutput(ctrlE(1, 4));
+
+        assert.equal(saves.at(-1), '');
+    });
+
     test('a saved session leaves out a prompt with a blank row and three lines above its command redrawn below a completion listing once the cursor moved down across the command\'s wrap', async () => {
         // Three rows above the command, the most a prompt has
         const saves = recordSavedSessions();
@@ -2104,6 +2114,16 @@ describe('terminal control sequences', () => {
         await receiveOutput(`\r\n\x1b[?2004l\rfile\r\n\x1b[?2004h${ROOT_PROMPT}`);
 
         assert.equal(terminal.markers.length, 1, 'the new mark');
+    });
+
+    test('a change of the terminal\'s columns drops the record of the rows the cursor moved up over, and of rows alone does not', async () => {
+        const saves = recordSavedSessions();
+        await plainCommandAfterCtrlAE(saves);
+        terminal.resize(terminal.cols, 30);
+        assert.equal(terminal.markers.length, 6, 'the mark and the five rows, after a change of rows');
+        terminal.resize(100, 30);
+
+        assert.equal(terminal.markers.length, 1, 'the mark, after a change of columns');
     });
 
     test('a new prompt drops the record of the rows the cursor moved up over at the one before', async () => {

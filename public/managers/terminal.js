@@ -1378,15 +1378,12 @@ export default class TerminalManager {
                                 : mark.marker.isDisposed ? cursorRow : mark.marker.line + mark.rowsBelow;
                             const claimed = new Map(mark?.claims.filter((claim) => !claim.marker.isDisposed)
                                 .map((claim) => [claim.marker.line, claim.text]));
-                            // A recorded row counts as wrapped while it still holds what it held then, typed on or
-                            // erased back at its end (one starts like the other), below a row that reaches its last
+                            // A recorded row counts as wrapped while it still starts like what it held then (typed on
+                            // at its end, or cut back by an erase: see cutClaim), below a row that reaches its last
                             // column: a written cell there (a space too), the empty right half of a wide character, or
                             // a wide character that did not fit starting this row
-                            const holds = (row) => {
-                                const now = buffer.getLine(row)?.translateToString(true) ?? '';
-                                const then = claimed.get(row);
-                                return now.startsWith(then) || then.startsWith(now);
-                            };
+                            const holds = (row) => (buffer.getLine(row)?.translateToString(true) ?? '')
+                                .startsWith(claimed.get(row));
                             const reachesEnd = (row) => {
                                 const above = buffer.getLine(row - 1);
                                 const last = above?.getCell(above.length - 1);
