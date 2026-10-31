@@ -1531,6 +1531,45 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '']);
     });
 
+    // An app that keeps bracketed paste on, after a Tab typed in it, draws lines that do not repeat its first ones as a
+    // prompt's would, above a line the terminal wraps past four rows
+    for (const [shape, before, after, kept] of [
+        ['draws a different line between its first two lines and the second one again', 'A\r\nB\r\n', `C\r\nX\r\nB${'x'.repeat(400)}`,
+            ['A', 'B', 'C', 'X', `B${'x'.repeat(400)}`.slice(0, 5 * 80)]],
+        ['draws its first five lines again, four above the last', 'A\r\nB\r\nC\r\nD\r\nE\r\n', `out\r\nA\r\nB\r\nC\r\nD\r\nE${'x'.repeat(400)}`,
+            ['A', 'B', 'C', 'D', 'E', 'out', 'A', 'B', 'C', 'D', `E${'x'.repeat(400)}`.slice(0, 5 * 80)]],
+    ]) {
+        test(`a saved session keeps the output of an app that keeps bracketed paste on, when Tab was typed in it and it ${shape}`, async () => {
+            // A redrawn prompt repeats the marked one row for row, with up to three rows above its command
+            const saves = recordSavedSessions();
+            await receiveOutput(`$ app\r\n\x1b[?2004h${before}`);
+            terminal.input('\t');
+            await receiveOutput(after);
+
+            assert.deepEqual(savedLines(saves.at(-1)), ['$ app', ...kept, '']);
+        });
+    }
+
+    test('a saved session keeps the output of an app that keeps bracketed paste on, when a paste holding a tab was typed in it and it draws its first two lines again', async () => {
+        // Only a Tab key, sent alone, marks the row: a paste with a tab in it is no Tab
+        const saves = recordSavedSessions();
+        await receiveOutput('$ app\r\n\x1b[?2004hA\r\nB\r\n');
+        terminal.input('\x1b[200~a\tb\x1b[201~');
+        await receiveOutput(`C\r\nA\r\nB${'x'.repeat(400)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'A', 'B', 'C', 'A', `B${'x'.repeat(400)}`.slice(0, 5 * 80), '']);
+    });
+
+    test('a saved session keeps the output of an app that keeps bracketed paste on, when the row Tab was typed on was erased and it draws its first two lines again', async () => {
+        // ED 0 erased the row with its marker: no Tab is left to reach from
+        const saves = recordSavedSessions();
+        await receiveOutput('$ app\r\n\x1b[?2004hA\r\nB\r\nC\r\nD\r\nE\r\n');
+        terminal.input('\t');
+        await receiveOutput(`\x1b[3A\r\x1b[JA\r\nB${'x'.repeat(400)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'A', 'B', 'A', `B${'x'.repeat(400)}`.slice(0, 5 * 80), '']);
+    });
+
     // The markers of the screen in use: the prompt's mark is in the normal one
     for (const [where, output, markers] of [['while a command runs', '\x1b[?2004h$ sleep 9\r\n\x1b[?2004l\r', 1],
         ['in an editor\'s screen', '\x1b[?2004h$ vim\r\n\x1b[?2004l\r\x1b[?1049h\x1b[?2004h', 0]]) {
