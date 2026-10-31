@@ -925,7 +925,7 @@ describe('terminal control sequences', () => {
     });
 
     // Apps that start with a blank row, as Starship's prompt does, and draw rows like it again under another: only
-    // a redrawn prompt's rows match, and only the rows the command was typed onto run on
+    // a redrawn prompt's rows match, and a command runs on only into rows the terminal marked as wrapped
     const filledInput = `> ${'x'.repeat(78)}`;
     const wrappedInput = `> ${'x'.repeat(150)}`;
     for (const [shape, output, kept] of [
@@ -960,32 +960,32 @@ describe('terminal control sequences', () => {
         });
     }
 
-    test('a saved session leaves out the output of an app that starts with a blank row and draws it, its first line and a filled input line again', async () => {
-        // Known limit: under a blank row, an app's title drawn again above an input line that ends at its last column,
-        // where the input line it first drew ended short of it (here `> `; one first drawn filled is kept, as pinned
-        // below), with the cursor below it, reads as Starship's prompt redrawn below a listing and typed on, so the
-        // save stops above the app's transcript, however far down the cursor is while each line between ends at its
-        // last column too (below one that does not, the search under a blank row keeps it, though the search in the
-        // rows a prompt reaches above the cursor's still matches an app that repeats its first lines there). Telling
-        // the two apart would also keep Starship's redrawn prompt.
-        // Pinned so that changing it is deliberate
+    test('a saved session keeps the output of an app that starts with a blank row and draws it, its first line and a filled input line again', async () => {
+        // Under a blank row, the app's title drawn again reads as Starship's top line redrawn below a listing, and its
+        // input line as the command typed on there, where the input line it first drew ended short of its last column
+        // (here `> `). The row below the input line starts a line of its own, as nothing marked it as wrapped and the
+        // cursor never moved up over it, so it is no command's
         const saves = recordSavedSessions();
         await receiveOutput(`$ app\r\n\x1b[?2004h\r\nTitle\r\n> \r\nr1\r\nr2\r\nr3\r\n\r\nTitle\r\n${filledInput}\r\nstatus`);
 
-        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '']);
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '', 'Title', '>', 'r1', 'r2', 'r3', '', 'Title', filledInput, '']);
     });
 
-    test('a saved session leaves out the output of an app that starts with a blank row and draws it, its first line and a filled input line again, then a filled row and another', async () => {
-        // The known limit above, the cursor two rows below the input line: the row between ends at its last column too
+    test('a saved session keeps the output of an app that starts with a blank row and draws it, its first line and a filled input line again, then a filled row and another', async () => {
+        // The cursor two rows below the input line: the row between ends at its last column too
         const saves = recordSavedSessions();
         await receiveOutput(`$ app\r\n\x1b[?2004h\r\nTitle\r\n> \r\nr1\r\nr2\r\nr3\r\n\r\nTitle\r\n${filledInput}\r\n${'S'.repeat(80)}\r\nmore`);
 
-        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '']);
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '', 'Title', '>', 'r1', 'r2', 'r3', '', 'Title', filledInput, 'S'.repeat(80), '']);
     });
 
     test('a saved session leaves out the output of an app that starts with a blank row, its first line and a blank row and draws them again above a blank line that wraps', async () => {
-        // The known limit above, with a blank input line: an empty command matches another empty one, though no other.
-        // Pinned so that changing it is deliberate
+        // Known limit: under a blank row, the app's title drawn again above a blank row and a blank line the terminal
+        // wraps (EL 1 keeps the wrap), with the cursor on it, reads as Starship's prompt redrawn below a listing: its rows
+        // repeat the marked ones' (the title, then blank rows) and its empty command matches the empty row the app first
+        // drew there (an empty command matches another empty one, though no other). The terminal wrapped the line itself,
+        // so it runs on as a command does, and the save stops above the app's transcript. Pinned so that changing it is
+        // deliberate
         const saves = recordSavedSessions();
         await receiveOutput(`$ app\r\n\x1b[?2004h\r\nTitle\r\n\r\n\r\nTitle\r\n${`${'x'.repeat(80)}\x1b[1K`.repeat(5)}`);
 
@@ -993,10 +993,8 @@ describe('terminal control sequences', () => {
     });
 
     test('a saved session keeps the output of an app that starts with a blank row and draws it, its first line and a filled input line again, then a line wrapped onto them once more', async () => {
-        // Whether the marked command fills its row is read along with it, whatever the search has gone past by then:
-        // the lower copy reads it, before the search goes up past the row the last line starts on, which is not marked
-        // as wrapped. The upper copy's input line runs on into that row from a filled one, which no command typed at a
-        // prompt does once the marked one filled its row
+        // The cursor's line starts on the row of q's, which the newline before it leaves unmarked as wrapped, so no
+        // command is looked for higher: the lower copy's input line does not run on into it
         const saves = recordSavedSessions();
         const top = 'H'.repeat(80);
         await receiveOutput(`$ app\r\n\x1b[?2004h\r\n${top}\r\n${filledInput}\r\nr1\r\nr2\r\nr3\r\n\r\n${top}\r\n${filledInput}\r\n`
@@ -1094,16 +1092,15 @@ describe('terminal control sequences', () => {
     });
 
     test('a save reads a long marked command\'s rows a few times in all and compares each command no further than the row where it differs', async () => {
-        // The marked prompt's command wrapped onto 200 rows, under an app's lines each wrapped onto two rows, the first
-        // erased back to blank and the second repeating the prompt's top line: each line's second row starts a
-        // redrawn prompt's command to compare with the marked one, and each newline after a filled row leaves that
-        // command reading as typed on. Reading the marked command afresh for each would read ~200 rows each time, as
-        // would asking each time whether it ends at its last column, and building the redrawn one's start as long as
-        // the marked one would slice ~200 rows each time; counted, not timed. startsWith's characters count the
-        // marked command whole each time, so they are not bounded here
+        // The marked prompt's command wrapped onto 200 rows, under an app's line wrapped onto 2,000 rows, every other one
+        // erased back to blank and the rest repeating the prompt's top line: each blank row starts a redrawn prompt's
+        // command to compare with the marked one. Reading the marked command afresh for each would read ~200 rows each
+        // time, and building the redrawn one's start as long as the marked one would slice ~200 rows each time;
+        // counted, not timed. startsWith's characters count the marked command whole each time, so they are not
+        // bounded here
         const saves = recordSavedSessions();
         const top = 'H'.repeat(80);
-        await receiveOutput(`$ app\r\n\x1b[?2004h\r\n${top}\r\n> ${'y'.repeat(80 * 200)}\r\n${`${'x'.repeat(80)}\x1b[1K${top}\r\n`.repeat(1000)}`);
+        await receiveOutput(`$ app\r\n\x1b[?2004h\r\n${top}\r\n> ${'y'.repeat(80 * 200)}\r\n${`${'x'.repeat(80)}\x1b[1K${top}`.repeat(1000)}`);
         const buffer = terminal.buffer.active;
         const cells = buffer.length * terminal.cols;
         const work = countedSave();

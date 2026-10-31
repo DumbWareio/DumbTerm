@@ -56,17 +56,6 @@ function redrawnPromptRow(buffer, wrapped, markedRow, cursorRow) {
         }
         if (same) return markedRow;
     }
-    // Whether a row's last cell holds text, or the right half of a wide character (which has none of its own)
-    const filled = (row) => {
-        const cells = buffer.getLine(row);
-        const last = cells?.getCell(cells.length - 1);
-        return !!last && (last.getWidth() === 0 || last.getChars().trim() !== '');
-    };
-    // Whether the line starting on a row ends at its last row's last column
-    const lineFilled = (row) => {
-        while (wrapped(row + 1)) row++;
-        return filled(row);
-    };
     // Whether a command, from its rows listed last row first, starts like the marked one as sameCommand has it: one
     // need only start like the other, and an empty one matches only another. Its rows are compared from the first,
     // down to the first that differs or, past the marked command's end, the first with any text
@@ -81,27 +70,19 @@ function redrawnPromptRow(buffer, wrapped, markedRow, cursorRow) {
         }
         return (length > 0) === (marked !== '');
     };
-    // The marked command for each number of rows above it, and whether it ends at its last column, read once each
+    // The marked command for each number of rows above it, read once each
     const markedCommands = [];
-    // The redrawn prompt's rows lie wholly below the marked command's first row. A row not marked as wrapped runs
-    // on from a filled one only where the command was typed on: the marked one ended short of the last column. The
-    // command's rows, from the cursor's line (with the rows it wraps onto) up to the row it starts on, are gathered a
-    // row at a time as the search moves up, and only its start is compared: one line starting like the other reads
-    // no more of it than the marked command's length
-    for (let start = cursorRow, unmarked = false, rows = [line(cursorRow)]; first > markedRow && start > first + 2;
-        rows.push(text(--start))) {
+    // The redrawn prompt's rows lie wholly below the marked command's first row. The command's rows, from the
+    // cursor's line (with the rows it wraps onto) up to the row it starts on, are gathered a row at a time as the
+    // search moves up, and only its start is compared: one line starting like the other reads no more of it than the
+    // marked command's length
+    for (let start = cursorRow, rows = [line(cursorRow)]; first > markedRow && start > first + 2; rows.push(text(--start))) {
         for (let above = 1; above < PROMPT_MAX_ROWS_BELOW_MARK && start - above > first + above; above++) {
             let same = text(start - above - 1) === '';
             for (let row = 0; same && row < above; row++) same = text(first + row) === text(start - above + row);
-            if (!same) continue;
-            const marked = (markedCommands[above] ??= { line: line(first + above), filled: lineFilled(first + above) });
-            if (unmarked && marked.filled) continue;
-            if (startsLike(marked.line, rows)) return markedRow;
+            if (same && startsLike(markedCommands[above] ??= line(first + above), rows)) return markedRow;
         }
-        if (!wrapped(start)) {
-            if (!filled(start - 1)) break;
-            unmarked = true;
-        }
+        if (!wrapped(start)) break;
     }
     return null;
 }
