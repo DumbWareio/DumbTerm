@@ -1607,6 +1607,48 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)), ['context', 'user@box', '/app', '$ echo out', 'out', '']);
     });
 
+    test('a saved session leaves out a three-line prompt redrawn below a completion listing when Tab was typed at its end, then Ctrl-A, Ctrl-E and ← back across the wrap', async () => {
+        // The Tab lies on the command's last row, below the cursor's, which the newlines unmarked: the cursor's line is
+        // followed down to its end across the rows the cursor moved up over
+        const saves = recordSavedSessions();
+        await receiveOutput(`\x1b[?2004h${THREE_LINE_PROMPT}echo out\r\n\x1b[?2004l\rout\r\n`);
+        await receiveOutput(`\x1b[?2004h${THREE_LINE_PROMPT}ls /tmp/d/\x07\r\n${COMPLETIONS}${THREE_LINE_PROMPT}ls /tmp/d/${'a'.repeat(300)}`);
+        terminal.input('\t');
+        await receiveOutput(`\x07${ctrlA(3, 2)}`);
+        await receiveOutput(ctrlE(3, 72));
+        await receiveOutput('\r\x1b[A\x1b[79C');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['context', 'user@box', '/app', '$ echo out', 'out', '']);
+    });
+
+    test('a saved session keeps a long command that starts like the prompt\'s on the row after it, when Ctrl-A and Ctrl-E moved over the prompt\'s own command before the Tab', async () => {
+        // The marked command's rows count as wrapped across the rows the cursor moved up over, so the redrawn prompt's
+        // top would still lie on its last row
+        const saves = recordSavedSessions();
+        await receiveOutput('\x1b[?2004hP\r\n$ ');
+        const command = `${'y'.repeat(318)}P`;
+        await receiveOutput(`${command}${ctrlA(4, 2)}${ctrlE(4, 1)}`);
+        terminal.input('\t');
+        await receiveOutput(`\r\n$ ${command}${'z'.repeat(100)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['P', `$ ${'y'.repeat(78)}`, 'y'.repeat(80), 'y'.repeat(80), 'y'.repeat(80), 'P',
+            `$ ${command}${'z'.repeat(100)}`.slice(0, 5 * 80), '']);
+    });
+
+    test('a saved session leaves out a plain prompt redrawn below a completion listing with a long command erased back to fewer rows than the marked one', async () => {
+        // The marked command, six rows long, had Tab typed at its end; the redrawn one is erased back to five rows, and
+        // starts more than three rows above the cursor's: the marked command need only start like it
+        const saves = recordSavedSessions();
+        await receiveOutput(`\x1b[?2004h${ROOT_PROMPT}echo out\r\n\x1b[?2004l\rout\r\n\x1b[?2004h${ROOT_PROMPT}`);
+        const atPrompt = saves.at(-1);
+        const command = `ls /tmp/d/${'a'.repeat(400)}`;
+        await receiveOutput(command);
+        terminal.input('\t');
+        await receiveOutput(`\x07\r\nalpha/ beta/  delta/ gamma/\r\n${ROOT_PROMPT}${command}\x1b[A\r\x1b[5C\x1b[J`);
+
+        assert.equal(saves.at(-1), atPrompt);
+    });
+
     test('a saved session leaves out a three-line prompt redrawn below a completion listing when keys other than Tab were typed below its command\'s last row', async () => {
         // Only a Tab moves the row the reach depends on: here the one typed at the marked prompt, above the listing
         const saves = recordSavedSessions();
@@ -2029,6 +2071,40 @@ describe('terminal control sequences', () => {
             assert.equal(saves.at(-1), atPrompt);
         });
     }
+
+    test('a move up by a count past the screen records no more rows than the screen holds', async () => {
+        // An app's line wrapped onto more rows than the screen has: the cursor moves up no higher than its top
+        recordSavedSessions();
+        await receiveOutput(`$ app\r\n\x1b[?2004h${'x'.repeat(80 * 40)}\x1b[65535A`);
+
+        assert.equal(terminal.markers.filter((marker) => !marker.isDisposed).length, 1 + terminal.rows - 1,
+            'the mark and the rows from the cursor\'s up to the screen\'s top');
+    });
+
+    test('a saved session leaves out a plain prompt with a half-typed command twenty-two rows long after Ctrl-A and Ctrl-E', async () => {
+        // Each of the twenty-one rows the cursor moved up over is recorded
+        const saves = recordSavedSessions();
+        await receiveOutput(`\x1b[?2004h${ROOT_PROMPT}echo out\r\n\x1b[?2004l\rout\r\n\x1b[?2004h${ROOT_PROMPT}`);
+        const atPrompt = saves.at(-1);
+        await receiveOutput(typedCommand(21 * 80 + 20));
+        await receiveOutput(ctrlA(21, ROOT_PROMPT.length));
+        await receiveOutput(ctrlE(21, 40));
+
+        assert.equal(saves.at(-1), atPrompt);
+    });
+
+    test('a Tab typed again leaves one marker for it, and a new prompt none', async () => {
+        recordSavedSessions();
+        await receiveOutput(`\x1b[?2004h${ROOT_PROMPT}ls`);
+        terminal.input('\t');
+        await receiveOutput('\x07');
+        terminal.input('\t');
+        await receiveOutput('\x07');
+        assert.equal(terminal.markers.length, 2, 'the mark and the last Tab\'s row');
+        await receiveOutput(`\r\n\x1b[?2004l\rfile\r\n\x1b[?2004h${ROOT_PROMPT}`);
+
+        assert.equal(terminal.markers.length, 1, 'the new mark');
+    });
 
     test('a new prompt drops the record of the rows the cursor moved up over at the one before', async () => {
         const saves = recordSavedSessions();
