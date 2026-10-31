@@ -909,5 +909,17 @@ describe('service worker instances of one install during an upgrade', () => {
             assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_/_V1.3.1': 1 });
             assert.deepEqual(answers(worker), [[true, undefined]]);
         });
+
+        // The activate event fires only at the worker becoming the active one, so its fill clears even in a browser
+        // whose registration names that worker late
+        const replaced = { scriptURL: `${ORIGIN}service-worker.js${options.bareUrl ? '' : '?v=1.3.0'}` };
+        for (const [lag, active] of [['names no worker yet', null], ['still names the worker it replaces', replaced]]) {
+            test(`the activation fill clears an older cache while the registration ${lag}, ${label}`, async () => {
+                const worker = loadWorker({ ...options, version: '1.3.1', registration: { active }, cacheNames: ['DUMBTERM_CACHE_/_V1.3.0'], manifest: ['index.html'] });
+                await install(worker);
+                await activate(worker);
+                assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_/_V1.3.1': 1 });
+            });
+        }
     }
 });

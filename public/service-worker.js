@@ -195,6 +195,7 @@ function isStaleCache(key, cacheName) {
  * URL for every version (an old page's bare registration) its own ServiceWorker object tells: a worker has one such
  * object per service worker, so self.serviceWorker is the registration's active one only while this worker is. A
  * browser without self.serviceWorker (Firefox) can't tell there, and the worker counts as active, as every worker did.
+ * A fill the activate event starts doesn't ask (see installCache's activating).
  * @returns {boolean} True if this worker is the registration's active worker, or can't tell it isn't
  */
 function isActiveWorker() {
@@ -263,9 +264,11 @@ async function notifyClients() {
 
 /**
  * Handles initial setup for service worker caching
+ * @param {Object} [options]
+ * @param {boolean} [options.activating=false] - True when the activate event calls it (see installCache)
  * @returns {Promise<void>}
  */
-async function preload() {
+async function preload({ activating = false } = {}) {
     console.log("Preparing to install web app cache");
     
     // Check cache status
@@ -288,7 +291,7 @@ async function preload() {
     // First-time installation case - no existing cache
     if (isFirstInstall) {
         console.log(`First-time installation: creating cache with version ${CACHE_VERSION}`);
-        await installCache(true); // Pass true to indicate first installation
+        await installCache(true, undefined, { activating }); // Pass true to indicate first installation
     }
 }
 
@@ -299,9 +302,13 @@ async function preload() {
  * user asked for is reported to the page.
  * @param {string} [requestId] - The id of the Update Now that asked for this fill. Every tab hears the answer, so it
  * names the request, and the tab that sent it knows the answer is its own
+ * @param {Object} [options]
+ * @param {boolean} [options.activating=false] - True for a fill the activate event starts. The event fires only at the
+ * worker becoming the active one, and no successor activates before the event's work ends, so the fill clears older
+ * caches without asking isActiveWorker: a browser can name the worker as the registration's active one late
  * @returns {Promise<void>}
  */
-async function installCache(isFirstInstall = false, requestId) {
+async function installCache(isFirstInstall = false, requestId, { activating = false } = {}) {
     // In a worker registered without a release version, a page's SET_VERSION can change CACHE_VERSION and CACHE_NAME
     // while this fill waits on the network, so fill, keep and report the version this fill started with
     const version = CACHE_VERSION;
@@ -332,7 +339,7 @@ async function installCache(isFirstInstall = false, requestId) {
         // A cache another fill is still filling is left alone: that fill keeps it if it succeeds, and the next fill
         // clears it if it fails. Only the active worker clears them: a worker whose successor has activated can't see
         // which caches the successor's fills are filling, and the successor's next fill clears what it leaves.
-        if (isActiveWorker()) {
+        if (activating || isActiveWorker()) {
             const oldCaches = (await caches.keys())
                 .filter(key => isStaleCache(key, cacheName) && !CACHES_BEING_FILLED.includes(key));
             if (oldCaches.length > 0) {
@@ -434,7 +441,7 @@ self.addEventListener("activate", event => {
                 if (CACHE_VERSION !== "1.0.0") {
                     const keys = await caches.keys();
                     if (!keys.includes(CACHE_NAME) || keys.some(key => isStaleCache(key, CACHE_NAME))) {
-                        await installCache(true);
+                        await installCache(true, undefined, { activating: true });
                     } else {
                         await notifyClients();
                     }
@@ -449,7 +456,7 @@ self.addEventListener("activate", event => {
                 // First-time install: set up cache immediately
                 if (isFirstInstall) {
                     console.log("First-time installation detected, setting up cache");
-                    await preload();
+                    await preload({ activating: true });
                 } else {
                     // Existing installation: check for updates and notify clients
                     console.log("Existing installation detected, checking for updates");
@@ -474,7 +481,7 @@ self.addEventListener("activate", event => {
                     // If versions differ, call preload to handle update logic
                     if (existingVersion !== CACHE_VERSION) {
                         console.log(`Version difference detected on activation: existing=${existingVersion}, new=${CACHE_VERSION}`);
-                        await preload();
+                        await preload({ activating: true });
                     }
                 }
             })
