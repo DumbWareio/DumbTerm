@@ -23,9 +23,23 @@ function fakeResponse(body, { status = 200, type = 'basic', redirected = false }
 // tests can change either between steps, and hold the manifest's answer back by setting `server.manifestHeld`
 // to a promise. Setting `cacheStorage.nextKeysHeld` to a promise holds back the answer of the next caches.keys() only.
 // Messages the worker posts to its one page land in `messages`.
-function loadWorker({ version = '1.3.0', scope = '/', store = new Map(), config = {}, network = async () => fakeResponse('network'), cacheNames = [], manifest = [], manifestStatus = 200 } = {}) {
+// `serviceWorker` is this worker as the browser knows it. `registration` is the install's registration as the browser
+// keeps it, which two workers of one install share: its `active` is the worker that last activated, and by default
+// this one. `bareUrl` registers the worker as plain service-worker.js, as pages did before they added ?v=<version>, so
+// that every version has the same script URL. `serviceWorkerObject` gives the worker `self.serviceWorker`, as Chromium
+// and Safari do and Firefox does not.
+function loadWorker({ version = '1.3.0', scope = '/', store = new Map(), config = {}, network = async () => fakeResponse('network'), cacheNames = [], manifest = [], manifestStatus = 200, registration, bareUrl = false, serviceWorkerObject = false } = {}) {
     cacheNames.forEach((name) => store.set(name, new Map()));
     const scopeUrl = new URL(scope, ORIGIN).href;
+    const serviceWorker = { scriptURL: `${scopeUrl}service-worker.js${bareUrl ? '' : `?v=${version}`}` };
+    const browserRegistration = registration ?? { active: serviceWorker };
+    // Within one worker's realm there is one ServiceWorker object per worker, so the worker's own object is the one
+    // its registration's active attribute holds while it is the active worker
+    const objects = new Map();
+    const objectFor = (worker) => {
+        if (!objects.has(worker)) objects.set(worker, { scriptURL: worker.scriptURL });
+        return objects.get(worker);
+    };
     const listeners = {};
     const fetchCalls = [];
     const messages = [];
@@ -72,6 +86,7 @@ function loadWorker({ version = '1.3.0', scope = '/', store = new Map(), config 
                 await held;
                 return [...store.keys()];
             },
+            has: async (name) => store.has(name),
             delete: async (name) => store.delete(name),
             match: async (request) => {
                 const url = typeof request === 'string' ? request : request.url;
@@ -80,15 +95,16 @@ function loadWorker({ version = '1.3.0', scope = '/', store = new Map(), config 
             },
         },
         self: {
-            location: { href: `${scopeUrl}service-worker.js?v=${version}` },
-            registration: { scope: scopeUrl },
+            location: { href: serviceWorker.scriptURL },
+            registration: { scope: scopeUrl, get active() { return browserRegistration.active && objectFor(browserRegistration.active); } },
+            ...(serviceWorkerObject && { serviceWorker: objectFor(serviceWorker) }),
             addEventListener: (type, fn) => { listeners[type] = fn; },
             skipWaiting: async () => {},
             clients: { claim: async () => {}, matchAll: async () => [{ postMessage: (message) => messages.push(message) }] },
         },
     };
     vm.runInNewContext(WORKER_SOURCE, sandbox);
-    return { listeners, store, fetchCalls, messages, server, cacheStorage };
+    return { listeners, store, fetchCalls, messages, server, cacheStorage, serviceWorker };
 }
 
 // The worker posts some messages from promise callbacks it does not wait for; let those run
@@ -779,3 +795,4 @@ describe('service worker caches on an origin shared by two installs', () => {
         assert.deepEqual([answer.newVersion, answer.cacheName], ['1.3.1', 'DUMBTERM_CACHE_/a/_V1.3.1']);
     });
 });
+
