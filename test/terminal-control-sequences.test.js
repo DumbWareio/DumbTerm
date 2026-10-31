@@ -2049,6 +2049,27 @@ describe('terminal control sequences', () => {
         assert.equal(saves.at(-1), atPrompt);
     });
 
+    // Wide characters, three-quarters of the CJK block's first part: 40 to a row
+    const WIDE = Array.from({ length: 600 }, (_, i) => String.fromCodePoint(0x4e00 + i * 7)).join('');
+
+    test('a saved session keeps the output of an app that moves up over its wrapped line of wide characters and cuts each of its rows short', async () => {
+        // A row that starts with a wide character reaches back to the row above only where that row's last cell but one is
+        // written: the wide character at the end of the row above did not fit its last column
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n\x1b[?2004h${WIDE.slice(0, 40 * 8 - 3)}\x1b[7A${
+            Array.from({ length: 8 }, () => '\r\x1b[6C\x1b[K').join('\r\n')}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', ...Array.from({ length: 7 }, (_, i) => WIDE.slice(40 * i, 40 * i + 3)), '']);
+    });
+
+    test('a saved session keeps the output of an app that moves up over its wrapped line of wide characters and draws each row\'s start again as a line', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n\x1b[?2004h${WIDE.slice(0, 40 * 6 - 3)}\x1b[5A${
+            Array.from({ length: 6 }, (_, i) => `\r${WIDE.slice(40 * i, 40 * i + 3)}\x1b[K`).join('\r\n')}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', ...Array.from({ length: 5 }, (_, i) => WIDE.slice(40 * i, 40 * i + 3)), '']);
+    });
+
     test('a saved session keeps the output of an app that draws its first line and input line again over a row the cursor moved up over', async () => {
         // A progress line wrapped onto the next row, the cursor moved up over it, then the app's title, input line and
         // status drawn again as lines, the status on the row recorded: it no longer holds what it did

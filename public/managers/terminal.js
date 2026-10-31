@@ -1380,15 +1380,17 @@ export default class TerminalManager {
                                 .map((claim) => [claim.marker.line, claim.text]));
                             // A recorded row counts as wrapped while it still starts like what it held then (typed on
                             // at its end, or cut back by an erase: see cutClaim), below a row that reaches its last
-                            // column: a written cell there (a space too), the empty right half of a wide character, or
-                            // a wide character that did not fit starting this row
+                            // column: a written cell there (a space too), the empty right half of a wide character, or,
+                            // where this row starts with a wide character that did not fit there, a written cell or a
+                            // wide character's right half in the column before it
                             const holds = (row) => (buffer.getLine(row)?.translateToString(true) ?? '')
                                 .startsWith(claimed.get(row));
+                            const written = (cell) => !!cell && (cell.getChars() !== '' || cell.getWidth() === 0);
                             const reachesEnd = (row) => {
                                 const above = buffer.getLine(row - 1);
-                                const last = above?.getCell(above.length - 1);
-                                return !!last && (last.getChars() !== '' || last.getWidth() === 0
-                                    || buffer.getLine(row)?.getCell(0)?.getWidth() === 2);
+                                return !!above && (written(above.getCell(above.length - 1))
+                                    || (buffer.getLine(row)?.getCell(0)?.getWidth() === 2
+                                        && written(above.getCell(above.length - 2))));
                             };
                             const wrapped = (row) => !!buffer.getLine(row)?.isWrapped
                                 || (claimed.has(row) && holds(row) && reachesEnd(row));
