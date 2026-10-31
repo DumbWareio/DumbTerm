@@ -1174,6 +1174,16 @@ describe('terminal control sequences', () => {
         assert.equal(saved.at(-1), savedBeforeListing(saved));
     });
 
+    test('a saved session leaves out a Starship prompt redrawn below a completion listing at 40 columns after Ctrl-E, erasing back and typing on', async () => {
+        // Backspace erased the command back across its wrap (BS, then EL 0 at the cursor) before more was typed: a row
+        // recorded when the cursor moved up over it keeps what the erase left of it
+        const saved = await replayCapture('starshipNarrow', 6);
+        const saves = recordSavedSessions();
+        await receiveOutput('zz');
+
+        assert.equal(saves.at(-1), savedBeforeListing(saved));
+    });
+
     test('a saved session leaves out a Starship prompt redrawn below a completion listing for a command that wrapped before it, after Ctrl-A and Ctrl-E', async () => {
         const saved = await replayCapture('starshipWrappedCtrlE', 6);
 
@@ -1879,6 +1889,73 @@ describe('terminal control sequences', () => {
         assert.ok(terminal.markers.length <= 201, `${terminal.markers.length} markers`);
         assert.ok(markedRows().includes(cursorRow - 1), 'the last row moved up over is recorded');
         assert.ok(savedLines(saves.at(-1)).includes('$ app'), 'the app\'s output is kept');
+    });
+
+    // An app that keeps bracketed paste on prints a line wrapped onto eight rows, moves the cursor up over it with CSI A,
+    // then draws each row again as a line of its own, with a newline between: a recorded row no longer holds what it did
+    const appRedrawn = (eachRow) => `$ app\r\n\x1b[?2004h${'x'.repeat(80 * 8 - 5)}\x1b[7A${
+        Array.from({ length: 8 }, (_, i) => eachRow(`line${i}`)).join('\r\n')}`;
+    for (const [how, eachRow, kept] of [
+        ['ending each with EL 0', (text) => `\r${text}\x1b[K`, (i) => `line${i}`],
+        ['erasing each with EL 1 from the last column first', (text) => `\r\x1b[79C\x1b[1K\r${text}`, (i) => `line${i}`],
+        ['writing over each without an erase', (text) => `\r${text}`, (i) => `line${i}${'x'.repeat(75)}`],
+        ['ending each with EL 0, then filling it to its last column', (text) => `\r${text}\x1b[K\r\x1b[5C${'-'.repeat(75)}`,
+            (i) => `line${i}${'-'.repeat(75)}`],
+    ]) {
+        test(`a saved session keeps the output of an app that moves up over its wrapped line and draws its rows again as lines, ${how}`, async () => {
+            // The rows the cursor moved up over were recorded with what they held: they count as wrapped only while they
+            // still hold it, below a row that reaches its last column
+            const saves = recordSavedSessions();
+            await receiveOutput(appRedrawn(eachRow));
+
+            assert.deepEqual(savedLines(saves.at(-1)), ['$ app', ...Array.from({ length: 7 }, (_, i) => kept(i)), '']);
+        });
+    }
+
+    test('a saved session keeps the output of an app that moves up over its wrapped line and cuts each of its rows short', async () => {
+        // Each row still starts like what it held, but the row above it no longer reaches its last column. (Each row
+        // starts at a different place in the text: rows alike would match the rows a prompt reaches above the cursor's)
+        const saves = recordSavedSessions();
+        const text = 'abcdefghi'.repeat(80);
+        await receiveOutput(`$ app\r\n\x1b[?2004h${text.slice(0, 80 * 8 - 5)}\x1b[7A${
+            Array.from({ length: 8 }, () => '\r\x1b[5C\x1b[K').join('\r\n')}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', ...Array.from({ length: 7 }, (_, i) => text.slice(80 * i, 80 * i + 5)), '']);
+    });
+
+    test('a saved session leaves out a plain prompt with a half-typed command six rows long after a key typed at its start and Ctrl-E', async () => {
+        // readline draws the rest of the command again from the key typed, which shifts every row, then moves the cursor
+        // back up over them: the record takes what they hold now
+        const saves = recordSavedSessions();
+        const command = `echo ${'0123456789'.repeat(40)}`;
+        await receiveOutput(`\x1b[?2004h${ROOT_PROMPT}echo out\r\n\x1b[?2004l\rout\r\n\x1b[?2004h${ROOT_PROMPT}`);
+        const atPrompt = saves.at(-1);
+        await receiveOutput(command);
+        await receiveOutput(ctrlA(5, ROOT_PROMPT.length));
+        await receiveOutput(`X${command}${ctrlA(5, ROOT_PROMPT.length + 1)}`);
+        await receiveOutput(ctrlE(5, 21));
+
+        assert.equal(saves.at(-1), atPrompt);
+    });
+
+    test('a saved session keeps the output of an app that draws its first line and input line again over a row the cursor moved up over', async () => {
+        // A progress line wrapped onto the next row, the cursor moved up over it, then the app's title, input line and
+        // status drawn again as lines, the status on the row recorded: it no longer holds what it did
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n\x1b[?2004hTitle\r\n> \r\nlog1\r\nlog2\r\nlog3\r\n`);
+        await receiveOutput(`${'p'.repeat(100)}\x1b[A\r\x1b[A\rTitle\x1b[K\r\n> hi\x1b[K\r\nstatus\x1b[K`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'Title', '>', 'log1', 'log2', 'Title', '> hi', '']);
+    });
+
+    test('a saved session keeps the output of an app whose scroll region scrolled a row the cursor moved up over', async () => {
+        // The record stays on the row while the line it was made for scrolls away: the row no longer holds what it did
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n\x1b[?2004hTitle\r\n> \r\nlog1\r\nlog2\r\nlog3\r\n`);
+        await receiveOutput(`${'p'.repeat(100)}\x1b[A\x1b[7;24r\x1b[24;1H\r\n\r\n\r\n`);
+        await receiveOutput('\x1b[r\x1b[6;1HTitle\x1b[K\x1b[7;1H> hi\x1b[K\x1b[8;1Hstatus\x1b[K');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'Title', '>', 'log1', 'log2', 'Title', '> hi', '']);
     });
 
     test('a new prompt drops the record of the rows the cursor moved up over at the one before', async () => {
