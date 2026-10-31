@@ -1892,6 +1892,82 @@ describe('terminal control sequences', () => {
     // The command's rows as the save keeps them once they no longer run on as one line from the prompt's
     const keptCommand = [`${ROOT_PROMPT}echo out`, 'out', `${ROOT_PROMPT}${typedCommand(400)}`.slice(0, 80)];
 
+    // A plain prompt with a half-typed command eight rows long, after Ctrl-A and Ctrl-E, then Backspace back across
+    // the last row's start (readline: BS and EL 0, the last at the row's first column), onto the row above (CSI A, the
+    // cursor to its last column, EL 0). Returns the save at the prompt
+    async function plainEightRowsErasedOntoSeventh(saves) {
+        await receiveOutput(`\x1b[?2004h${ROOT_PROMPT}echo out\r\n\x1b[?2004l\rout\r\n\x1b[?2004h${ROOT_PROMPT}`);
+        const atPrompt = saves.at(-1);
+        await receiveOutput(typedCommand(560));
+        await receiveOutput(`${ctrlA(7, ROOT_PROMPT.length)}${ctrlE(7, 20)}`);
+        await receiveOutput(`${'\b\x1b[K'.repeat(20)}\x1b[A\x1b[79C`);
+        return atPrompt;
+    }
+
+    for (const [erase, then] of [['EL 0', '\x1b[K'], ['ED 0', '\x1b[J']]) {
+        test(`a saved session leaves out a plain prompt with a long command erased back across a row with ${erase} and typed on`, async () => {
+            // The erase on the row the cursor moved up onto keeps what lies left of it in the row's record
+            const saves = recordSavedSessions();
+            const atPrompt = await plainEightRowsErasedOntoSeventh(saves);
+            await receiveOutput(`${then}zz`);
+
+            assert.equal(saves.at(-1), atPrompt);
+        });
+    }
+
+    test('a saved session leaves out a plain prompt with a long command erased back to one character of a row and typed on', async () => {
+        const saves = recordSavedSessions();
+        const atPrompt = await plainEightRowsErasedOntoSeventh(saves);
+        await receiveOutput(`\x1b[K${'\b\x1b[K'.repeat(78)}zz`);
+
+        assert.equal(saves.at(-1), atPrompt);
+    });
+
+    test('a saved session leaves out a plain prompt with a long command erased back, then erased again past its end, and typed on', async () => {
+        // What lies left of the cursor is the row's text, without the blank cells after it
+        const saves = recordSavedSessions();
+        const atPrompt = await plainEightRowsErasedOntoSeventh(saves);
+        await receiveOutput(`\x1b[K${'\b\x1b[K'.repeat(78)}\x1b[10G\x1b[K\x1b[2Gzz`);
+
+        assert.equal(saves.at(-1), atPrompt);
+    });
+
+    test('a saved session no longer follows a long command across a row written over from its start and erased past it', async () => {
+        // On the row the cursor moved up onto, what is left of the cursor no longer starts what the row held: the record
+        // is not cut to it
+        const saves = recordSavedSessions();
+        await plainEightRowsErasedOntoSeventh(saves);
+        await receiveOutput('\rXYZ\x1b[K');
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(0, 3), keptCommand);
+    });
+
+    test('an erase that leaves nothing of a row the cursor moved up onto drops its record, with records below it already erased', async () => {
+        // After Ctrl-A and Ctrl-E, the cursor moves up three rows; ED 0 from that row's last column resets the rows below,
+        // whose markers go with them, and EL 1 then leaves nothing of the row left of the cursor, so the EL 0 after it
+        // drops the row's record
+        const saves = recordSavedSessions();
+        await receiveOutput(`\x1b[?2004h${ROOT_PROMPT}echo out\r\n\x1b[?2004l\rout\r\n\x1b[?2004h${ROOT_PROMPT}`);
+        await receiveOutput(`${typedCommand(560)}${ctrlA(7, ROOT_PROMPT.length)}${ctrlE(7, 20)}\x1b[3A\x1b[79C`);
+        const row = terminal.buffer.active.baseY + terminal.buffer.active.cursorY;
+        await receiveOutput('\x1b[J\x1b[1K\x1b[K');
+
+        assert.ok(!markedRows().includes(row), `no record of row ${row} in ${markedRows()}`);
+    });
+
+    test('a change of rows keeps the record of the rows the cursor moved up over after the columns changed once', async () => {
+        // The columns the record was last dropped at are what a later change of rows is compared with
+        terminal.resize(100, terminal.rows);
+        const saves = recordSavedSessions();
+        await receiveOutput(`\x1b[?2004h${ROOT_PROMPT}echo out\r\n\x1b[?2004l\rout\r\n\x1b[?2004h${ROOT_PROMPT}`);
+        const atPrompt = saves.at(-1);
+        await receiveOutput(`${typedCommand(600)}${ctrlA(6, ROOT_PROMPT.length)}${ctrlE(6, 20)}`);
+        terminal.resize(100, 30);
+        manager.saveSessionState();
+
+        assert.equal(saves.at(-1), atPrompt);
+    });
+
     for (const [move, up] of [['CSI 5 A', '\x1b[5A'], ['ESC M once a row', '\x1bM'.repeat(5)]]) {
         test(`a saved session leaves out a plain prompt with a half-typed command six rows long after the cursor moved up it by ${move} and back down`, async () => {
             const saves = recordSavedSessions();
@@ -2126,6 +2202,15 @@ describe('terminal control sequences', () => {
         await receiveOutput('\x1b[80G\x1b[1K\x1b[A\r\n\rstatus: done');
 
         assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '', 'Title', LETTERS.slice(0, 320), '']);
+    });
+
+    test('a saved session keeps the output of an app whose line of wide characters it moved up over runs on from a first row it cut short', async () => {
+        // The rows below the first still hold what they did, but the first no longer reaches its last column: the wide
+        // character starting the second row did not fit there only if the column before the first row's last is written
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n\x1b[?2004h${WIDE.slice(0, 40 * 6 - 3)}\x1b[5A\r\x1b[6C\x1b[K${'\r\n'.repeat(5)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', WIDE.slice(0, 3), ...[1, 2, 3, 4].map((i) => WIDE.slice(40 * i, 40 * i + 40)), '']);
     });
 
     test('a saved session keeps the output of an app that draws its first line and input line again over a row the cursor moved up over', async () => {
