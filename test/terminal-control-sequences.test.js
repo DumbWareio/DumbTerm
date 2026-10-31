@@ -818,7 +818,7 @@ describe('terminal control sequences', () => {
     });
 
     test('a saved session keeps the output of an app that draws its first line and input line again above a status row, padded to the last column', async () => {
-        // Only text in the very last column fills a row; a space written there does not
+        // A space written in the input line's last column runs it on into no other row: only rows marked as wrapped do
         const saves = recordSavedSessions();
         const input = `> ${'x'.repeat(77)}`;
         await receiveOutput(`$ app\r\n\x1b[?2004hTitle\r\n> \r\nr1\r\nr2\r\nr3\r\nTitle\r\n${input} \r\nstatus`);
@@ -827,7 +827,8 @@ describe('terminal control sequences', () => {
     });
 
     test('a saved session keeps the output of an app that draws its first line and a wrapped line again, ending differently on a row of its own', async () => {
-        // A command that runs on into a row not marked as wrapped is compared whole, with that row
+        // A row not marked as wrapped starts a line of its own: the cursor's line is compared with the row the first
+        // line wrapped onto
         const saves = recordSavedSessions();
         const wide = 'x'.repeat(80);
         await receiveOutput(`$ app\r\n\x1b[?2004hTitle\r\n${wide}abc\r\nr1\r\nr2\r\nr3\r\nTitle\r\n${wide}\r\nzzz`);
