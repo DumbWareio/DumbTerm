@@ -2258,6 +2258,28 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)), ['$ app', `${line.slice(0, 400)}${'Z'.repeat(80)}`, '']);
     });
 
+    test('a saved session keeps the output of an app that cuts short the rows it moved up over, moves up over them again and draws them whole', async () => {
+        // A row above recorded cut short counts only while it holds just that: drawn whole again, it holds more
+        const saves = recordSavedSessions();
+        const line = LETTERS_8.slice(0, 80 * 8 - 5);
+        const rows = Array.from({ length: 8 }, (_, i) => line.slice(80 * i, 80 * i + 80));
+        await receiveOutput(`$ app\r\n\x1b[?2004h${line}\x1b[7A${Array.from({ length: 8 }, () => '\r\x1b[5C\x1b[K').join('\x1b[B')}`);
+        await receiveOutput(`\x1b[7A${rows.map((row) => `\r${row}`).join('\x1b[B')}\x1b[2;1H${'\r\n'.repeat(7)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', ...rows.slice(0, 7), '']);
+    });
+
+    test('a saved session keeps the output of an app whose line of wide characters it moved up over has its empty last cells written', async () => {
+        // At 81 columns, forty wide characters fill eighty cells and the next one wraps, so each row's last cell is
+        // empty when the row below it is recorded; written later, the row above holds more than it did
+        terminal.resize(81, terminal.rows);
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n\x1b[?2004h${WIDE.slice(0, 40 * 8 - 3)}\x1b[7A${Array.from({ length: 8 }, () => '\x1b[81G|').join('\x1b[B')}`);
+        await receiveOutput(`\x1b[2;1H${'\r\n'.repeat(7)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', ...Array.from({ length: 7 }, (_, i) => `${WIDE.slice(40 * i, 40 * i + 40)}|`), '']);
+    });
+
     test('a saved session keeps the output of an app that draws its first line and input line again over a row the cursor moved up over', async () => {
         // A progress line wrapped onto the next row, the cursor moved up over it, then the app's title, input line and
         // status drawn again as lines, the status on the row recorded: it no longer holds what it did
