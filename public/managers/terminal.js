@@ -75,7 +75,10 @@ function redrawnPromptRow(buffer, wrapped, markedRow, cursorRow, tabRow) {
     // the redrawn prompt replaces. The searches above and below read it whole. That loses nothing only for their
     // candidates below the marked command's last row that a Tab admits: each such candidate of the first is compared
     // here too, and so is each such candidate of the second whose command starts a line. A candidate of theirs at or
-    // above that row, or of the second whose command starts partway through a line, is compared with the blanks
+    // above that row, or of the second whose command starts partway through a line, is compared with the blanks. (The
+    // first search's command starts partway through the cursor's line only where that line runs above the cursor's four
+    // rows, and then it compares no candidate: where it compares one, its command is the cursor's whole line, as it is
+    // here)
     let end = cursorRow;
     while (tabRow !== null && wrapped(end + 1)) end++;
     if (tabRow !== null && tabRow <= end) {
@@ -135,7 +138,8 @@ function redrawnPromptRow(buffer, wrapped, markedRow, cursorRow, tabRow) {
 // A command typed at the prompt and not run takes the cursor further below the marked row than that too, once it wraps
 // onto enough rows. The terminal wraps it, so every row it runs onto counts as wrapped, back up to the row it starts
 // on, where the terminal marks it so or the cursor moved up over it at the prompt (wrapped, see saveSessionState)
-// before moving back down with readline's newline (Ctrl-E, End, →), while the row starts like what it held then and the
+// before moving back down with readline's newline (Ctrl-E, End, →), while the row starts like what it held then (or
+// like what an erase left of it on the row the cursor last moved up onto: readline's Backspace across the wrap) and the
 // row above reaches its last column. That row starts the prompt's first line, as a one-line prompt's command does, or,
 // after a blank first row like Starship's, the line after it, its command's, each line on as many rows as it wraps onto
 // (at 40 columns Starship's top line wraps its last space onto a row of its own). No prompt starts with two blank rows.
@@ -148,11 +152,13 @@ function redrawnPromptRow(buffer, wrapped, markedRow, cursorRow, tabRow) {
 // final newline (printf, curl), whose blank first row that output's row takes, as the mark goes on the row below it.
 // And the other way: an app that left bracketed paste on and printed, from its first row, a line running past four
 // rows, or a blank row and one line and then such a line, with the cursor at its end, reads as such a command, so its
-// output from the first row on is left out, and so does one that moved the cursor up over such a line and back down
-// with newlines, each row still starting like what it held. So is a background job's text printed with no final newline
-// at a one-line prompt, which the command typed after it runs on from as one line, and a job's line under a blank
-// marked row that is no Starship prompt's: output with no final newline puts the mark on the row below, which may stay
-// blank. Within four rows of the mark the save leaves all of these out already
+// output from the first row on is left out; so does one that printed a blank row, such a line and then a short line,
+// with the cursor on the short one (the long line reads as the top line of a prompt like Starship's, the short one as
+// its command), as it did before the rows the cursor moved up over were recorded, and so does one that moved the cursor
+// up over such a line and back down with newlines, each row still starting like what it held. So is a background job's
+// text printed with no final newline at a one-line prompt, which the command typed after it runs on from as one line,
+// and a job's line under a blank marked row that is no Starship prompt's: output with no final newline puts the mark on
+// the row below, which may stay blank. Within four rows of the mark the save leaves all of these out already
 function typedOnPromptRow(buffer, wrapped, markedRow, cursorRow) {
     const blank = (row) => (buffer.getLine(row)?.translateToString(true) ?? '') === '';
     const first = blank(markedRow) ? markedRow + 1 : markedRow;
