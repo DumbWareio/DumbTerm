@@ -306,7 +306,8 @@ async function preload({ activating = false } = {}) {
  * @param {boolean} [options.activating=false] - True for a fill the activate event starts. The event fires only at the
  * worker becoming the active one, and no successor activates before the event's work ends, so the fill clears older
  * caches without asking isActiveWorker: a browser can name the worker as the registration's active one late
- * @returns {Promise<void>}
+ * @returns {Promise<string>} 'filled' when the fill's cache is still there once the fill is done, 'lost' when it was
+ * deleted while the fill filled it or cleared the older ones, 'failed' when the fill failed otherwise
  */
 async function installCache(isFirstInstall = false, requestId, { activating = false } = {}) {
     // In a worker registered without a release version, a page's SET_VERSION can change CACHE_VERSION and CACHE_NAME
@@ -315,6 +316,8 @@ async function installCache(isFirstInstall = false, requestId, { activating = fa
     const cacheName = CACHE_NAME;
     console.log(`${isFirstInstall ? 'First-time installation' : 'Updating'} cache to version ${version}`);
     CACHES_BEING_FILLED.push(cacheName);
+    let outcome;
+    let lost = false;
     
     try {
         // Fetch and cache assets. The manifest comes first so that a failed request leaves no empty cache behind.
@@ -332,9 +335,12 @@ async function installCache(isFirstInstall = false, requestId, { activating = fa
         await cache.addAll(assetsToCache);
         // What a fill writes into a cache deleted meanwhile (by another worker's cleanup, say) goes with it, so a fill
         // whose cache is gone has failed, and clears nothing: the older caches are what still works offline
-        if (!(await caches.has(cacheName))) throw new Error('The cache was deleted while it was being filled');
+        if (!(await caches.has(cacheName))) {
+            lost = true;
+            throw new Error('The cache was deleted while it was being filled');
+        }
         console.log("Assets cached successfully");
-
+        
         // Clear old caches only now that the new one is filled: until then they are what works offline.
         // A cache another fill is still filling is left alone: that fill keeps it if it succeeds, and the next fill
         // clears it if it fails. Only the active worker clears them: a worker whose successor has activated can't see
@@ -379,6 +385,7 @@ async function installCache(isFirstInstall = false, requestId, { activating = fa
                 }
             });
         });
+        outcome = 'filled';
     } catch (error) {
         console.error("Failed to cache assets:", error);
         
@@ -405,9 +412,14 @@ async function installCache(isFirstInstall = false, requestId, { activating = fa
                 });
             });
         });
+        outcome = lost ? 'lost' : 'failed';
     } finally {
         CACHES_BEING_FILLED.splice(CACHES_BEING_FILLED.indexOf(cacheName), 1);
     }
+    // Another worker's cleanup can delete the cache even after this fill checked it: one that can't tell it was
+    // replaced does, when it runs while this fill clears the older caches, and leaves no cache at all
+    if (outcome === 'filled' && !(await caches.has(cacheName))) outcome = 'lost';
+    return outcome;
 }
 
 // Service Worker event listeners
@@ -441,7 +453,14 @@ self.addEventListener("activate", event => {
                 if (CACHE_VERSION !== "1.0.0") {
                     const keys = await caches.keys();
                     if (!keys.includes(CACHE_NAME) || keys.some(key => isStaleCache(key, CACHE_NAME))) {
-                        await installCache(true, undefined, { activating: true });
+                        // A worker this one replaced can still delete the cache this fill fills, when it can't tell
+                        // it was replaced, so a fill that loses its cache fills it once more. Not when a page has
+                        // named another version since: that fill would fill the page's version instead.
+                        const filling = CACHE_NAME;
+                        const outcome = await installCache(true, undefined, { activating: true });
+                        if (outcome === 'lost' && CACHE_NAME === filling) {
+                            await installCache(true, undefined, { activating: true });
+                        }
                     } else {
                         await notifyClients();
                     }

@@ -813,19 +813,22 @@ describe('service worker instances of one install during an upgrade', () => {
     }
 
     // The active worker of 1.3.1 with its offline copy, and the worker of 1.3.2 installed beside it. Each worker's
-    // asset requests wait on `held.old` or `held.new` while it is set to a promise.
-    async function twoWorkers(options) {
+    // asset requests wait on `held.old` or `held.new` while it is set to a promise. With `staleActive`, the old worker's
+    // view of the registration never learns that the new worker became the active one.
+    async function twoWorkers(options, { staleActive = false } = {}) {
         const store = new Map([[OLD_CACHE, new Map([[ORIGIN + 'index.html', fakeResponse('1.3.1')]])]]);
         const registration = { active: null };
+        const oldRegistration = staleActive ? { active: null } : registration;
         const held = { old: undefined, new: undefined };
-        const workerOf = (version, which) => loadWorker({
-            ...options, version, store, registration, manifest: ['index.html'],
+        const workerOf = (version, which, workerRegistration) => loadWorker({
+            ...options, version, store, registration: workerRegistration, manifest: ['index.html'],
             network: async () => { await held[which]; return fakeResponse(version); },
         });
-        const oldWorker = workerOf('1.3.1', 'old');
+        const oldWorker = workerOf('1.3.1', 'old', oldRegistration);
         registration.active = oldWorker.serviceWorker;
+        oldRegistration.active = oldWorker.serviceWorker;
         await install(oldWorker);
-        const newWorker = workerOf('1.3.2', 'new');
+        const newWorker = workerOf('1.3.2', 'new', registration);
         await install(newWorker);
         oldWorker.messages.length = 0;
         return { store, registration, held, oldWorker, newWorker };
@@ -862,9 +865,9 @@ describe('service worker instances of one install during an upgrade', () => {
             assert.deepEqual(answers(oldWorker), [[false, 'old-tab']]);
         });
 
-        // The old worker can't tell it was replaced when the two share a script URL and it has no object of its own
-        const canTell = !(options.bareUrl && !options.serviceWorkerObject);
-        test(`an old worker's Update Now that ends during the new worker's fill ${canTell ? 'leaves the new cache' : 'deletes the new cache, and the new worker\'s fill then keeps the old one'}, ${label}`, async () => {
+        // Where the old worker can't tell it was replaced (the two share a script URL and it has no object of its own),
+        // its fill deletes the new worker's cache, and the new worker's activation fill fills it once more
+        test(`an old worker's Update Now that ends during the new worker's fill leaves the new cache, ${label}`, async () => {
             const { store, registration, held, oldWorker, newWorker } = await twoWorkers(options);
             const oldAssets = hold();
             const newAssets = hold();
@@ -884,14 +887,57 @@ describe('service worker instances of one install during an upgrade', () => {
             newAssets.release();
             await Promise.all(pending);
             await settle();
-            if (canTell) {
-                assert.deepEqual(cacheSizes(newWorker), { [NEW_CACHE]: 1 });
-                assert.equal(store.get(NEW_CACHE).get(ORIGIN + 'index.html').body, '1.3.2');
-            } else {
-                // A fill whose cache was deleted under it clears nothing, so the old version's offline copy stays
-                assert.deepEqual(cacheSizes(newWorker), { [OLD_CACHE]: 1 });
-                assert.equal(store.get(OLD_CACHE).get(ORIGIN + 'index.html').body, '1.3.1');
-            }
+            assert.deepEqual(cacheSizes(newWorker), { [NEW_CACHE]: 1 });
+            assert.equal(store.get(NEW_CACHE).get(ORIGIN + 'index.html').body, '1.3.2');
+        });
+
+        test(`an old worker that never learns it was replaced, ending its Update Now during the new worker's fill, leaves the new cache, ${label}`, async () => {
+            // Its cleanup deletes the cache the new worker fills, and that activation fill fills it once more
+            const { store, registration, held, oldWorker, newWorker } = await twoWorkers(options, { staleActive: true });
+            const oldAssets = hold();
+            const newAssets = hold();
+            held.old = oldAssets.promise;
+            held.new = newAssets.promise;
+            const update = oldWorker.listeners.message({ data: { type: 'PERFORM_UPDATE', requestId: 'old-tab' } });
+            await assetRequested(oldWorker);
+            registration.active = newWorker.serviceWorker;
+            const pending = [];
+            newWorker.listeners.activate({ waitUntil(promise) { pending.push(promise); } });
+            await assetRequested(newWorker);
+            oldAssets.release();
+            await update;
+            newAssets.release();
+            await Promise.all(pending);
+            await settle();
+            assert.deepEqual(cacheSizes(newWorker), { [NEW_CACHE]: 1 });
+            assert.equal(store.get(NEW_CACHE).get(ORIGIN + 'index.html').body, '1.3.2');
+        });
+
+        test(`an old worker's cleanup that deletes the new cache after the new worker's fill checked it leaves the new cache, ${label}`, async () => {
+            // The new worker's fill has filled its cache and waits on Cache Storage to clear the older ones; meanwhile
+            // the old worker's Update Now ends, and one that can't tell it was replaced deletes the new cache
+            const { store, registration, held, oldWorker, newWorker } = await twoWorkers(options);
+            const oldAssets = hold();
+            const newAssets = hold();
+            const newKeys = hold();
+            held.old = oldAssets.promise;
+            held.new = newAssets.promise;
+            const update = oldWorker.listeners.message({ data: { type: 'PERFORM_UPDATE', requestId: 'old-tab' } });
+            await assetRequested(oldWorker);
+            registration.active = newWorker.serviceWorker;
+            const pending = [];
+            newWorker.listeners.activate({ waitUntil(promise) { pending.push(promise); } });
+            await assetRequested(newWorker);
+            newWorker.cacheStorage.nextKeysHeld = newKeys.promise;
+            newAssets.release();
+            for (let i = 0; i < 10; i++) await settle();
+            oldAssets.release();
+            await update;
+            newKeys.release();
+            await Promise.all(pending);
+            await settle();
+            assert.deepEqual(cacheSizes(newWorker), { [NEW_CACHE]: 1 });
+            assert.equal(store.get(NEW_CACHE).get(ORIGIN + 'index.html').body, '1.3.2');
         });
 
         // With one worker, the active one, every fill clears the older caches as before
@@ -922,4 +968,51 @@ describe('service worker instances of one install during an upgrade', () => {
             });
         }
     }
+
+    const manifestRequests = (worker) => worker.fetchCalls.filter((url) => url.endsWith('asset-manifest.json')).length;
+
+    test('an activation fill that fails for the network is not tried again', async () => {
+        const worker = loadWorker({ version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_/_V1.3.0'], manifestStatus: 500 });
+        await activate(worker);
+        assert.equal(manifestRequests(worker), 1);
+        assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_/_V1.3.0': 0 });
+    });
+
+    test('an activation fill that loses its cache fills it once more and clears the older cache, even before the registration names the worker', async () => {
+        const assets = hold();
+        const worker = loadWorker({
+            version: '1.3.1', registration: { active: null }, cacheNames: ['DUMBTERM_CACHE_/_V1.3.0'], manifest: ['index.html'],
+            network: async () => { await assets.promise; return fakeResponse('1.3.1'); },
+        });
+        const pending = [];
+        worker.listeners.activate({ waitUntil(promise) { pending.push(promise); } });
+        await assetRequested(worker);
+        worker.store.delete('DUMBTERM_CACHE_/_V1.3.1');
+        assets.release();
+        await Promise.all(pending);
+        await settle();
+        assert.equal(manifestRequests(worker), 2);
+        assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_/_V1.3.1': 1 });
+    });
+
+    test('an activation fill whose cache is deleted after a page named another version is not tried again', async () => {
+        // A worker registered without a release version fills 1.3.3; a page running 1.3.2 sends its version, and
+        // then the cache the fill writes to is deleted. Filling again would fill the page's version, not the one the
+        // activation started, with whatever the server now sends.
+        const assets = hold();
+        const worker = await installUnversioned('1.3.3', {
+            cacheNames: ['DUMBTERM_CACHE_/_V1.3.2'], manifest: ['index.html'],
+            network: async () => { await assets.promise; return fakeResponse('1.3.3'); },
+        });
+        const pending = [];
+        worker.listeners.activate({ waitUntil(promise) { pending.push(promise); } });
+        await assetRequested(worker);
+        await worker.listeners.message({ data: { type: 'SET_VERSION', version: '1.3.2' } });
+        worker.store.delete('DUMBTERM_CACHE_/_V1.3.3');
+        assets.release();
+        await Promise.all(pending);
+        await settle();
+        assert.equal(manifestRequests(worker), 1);
+        assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_/_V1.3.2': 0 });
+    });
 });
