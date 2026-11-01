@@ -1458,10 +1458,10 @@ export default class TerminalManager {
                             const tabRow = mark?.tab && !mark.tab.isDisposed ? mark.tab.line : null;
                             const below = !!mark?.below && !mark.marker.isDisposed;
                             let lineStart = cursorRow;
-                            while (below && (wrapped(lineStart) || (lineStart >= markedRow && reachesEnd(lineStart)))) {
+                            while (below && lineStart >= markedRow && (wrapped(lineStart) || reachesEnd(lineStart))) {
                                 lineStart--;
                             }
-                            const promptStart = below && lineStart < markedRow ? Math.min(markedRow - 1, cursorRow)
+                            const promptStart = below && lineStart < markedRow ? lineStart
                                 : cursorRow - markedRow <= PROMPT_MAX_ROWS_BELOW_MARK ? Math.min(markedRow, cursorRow)
                                 : typedOnPromptRow(buffer, wrapped, markedRow, cursorRow, below)
                                     ?? redrawnPromptRow(buffer, wrapped, markedRow, cursorRow, tabRow) ?? cursorRow;
