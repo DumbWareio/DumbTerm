@@ -154,18 +154,18 @@ function redrawnPromptRow(buffer, wrapped, markedRow, cursorRow, tabRow) {
 // an app that left bracketed paste on and printed, from its first row, a line running past four rows, or a blank row
 // and one line and then such a line, with the cursor at its end, reads as such a command, so its output from the first
 // row on is left out, as does one that turned bracketed paste on away from the start of a row and then printed one line
-// and then such a line (or ran on its row's line past four rows, see saveSessionState); so does one that printed a
-// blank row, such a line and then a short line, with the cursor on the short one (the long line reads as the top line
-// of a prompt like Starship's, the short one as its command), as it did before the rows the cursor moved up over were
-// recorded, and so does one that moved the cursor up over such a line and back down with newlines, each row it moved up
-// over still starting like what it held, and the row above each holding just what it held, or, on the row it last moved
-// up onto with the cursor left there, holding just what an erase past the first column left of it, as readline's
-// Backspace across the wrap leaves it. So is a background job's text printed with no final newline at a one-line
-// prompt, which the command typed after it runs on from as one line, and a job's line under a blank marked row that is
-// no Starship prompt's: output with no final newline puts the mark on the row below, which may stay blank. So is a
-// job's output that starts with a newline, printed at a plain prompt after output with no final newline (its first line
-// lands on the marked row), and a notice line that lands on the marked row below a zsh prompt, with a command typed
-// under it. Within four rows of the mark the save leaves all of these out already
+// and then such a line (one that ran its row's line on onto the next row is left out from two rows on, see
+// saveSessionState); so does one that printed a blank row, such a line and then a short line, with the cursor on the
+// short one (the long line reads as the top line of a prompt like Starship's, the short one as its command), as it did
+// before the rows the cursor moved up over were recorded, and so does one that moved the cursor up over such a line and
+// back down with newlines, each row it moved up over still starting like what it held, and the row above each holding
+// just what it held, or, on the row it last moved up onto with the cursor left there, holding just what an erase past
+// the first column left of it, as readline's Backspace across the wrap leaves it. So is a background job's text printed
+// with no final newline at a one-line prompt, which the command typed after it runs on from as one line, and a job's
+// line under a blank marked row that is no Starship prompt's: output with no final newline puts the mark on the row
+// below, which may stay blank. So is a job's output that starts with a newline, printed at a plain prompt after output
+// with no final newline (its first line lands on the marked row), and a notice line that lands on the marked row below
+// a zsh prompt, with a command typed under it. Within four rows of the mark the save leaves all of these out already
 function typedOnPromptRow(buffer, wrapped, markedRow, cursorRow, below) {
     const blank = (row) => (buffer.getLine(row)?.translateToString(true) ?? '') === '';
     const first = blank(markedRow) ? markedRow + 1 : markedRow;
@@ -839,14 +839,15 @@ export default class TerminalManager {
             promptMarkers.set(terminal, { ...mark, claims: [] });
         };
 
-        // Shells turn bracketed paste on (CSI ? 2004 h) as their line editor takes over: bash before it prints
-        // the prompt, zsh after. Mark that row so a saved session can leave the prompt out, or the row below
-        // when the cursor is not at the start of a line (below): the row holds output with no final newline, and a
-        // prompt that starts with a newline (Starship's) begins below it. The row may hold the prompt too (zsh's, or
-        // bash's printed after that output), and a command typed after it runs on onto the marked row (see
-        // saveSessionState). Past the last column (output that filled its row, the wrap still pending) the prompt
-        // starts on the row below, so that row is marked but the mark is not below. Returns false so xterm.js still
-        // sets the mode. In the alternate buffer the mode is an editor's, not the shell's
+        // Shells turn bracketed paste on (CSI ? 2004 h) as their line editor takes over: bash before it prints the
+        // prompt, zsh after. Mark that row so a saved session can leave the prompt out, or the row below when the
+        // cursor is not at the start of a line (below): the row holds output with no final newline, and a prompt that
+        // starts with a newline (Starship's) begins below it. The row may hold the prompt too (zsh's, or bash's printed
+        // after that output), and a command typed after it runs on onto the marked row (zsh draws it past the margin
+        // itself, so the terminal does not mark that row as wrapped: see saveSessionState). Past the last column
+        // (output that filled its row, the wrap still pending) the prompt starts on the row below, so that row is
+        // marked but the mark is not below. Returns false so xterm.js still sets the mode. In the alternate buffer the
+        // mode is an editor's, not the shell's
         terminal.parser.registerCsiHandler({ prefix: '?', final: 'h' }, (params) => {
             const buffer = terminal.buffer.active;
             if (params.includes(2004) && buffer.type === 'normal') {

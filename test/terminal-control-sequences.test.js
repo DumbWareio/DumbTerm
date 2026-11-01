@@ -1969,10 +1969,19 @@ describe('terminal control sequences', () => {
 
     test('a saved session leaves out the output of an app that turned bracketed paste on partway through the first row of a line it ran on past four rows', async () => {
         // Known limit: the mark goes on the row below, and the line runs on onto it from the row above, as a command
-        // typed at a zsh prompt does, so the save stops above the app's line. Within four rows of the mark the save
-        // left out all of that line but its first row before. Pinned so that changing it is deliberate
+        // typed at a zsh prompt does, so the save stops above the app's line. Before, the save kept the line up to the
+        // cursor's row: 640 characters, 8 of its 9 rows. Pinned so that changing it is deliberate
         const saves = recordSavedSessions();
         await receiveOutput(`$ app\r\n${'x'.repeat(50)}\x1b[?2004h${'x'.repeat(600)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '']);
+    });
+
+    test('a saved session leaves out the output of an app that turned bracketed paste on partway through the first row of a line it ran on onto one more row', async () => {
+        // Known limit: the same as above, however few rows the line runs onto. Before, the save kept the line's first
+        // row. Pinned so that changing it is deliberate
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n${'x'.repeat(50)}\x1b[?2004h${'x'.repeat(60)}`);
 
         assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '']);
     });
