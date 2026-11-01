@@ -1780,6 +1780,16 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)), ['root@box:/app# make', '#'.repeat(80), '']);
     });
 
+    test('a saved session keeps the first row of a progress line that wrapped, when bash prints its prompt over the start of the row the line wrapped onto, with a long half-typed command', async () => {
+        // The mark is at the start of the cursor's row, not below it, so the line starts on the marked row: the prompt
+        // printed over it there, the terminal having wrapped it there from the progress line's first row
+        const saves = recordSavedSessions();
+        const prompt = '\x1b[?2004hroot@box:/app# ';
+        await receiveOutput(`${prompt}printf '%0100d\\r' 0\r\n\x1b[?2004l\r${'0'.repeat(100)}\r${prompt}${typedCommand(400)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ["root@box:/app# printf '%0100d\\r' 0", '0'.repeat(80), '']);
+    });
+
     test('a saved session keeps output with no final newline above a one-line prompt after a blank row', async () => {
         // The prompt's newline ends the output's row, and the cursor's line starts on the marked row
         const saves = recordSavedSessions();
@@ -2103,6 +2113,17 @@ describe('terminal control sequences', () => {
         await receiveOutput(`$ app\r\nout\x1b[?2004h\r\n${`${'y'.repeat(80)}\r\n`.repeat(6)}> type`);
 
         assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'out', ...Array(6).fill('y'.repeat(80)), '']);
+    });
+
+    test('a saved session leaves out the output of an app that went back to the start of a row its line wrapped onto, turned bracketed paste on there and wrote a line running past four rows', async () => {
+        // Known limit: the line starts on the marked row, as a prompt printed over a progress line's wrapped row does,
+        // so the save stops at the marked row. Before, the save kept the rows above the cursor's: the first line's
+        // first row and 400 of the 450 characters written over its wrapped one, 480 characters. Pinned so that
+        // changing it is deliberate
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n${'x'.repeat(100)}\r\x1b[?2004h${'y'.repeat(450)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'x'.repeat(80), '']);
     });
 
     test('a saved session leaves out the output of an app that turned bracketed paste on away from the start of a row, then printed a line and a line running past four rows', async () => {
