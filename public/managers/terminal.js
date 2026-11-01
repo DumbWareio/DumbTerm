@@ -837,13 +837,16 @@ export default class TerminalManager {
 
         // Shells turn bracketed paste on (CSI ? 2004 h) as their line editor takes over: bash before it prints
         // the prompt, zsh after. Mark that row so a saved session can leave the prompt out, or the row below
-        // when the cursor is not at the start of a line: the row holds output with no final newline, and a
-        // prompt that starts with a newline (Starship's) begins below it. Returns false so xterm.js still sets
-        // the mode. In the alternate buffer the mode is an editor's, not the shell's
+        // when the cursor is not at the start of a line (below): the row holds output with no final newline, and a
+        // prompt that starts with a newline (Starship's) begins below it. The row may hold the prompt too (zsh's, or
+        // bash's printed after that output), and a command typed after it wraps onto the marked row (see
+        // saveSessionState). Returns false so xterm.js still sets the mode. In the alternate buffer the mode is an
+        // editor's, not the shell's
         terminal.parser.registerCsiHandler({ prefix: '?', final: 'h' }, (params) => {
             const buffer = terminal.buffer.active;
             if (params.includes(2004) && buffer.type === 'normal') {
-                setMark({ marker: terminal.registerMarker(buffer.cursorX === 0 ? 0 : 1), rowsBelow: 0 });
+                const below = buffer.cursorX !== 0;
+                setMark({ marker: terminal.registerMarker(below ? 1 : 0), rowsBelow: 0, below });
             }
             return false;
         });
@@ -1405,9 +1408,12 @@ export default class TerminalManager {
                             // the prompt's, unless a command typed at the prompt runs on that far down or the prompt
                             // was redrawn below. A line runs on across the rows the terminal marks as wrapped and
                             // those the cursor moved up over at the prompt (see initTerminal), and the last Tab typed
-                            // at the prompt marks the row it was typed on. Rows above the prompt are all kept, so no
-                            // prompt patterns here. Known limit: zsh turns it on after the prompt, so the upper lines
-                            // of a multi-line zsh prompt stay in the save
+                            // at the prompt marks the row it was typed on. With the mark on the row below the cursor,
+                            // a line that runs on onto it from the row above, however far down, is the prompt's: zsh's
+                            // with the command typed after it, or bash's printed after output with no final newline
+                            // (which goes with it, as a save cuts whole rows). Rows above the prompt are all kept, so
+                            // no prompt patterns here. Known limit: zsh turns it on after the prompt, so the upper
+                            // lines of a multi-line zsh prompt stay in the save
                             const cursorRow = buffer.baseY + buffer.cursorY;
                             const mark = promptMarkers.get(terminal);
                             const markedRow = !mark ? cursorRow
@@ -1437,8 +1443,11 @@ export default class TerminalManager {
                             const wrapped = (row) => !!buffer.getLine(row)?.isWrapped
                                 || (claimed.has(row) && holds(row) && reachesEnd(row));
                             const tabRow = mark?.tab && !mark.tab.isDisposed ? mark.tab.line : null;
-                            const promptStart = cursorRow - markedRow <= PROMPT_MAX_ROWS_BELOW_MARK
-                                ? Math.min(markedRow, cursorRow)
+                            const below = !!mark?.below && !mark.marker.isDisposed;
+                            let lineStart = cursorRow;
+                            while (below && wrapped(lineStart)) lineStart--;
+                            const promptStart = below && lineStart === markedRow - 1 ? lineStart
+                                : cursorRow - markedRow <= PROMPT_MAX_ROWS_BELOW_MARK ? Math.min(markedRow, cursorRow)
                                 : typedOnPromptRow(buffer, wrapped, markedRow, cursorRow)
                                     ?? redrawnPromptRow(buffer, wrapped, markedRow, cursorRow, tabRow) ?? cursorRow;
                             serializedContent = promptStart > 0
