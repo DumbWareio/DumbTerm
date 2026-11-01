@@ -188,8 +188,8 @@ function isStaleCache(key, cacheName) {
     return key !== cacheName && (isOwnCache(key) || isLegacyCache(key));
 }
 
-// Why a fill failed when its cache turned out deleted
-const CACHE_LOST = 'The cache was deleted while it was being filled';
+// Why a fill failed when its cache turned out deleted, or made again without its assets
+const CACHE_LOST = 'The cache was deleted, or made again without its assets, while it was being filled';
 
 /**
  * Whether a cache still holds every asset a fill put in it. A cache deleted while a fill wrote to it took what the
@@ -342,7 +342,8 @@ async function preload({ activating = false } = {}) {
  * caches without asking isActiveWorker: a browser can name the worker as the registration's active one late
  * @param {boolean} [options.refilling=false] - True for the one fill a lost fill makes again (see below)
  * @returns {Promise<string>} 'filled' when the fill's cache still holds its assets once the fill is done, 'lost' when
- * it was deleted while the fill filled it or cleared the older ones, 'failed' when the fill failed otherwise
+ * it was deleted, or made again without its assets, while the fill filled it or cleared the older ones, 'failed' when
+ * the fill failed otherwise
  */
 async function installCache(isFirstInstall = false, requestId, { activating = false, refilling = false } = {}) {
     // In a worker registered without a release version, a page's SET_VERSION can change CACHE_VERSION and CACHE_NAME
