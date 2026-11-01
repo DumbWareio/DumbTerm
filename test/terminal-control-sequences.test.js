@@ -1768,6 +1768,33 @@ describe('terminal control sequences', () => {
         });
     }
 
+    test('a saved session keeps the first row of a progress line that wrapped, when bash prints its prompt over the start of the row the line wrapped onto', async () => {
+        // The progress line goes back to the start of its row with no final newline, so the mark is at the cursor's
+        // row, not below it: the line running on onto it from the row above is output, not the prompt's
+        const saves = recordSavedSessions();
+        const prompt = '\x1b[?2004hroot@box:/app# ';
+        await receiveOutput(`${prompt}make\r\n\x1b[?2004l\r${'#'.repeat(100)}\r${prompt}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['root@box:/app# make', '#'.repeat(80), '']);
+    });
+
+    test('a saved session keeps output with no final newline above a one-line prompt after a blank row', async () => {
+        // The prompt's newline ends the output's row, and the cursor's line starts on the marked row
+        const saves = recordSavedSessions();
+        const prompt = '\x1b[?2004h\r\n$ ';
+        await receiveOutput(`${prompt}printf hello\r\n\x1b[?2004l\rhello${prompt}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['', '$ printf hello', 'hello', '']);
+    });
+
+    test('a saved session leaves out the rows from the cursor\'s down when an app moved it up above the row it turned bracketed paste on in, away from the start of the row', async () => {
+        // The prompt starts no lower than the cursor's row, as before
+        const saves = recordSavedSessions();
+        await receiveOutput('$ app\r\nline 1\r\nline 2\r\nstatus\x1b[?2004h\x1b[2A');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '']);
+    });
+
     test('a saved session leaves out a zsh prompt with a pasted command six rows long', async () => {
         // zsh draws pasted text straight on, in reverse video, and the terminal wraps it
         const saves = recordSavedSessions();
