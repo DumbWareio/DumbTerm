@@ -1795,6 +1795,45 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '']);
     });
 
+    test('a saved session leaves out a plain prompt printed after output that filled its row with no final newline, with a long half-typed command', async () => {
+        // The prompt starts on the marked row, the terminal having wrapped it there from the output's
+        const saves = recordSavedSessions();
+        const prompt = '\x1b[?2004hroot@box:/app# ';
+        await receiveOutput(`${prompt}printf '%080d' 0\r\n\x1b[?2004l\r${'0'.repeat(80)}${prompt}${typedCommand(400)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ["root@box:/app# printf '%080d' 0", '0'.repeat(80), '']);
+    });
+
+    test('a saved session leaves out a plain prompt printed after output that filled its row with no final newline, with a long half-typed command after Ctrl-A and Ctrl-E', async () => {
+        const saves = recordSavedSessions();
+        const prompt = '\x1b[?2004hroot@box:/app# ';
+        await receiveOutput(`${prompt}printf '%080d' 0\r\n\x1b[?2004l\r${'0'.repeat(80)}${prompt}${typedCommand(400)}`);
+        await receiveOutput(`${'\x1b[A'.repeat(5)}${'\b'.repeat(5)}`);
+        await receiveOutput(ctrlE(5, 20));
+
+        assert.deepEqual(savedLines(saves.at(-1)), ["root@box:/app# printf '%080d' 0", '0'.repeat(80), '']);
+    });
+
+    test('a saved session leaves out a plain prompt printed after output that filled its row with no final newline, with a long half-typed command at the bottom of the screen', async () => {
+        const saves = recordSavedSessions();
+        const prompt = '\x1b[?2004hroot@box:/app# ';
+        await receiveOutput(`${SCREENFULS}${prompt}printf '%080d' 0\r\n\x1b[?2004l\r${'0'.repeat(80)}${prompt}${typedCommand(400)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(-3), ["root@box:/app# printf '%080d' 0", '0'.repeat(80), '']);
+    });
+
+    for (const [where, before] of [['', ''], [' at the bottom of the screen', SCREENFULS]]) {
+        test(`a saved session leaves out a Starship prompt after output that filled its row with no final newline, with a long half-typed command${where}`, async () => {
+            // The output's row takes the place of the prompt's blank first row, as after other output with no final
+            // newline
+            const saves = recordSavedSessions();
+            await receiveOutput(`${before}${STARSHIP_PROMPT}printf '%080d' 0\r\n\x1b[?2004l\r${'0'.repeat(80)}`);
+            await receiveOutput(`${STARSHIP_PROMPT}${typedCommand(400)}`);
+
+            assert.deepEqual(savedLines(saves.at(-1)).slice(-4), [plain(STARSHIP_TOP_LINE), "❯ printf '%080d' 0", '0'.repeat(80), '']);
+        });
+    }
+
     test('a saved session leaves out a zsh prompt with a pasted command six rows long', async () => {
         // zsh draws pasted text straight on, in reverse video, and the terminal wraps it
         const saves = recordSavedSessions();
@@ -2022,6 +2061,16 @@ describe('terminal control sequences', () => {
         await receiveOutput(`$ app\r\n${'x'.repeat(50)}\x1b[?2004h${'x'.repeat(30)}\r\n${`${'y'.repeat(80)}\r\n`.repeat(3)}`);
 
         assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '']);
+    });
+
+    test('a saved session leaves out the output of an app that turned bracketed paste on with the wrap still pending, then ran a line on onto the next row past four rows', async () => {
+        // Known limit: the line starts on the marked row, which the terminal wrapped it onto, as a prompt printed after
+        // output that filled its row does, so the save stops at the marked row. Before, the save kept the line's rows
+        // above the cursor's. Pinned so that changing it is deliberate
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n${'y'.repeat(80)}\x1b[?2004h${'x'.repeat(450)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'y'.repeat(80), '']);
     });
 
     test('a saved session leaves out the output of an app that turned bracketed paste on away from the start of a row, then printed a line and a line running past four rows', async () => {
