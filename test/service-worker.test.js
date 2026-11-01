@@ -21,16 +21,41 @@ function fakeResponse(body, { status = 200, type = 'basic', redirected = false }
 // makes config.js fail.
 // `server.manifest` is what assets/asset-manifest.json lists, and `server.manifestStatus` its HTTP status;
 // tests can change either between steps, and hold the manifest's answer back by setting `server.manifestHeld`
-// to a promise. Setting `cacheStorage.nextKeysHeld` to a promise holds back the answer of the next caches.keys() only.
+// to a promise. Setting `cacheStorage.nextKeysHeld` to a promise holds back the answer of the next caches.keys() only,
+// and setting `cacheStorage.matchHolds[n]` to one holds back the nth caches.match() (they count in `matchCalls`), or
+// makes it reject when the promise does.
 // Messages the worker posts to its one page land in `messages`.
-function loadWorker({ version = '1.3.0', scope = '/', store = new Map(), config = {}, network = async () => fakeResponse('network'), cacheNames = [], manifest = [], manifestStatus = 200 } = {}) {
+// `serviceWorker` is this worker as the browser knows it. `registration` is the install's registration as the browser
+// keeps it, which two workers of one install share: its `active` is the worker that last activated, and by default
+// this one. `bareUrl` registers the worker as plain service-worker.js, as pages did before they added ?v=<version>, so
+// that every version has the same script URL. `serviceWorkerObject` gives the worker `self.serviceWorker`, as Chromium
+// and Safari do and Firefox does not. A worker's `state` starts as 'activated'; every object for it shows its state.
+// With `identicalObjects` false, the registration's attributes hold another object for a worker than
+// `self.serviceWorker` is, as in a browser that broke the spec's one object per worker. With `startsActive`, the
+// `registration` passed names this worker as its active one before its script runs, as when the browser starts the
+// active worker to hand it an event.
+function loadWorker({ version = '1.3.0', scope = '/', store = new Map(), config = {}, network = async () => fakeResponse('network'), cacheNames = [], manifest = [], manifestStatus = 200, registration, bareUrl = false, serviceWorkerObject = false, identicalObjects = true, startsActive = false } = {}) {
     cacheNames.forEach((name) => store.set(name, new Map()));
     const scopeUrl = new URL(scope, ORIGIN).href;
+    const serviceWorker = { scriptURL: `${scopeUrl}service-worker.js${bareUrl ? '' : `?v=${version}`}`, state: 'activated' };
+    const browserRegistration = registration ?? { active: serviceWorker };
+    if (startsActive) browserRegistration.active = serviceWorker;
+    // Within one worker's realm there is one ServiceWorker object per worker, so the worker's own object is the one
+    // its registration's active attribute holds while it is the active worker
+    const objectMap = () => {
+        const objects = new Map();
+        return (worker) => {
+            if (!objects.has(worker)) objects.set(worker, { scriptURL: worker.scriptURL, get state() { return worker.state; } });
+            return objects.get(worker);
+        };
+    };
+    const objectFor = objectMap();
+    const registrationObjectFor = identicalObjects ? objectFor : objectMap();
     const listeners = {};
     const fetchCalls = [];
     const messages = [];
     const server = { manifest, manifestStatus };
-    const cacheStorage = { nextKeysHeld: undefined };
+    const cacheStorage = { nextKeysHeld: undefined, matchCalls: 0, matchHolds: {} };
     const fetch = async (request) => {
         const url = typeof request === 'string' ? request : request.url;
         fetchCalls.push(url);
@@ -38,6 +63,10 @@ function loadWorker({ version = '1.3.0', scope = '/', store = new Map(), config 
             return config ? fakeResponse(`window.appConfig = ${JSON.stringify({ version, ...config })};`) : fakeResponse('error', { status: 500 });
         }
         if (url.endsWith('asset-manifest.json')) {
+            // A fill that never stops filling again would hold the suite up for good: fail it instead
+            if (fetchCalls.filter((call) => call.endsWith('asset-manifest.json')).length > 20) {
+                throw new Error('More than 20 manifest requests from one worker: a fill that does not stop');
+            }
             await server.manifestHeld;
             return fakeResponse(JSON.stringify(server.manifest), { status: server.manifestStatus });
         }
@@ -48,6 +77,7 @@ function loadWorker({ version = '1.3.0', scope = '/', store = new Map(), config 
         const entries = store.get(name);
         return {
             put: async (request, response) => { entries.set(request.url, response); },
+            match: async (request) => entries.get(typeof request === 'string' ? request : request.url),
             // As in Chromium: a URL listed twice rejects the whole call, and so does any failed response,
             // in which case nothing is stored
             addAll: async (urls) => {
@@ -72,23 +102,29 @@ function loadWorker({ version = '1.3.0', scope = '/', store = new Map(), config 
                 await held;
                 return [...store.keys()];
             },
+            has: async (name) => store.has(name),
             delete: async (name) => store.delete(name),
-            match: async (request) => {
+            // As in the browser: with a cacheName it looks in that cache alone, and makes no cache that isn't there
+            match: async (request, { cacheName } = {}) => {
+                const call = ++cacheStorage.matchCalls;
+                await cacheStorage.matchHolds[call];
                 const url = typeof request === 'string' ? request : request.url;
-                for (const entries of store.values()) if (entries.has(url)) return entries.get(url);
+                const searched = cacheName === undefined ? [...store.values()] : [store.get(cacheName)].filter(Boolean);
+                for (const entries of searched) if (entries.has(url)) return entries.get(url);
                 return undefined;
             },
         },
         self: {
-            location: { href: `${scopeUrl}service-worker.js?v=${version}` },
-            registration: { scope: scopeUrl },
+            location: { href: serviceWorker.scriptURL },
+            registration: { scope: scopeUrl, get active() { return browserRegistration.active && registrationObjectFor(browserRegistration.active); } },
+            ...(serviceWorkerObject && { serviceWorker: objectFor(serviceWorker) }),
             addEventListener: (type, fn) => { listeners[type] = fn; },
             skipWaiting: async () => {},
             clients: { claim: async () => {}, matchAll: async () => [{ postMessage: (message) => messages.push(message) }] },
         },
     };
     vm.runInNewContext(WORKER_SOURCE, sandbox);
-    return { listeners, store, fetchCalls, messages, server, cacheStorage };
+    return { listeners, store, fetchCalls, messages, server, cacheStorage, serviceWorker };
 }
 
 // The worker posts some messages from promise callbacks it does not wait for; let those run
@@ -590,6 +626,18 @@ describe('service worker Update Now', () => {
         assert.deepEqual(failures(worker).map((message) => message.requestId).sort(), ['tab-1', 'tab-2']);
     });
 
+    test('tells the page it failed when Cache Storage fails its last check', async () => {
+        const worker = loadWorker({ version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_/_V1.3.0'], manifest: ['index.html'] });
+        // Its check before clearing looks its one asset up; the lookup after that is its last check. A thenable
+        // rejects only once awaited, so no rejection goes unhandled before the worker gets to it
+        worker.cacheStorage.matchHolds[2] = { then: (resolve, reject) => reject(new Error('Cache Storage is unavailable')) };
+        await worker.listeners.message({ data: { type: 'PERFORM_UPDATE', requestId: 'tab-1' } });
+        await settle();
+        assert.deepEqual(worker.messages.filter((message) => message.type === 'UPDATE_COMPLETE').map((message) => [message.success, message.requestId]), [[false, 'tab-1']]);
+        assert.match(failures(worker)[0].error, /Cache Storage is unavailable/);
+        assert.equal(worker.fetchCalls.filter((url) => url.endsWith('asset-manifest.json')).length, 1);
+    });
+
     test('works after the same worker already filled its cache at activation', async () => {
         const worker = loadWorker({ version: '1.3.1', manifest: ['index.html', 'index.js'] });
         await activate(worker);
@@ -637,6 +685,27 @@ describe('service worker versions a page sends', () => {
         await settle();
         assert.equal(worker.fetchCalls.filter((url) => url.endsWith('asset-manifest.json')).length, 1);
         assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_/_V1.3.3': 2 });
+    });
+
+    test('a first fill that a page\'s version starts and whose cache goes after its check is not filled again', async () => {
+        // Registered without a release version and unable to read config.js, the worker takes the page's version and,
+        // with no cache yet, fills it; the cache is deleted while the fill waits on Cache Storage to clear older ones
+        const worker = loadWorker({ version: '1730000000000', config: null, manifest: ['index.html'] });
+        let releaseManifest;
+        let releaseKeys;
+        worker.server.manifestHeld = new Promise((resolve) => { releaseManifest = resolve; });
+        const sent = worker.listeners.message({ data: { type: 'SET_VERSION', version: '1.3.2' } });
+        await manifestRequested(worker);
+        worker.cacheStorage.nextKeysHeld = new Promise((resolve) => { releaseKeys = resolve; });
+        releaseManifest();
+        for (let i = 0; i < 10; i++) await settle();
+        assert.deepEqual(cachedUrls(worker, 'DUMBTERM_CACHE_/_V1.3.2'), [ORIGIN + 'index.html']);
+        worker.store.delete('DUMBTERM_CACHE_/_V1.3.2');
+        releaseKeys();
+        await sent;
+        await settle();
+        assert.equal(worker.fetchCalls.filter((url) => url.endsWith('asset-manifest.json')).length, 1);
+        assert.deepEqual(cacheSizes(worker), {});
     });
 
     for (const [label, version] of [['without a release version', '1730000000000'], ['with the default version 1.0.0', '1.0.0'], ['with something that is no version', 'garbage']]) {
@@ -777,5 +846,545 @@ describe('service worker caches on an origin shared by two installs', () => {
         const worker = loadWorker({ scope: '/a/', version: '1730000000000', config: { version: '1.3.1', cacheName: 'DUMBTERM_CACHE_V1.3.1' } });
         const answer = await getVersion(worker);
         assert.deepEqual([answer.newVersion, answer.cacheName], ['1.3.1', 'DUMBTERM_CACHE_/a/_V1.3.1']);
+    });
+});
+
+// While a new version's worker activates, the worker it replaces can still be filling a cache for an Update Now. The
+// two run in sandboxes of their own and share the origin's Cache Storage and the install's registration, whose active
+// worker becomes the new one before the new one's activate event, as the browser does it
+describe('service worker instances of one install during an upgrade', () => {
+    const OLD_CACHE = 'DUMBTERM_CACHE_/_V1.3.1';
+    const NEW_CACHE = 'DUMBTERM_CACHE_/_V1.3.2';
+    const answers = (worker) => worker.messages.filter((message) => message.type === 'UPDATE_COMPLETE')
+        .map((message) => [message.success, message.requestId]);
+    const manifestRequests = (worker) => worker.fetchCalls.filter((url) => url.endsWith('asset-manifest.json')).length;
+
+    // Wait until the worker has asked the network for an asset, which it does once its cache is open
+    async function assetRequested(worker) {
+        const requested = () => worker.fetchCalls.includes(ORIGIN + 'index.html');
+        for (let i = 0; i < 100 && !requested(); i++) await settle();
+        assert.ok(requested(), 'the worker never asked for its assets');
+    }
+
+    // The active worker of 1.3.1 with its offline copy, and the worker of 1.3.2 installed beside it. Each worker's
+    // requests for its asset wait on `held.old` or `held.new` while it is set to a promise; a page's requests don't.
+    // The old worker starts as the active one, as the browser starts it to hand it the Update Now; with
+    // `oldActivatesHere` it starts before the registration names it and activates in this run. `oldLearns` is what the
+    // old worker learns as the new one activates: 'both' that its registration names the new worker and that its own
+    // state is 'redundant', 'nothing', or only 'registration' or 'state'.
+    async function twoWorkers(options, { oldLearns = 'both', oldActivatesHere = false, manifest = ['index.html'] } = {}) {
+        const store = new Map([[OLD_CACHE, new Map([[ORIGIN + 'index.html', fakeResponse('1.3.1')]])]]);
+        const registration = { active: null };
+        const oldRegistration = ['both', 'registration'].includes(oldLearns) ? registration : { active: null };
+        const held = { old: undefined, new: undefined };
+        const workerOf = (version, which, workerRegistration, startsActive = false) => loadWorker({
+            ...options, version, store, registration: workerRegistration, startsActive, manifest,
+            network: async (request) => {
+                if (request === ORIGIN + 'index.html') await held[which];
+                return fakeResponse(version);
+            },
+        });
+        const oldWorker = workerOf('1.3.1', 'old', oldRegistration, !oldActivatesHere);
+        registration.active = oldWorker.serviceWorker;
+        oldRegistration.active = oldWorker.serviceWorker;
+        await install(oldWorker);
+        if (oldActivatesHere) await activate(oldWorker);
+        const newWorker = workerOf('1.3.2', 'new', registration);
+        await install(newWorker);
+        oldWorker.messages.length = 0;
+        // What the browser does as the new worker activates (Activate, in the spec): the old worker becomes redundant
+        // and the registration names the new one. The new worker's own state goes unread: its fills while it
+        // activates are the activate event's, which don't ask isActiveWorker
+        const activateNew = () => {
+            if (['both', 'state'].includes(oldLearns)) oldWorker.serviceWorker.state = 'redundant';
+            registration.active = newWorker.serviceWorker;
+            const pending = [];
+            newWorker.listeners.activate({ waitUntil(promise) { pending.push(promise); } });
+            return Promise.all(pending);
+        };
+        return { store, held, oldWorker, newWorker, activateNew };
+    }
+
+    const hold = () => {
+        let release;
+        const promise = new Promise((resolve) => { release = resolve; });
+        return { promise, release };
+    };
+
+    const BROWSERS = [
+        ['registered with their versions', {}],
+        ['registered with their versions, in a browser that gives a worker its own ServiceWorker object', { serviceWorkerObject: true }],
+        ['registered under one URL, in a browser that gives a worker its own ServiceWorker object', { bareUrl: true, serviceWorkerObject: true }],
+        ['registered under one URL, in a browser that gives a worker no ServiceWorker object', { bareUrl: true }],
+        ['registered under one URL, in a browser whose registration holds another object for a worker than its own', { bareUrl: true, serviceWorkerObject: true, identicalObjects: false }],
+    ];
+
+    for (const [label, options] of BROWSERS) {
+        // The old worker can't tell it was replaced when the two share a script URL and it has no object of its own.
+        // Where it can, it clears nothing and the new worker fills once; where it can't, its cleanup deletes the cache
+        // the new worker fills, and the new worker fills it once more.
+        const canTell = !(options.bareUrl && !options.serviceWorkerObject);
+        const newFills = canTell ? 1 : 2;
+        test(`an old worker's Update Now that ends after the new worker filled its cache reports failure and leaves the new cache, ${label}`, async () => {
+            // The new worker's fill deletes the old worker's cache while the old worker still writes to it
+            const { store, held, oldWorker, newWorker, activateNew } = await twoWorkers(options);
+            const oldAssets = hold();
+            held.old = oldAssets.promise;
+            const update = oldWorker.listeners.message({ data: { type: 'PERFORM_UPDATE', requestId: 'old-tab' } });
+            await assetRequested(oldWorker);
+            await activateNew();
+            await settle();
+            oldAssets.release();
+            await update;
+            await settle();
+            assert.deepEqual(cacheSizes(newWorker), { [NEW_CACHE]: 1 });
+            assert.equal(store.get(NEW_CACHE).get(ORIGIN + 'index.html').body, '1.3.2');
+            assert.deepEqual(answers(oldWorker), [[false, 'old-tab']]);
+            assert.equal(manifestRequests(newWorker), 1);
+        });
+
+        // Where the old worker can't tell it was replaced (the two share a script URL and it has no object of its own),
+        // its fill deletes the new worker's cache, and the new worker's activation fill fills it once more
+        test(`an old worker's Update Now that ends during the new worker's fill leaves the new cache, ${label}`, async () => {
+            const { store, held, oldWorker, newWorker, activateNew } = await twoWorkers(options);
+            const oldAssets = hold();
+            const newAssets = hold();
+            held.old = oldAssets.promise;
+            held.new = newAssets.promise;
+            const update = oldWorker.listeners.message({ data: { type: 'PERFORM_UPDATE', requestId: 'old-tab' } });
+            await assetRequested(oldWorker);
+            const activation = activateNew();
+            await assetRequested(newWorker);
+            oldAssets.release();
+            await update;
+            await settle();
+            // Its own cache was still there when its fill ended
+            assert.deepEqual(answers(oldWorker), [[true, 'old-tab']]);
+            newAssets.release();
+            await activation;
+            await settle();
+            assert.deepEqual(cacheSizes(newWorker), { [NEW_CACHE]: 1 });
+            assert.equal(store.get(NEW_CACHE).get(ORIGIN + 'index.html').body, '1.3.2');
+            assert.equal(manifestRequests(newWorker), newFills);
+        });
+
+        test(`an old worker that never learns it was replaced, ending its Update Now during the new worker's fill, leaves the new cache, ${label}`, async () => {
+            // Its cleanup deletes the cache the new worker fills, and that activation fill fills it once more
+            const { store, held, oldWorker, newWorker, activateNew } = await twoWorkers(options, { oldLearns: 'nothing' });
+            const oldAssets = hold();
+            const newAssets = hold();
+            held.old = oldAssets.promise;
+            held.new = newAssets.promise;
+            const update = oldWorker.listeners.message({ data: { type: 'PERFORM_UPDATE', requestId: 'old-tab' } });
+            await assetRequested(oldWorker);
+            const activation = activateNew();
+            await assetRequested(newWorker);
+            oldAssets.release();
+            await update;
+            newAssets.release();
+            await activation;
+            await settle();
+            assert.deepEqual(cacheSizes(newWorker), { [NEW_CACHE]: 1 });
+            assert.equal(store.get(NEW_CACHE).get(ORIGIN + 'index.html').body, '1.3.2');
+            assert.equal(manifestRequests(newWorker), 2);
+        });
+
+        test(`an old worker's cleanup that deletes the new cache after the new worker's fill checked it leaves the new cache, ${label}`, async () => {
+            // The new worker's fill has filled its cache and waits on Cache Storage to clear the older ones; meanwhile
+            // the old worker's Update Now ends, and one that can't tell it was replaced deletes the new cache
+            const { store, held, oldWorker, newWorker, activateNew } = await twoWorkers(options);
+            const oldAssets = hold();
+            const newAssets = hold();
+            const newKeys = hold();
+            held.old = oldAssets.promise;
+            held.new = newAssets.promise;
+            const update = oldWorker.listeners.message({ data: { type: 'PERFORM_UPDATE', requestId: 'old-tab' } });
+            await assetRequested(oldWorker);
+            const activation = activateNew();
+            await assetRequested(newWorker);
+            newWorker.cacheStorage.nextKeysHeld = newKeys.promise;
+            newAssets.release();
+            for (let i = 0; i < 10; i++) await settle();
+            oldAssets.release();
+            await update;
+            newKeys.release();
+            await activation;
+            await settle();
+            assert.deepEqual(cacheSizes(newWorker), { [NEW_CACHE]: 1 });
+            assert.equal(store.get(NEW_CACHE).get(ORIGIN + 'index.html').body, '1.3.2');
+            assert.equal(manifestRequests(newWorker), newFills);
+        });
+
+        test(`an old worker's cleanup that deletes the new cache after the new worker's fill checked it, which a page's request then makes again, leaves the new cache, ${label}`, async () => {
+            // As above, and while the new worker's fill waits on Cache Storage, a page's request to the new worker
+            // makes the deleted cache again, holding that response alone
+            const { store, held, oldWorker, newWorker, activateNew } = await twoWorkers(options);
+            const oldAssets = hold();
+            const newAssets = hold();
+            const newKeys = hold();
+            held.old = oldAssets.promise;
+            held.new = newAssets.promise;
+            const update = oldWorker.listeners.message({ data: { type: 'PERFORM_UPDATE', requestId: 'old-tab' } });
+            await assetRequested(oldWorker);
+            const activation = activateNew();
+            await assetRequested(newWorker);
+            newWorker.cacheStorage.nextKeysHeld = newKeys.promise;
+            newAssets.release();
+            for (let i = 0; i < 10; i++) await settle();
+            oldAssets.release();
+            await update;
+            await dispatchFetch(newWorker, get('page.js'));
+            newKeys.release();
+            await activation;
+            await settle();
+            assert.deepEqual(Object.keys(cacheSizes(newWorker)), [NEW_CACHE]);
+            assert.deepEqual(cachedUrls(newWorker, NEW_CACHE), [ORIGIN + 'index.html', ORIGIN + 'page.js']);
+            assert.equal(store.get(NEW_CACHE).get(ORIGIN + 'index.html').body, '1.3.2');
+            assert.equal(manifestRequests(newWorker), newFills);
+        });
+
+        test(`an old worker's Update Now whose deleted cache a page's request made again reports failure and leaves the new cache, ${label}`, async () => {
+            // The new worker's fill deletes the old worker's cache; a request the old worker still handles caches its
+            // response under the old cache's name, which makes that cache again, holding that response alone
+            const { store, held, oldWorker, newWorker, activateNew } = await twoWorkers(options);
+            const oldAssets = hold();
+            held.old = oldAssets.promise;
+            const update = oldWorker.listeners.message({ data: { type: 'PERFORM_UPDATE', requestId: 'old-tab' } });
+            await assetRequested(oldWorker);
+            await activateNew();
+            await settle();
+            await dispatchFetch(oldWorker, get('page.js'));
+            oldAssets.release();
+            await update;
+            await settle();
+            assert.deepEqual(answers(oldWorker), [[false, 'old-tab']]);
+            assert.deepEqual(cachedUrls(newWorker, NEW_CACHE), [ORIGIN + 'index.html']);
+            assert.equal(store.get(NEW_CACHE).get(ORIGIN + 'index.html').body, '1.3.2');
+            assert.deepEqual(cachedUrls(oldWorker, OLD_CACHE), [ORIGIN + 'page.js']);
+            assert.equal(manifestRequests(newWorker), 1);
+        });
+
+        test(`a new worker's fill whose deleted cache a page's request made again fills it, ${label}`, async () => {
+            // Where the old worker can't tell it was replaced, its fill deletes the cache the new worker fills; a page's
+            // request to the new worker then makes that cache again, holding that response alone
+            const { store, held, oldWorker, newWorker, activateNew } = await twoWorkers(options);
+            const oldAssets = hold();
+            const newAssets = hold();
+            held.old = oldAssets.promise;
+            held.new = newAssets.promise;
+            const update = oldWorker.listeners.message({ data: { type: 'PERFORM_UPDATE', requestId: 'old-tab' } });
+            await assetRequested(oldWorker);
+            const activation = activateNew();
+            await assetRequested(newWorker);
+            oldAssets.release();
+            await update;
+            await settle();
+            await dispatchFetch(newWorker, get('page.js'));
+            newAssets.release();
+            await activation;
+            await settle();
+            assert.deepEqual(Object.keys(cacheSizes(newWorker)), [NEW_CACHE]);
+            assert.deepEqual(cachedUrls(newWorker, NEW_CACHE), [ORIGIN + 'index.html', ORIGIN + 'page.js']);
+            assert.equal(store.get(NEW_CACHE).get(ORIGIN + 'index.html').body, '1.3.2');
+            assert.equal(manifestRequests(newWorker), newFills);
+        });
+
+        test(`an old worker's Update Now whose cache the new worker's activation clears after its check ${canTell ? 'reports failure and is not filled again' : 'fills it again and clears the new cache, a known limit'}, ${label}`, async () => {
+            // The old worker's Update Now has checked its cache and makes its last check while the new worker's
+            // activation clears the older caches, the old worker's among them
+            const { held, oldWorker, newWorker, activateNew } = await twoWorkers(options);
+            const oldAssets = hold();
+            const newAssets = hold();
+            const newKeys = hold();
+            const oldLastCheck = hold();
+            held.old = oldAssets.promise;
+            held.new = newAssets.promise;
+            const update = oldWorker.listeners.message({ data: { type: 'PERFORM_UPDATE', requestId: 'old-tab' } });
+            await assetRequested(oldWorker);
+            const activation = activateNew();
+            await assetRequested(newWorker);
+            newWorker.cacheStorage.nextKeysHeld = newKeys.promise;
+            newAssets.release();
+            for (let i = 0; i < 10; i++) await settle();
+            // Its check looks its one asset up; the lookup after that is its last check
+            oldWorker.cacheStorage.matchHolds[oldWorker.cacheStorage.matchCalls + 2] = oldLastCheck.promise;
+            oldAssets.release();
+            for (let i = 0; i < 10; i++) await settle();
+            newKeys.release();
+            await activation;
+            oldLastCheck.release();
+            await update;
+            await settle();
+            if (canTell) {
+                assert.deepEqual(cacheSizes(newWorker), { [NEW_CACHE]: 1 });
+                assert.deepEqual(answers(oldWorker), [[false, 'old-tab']]);
+                assert.equal(manifestRequests(oldWorker), 1);
+            } else {
+                // The old worker can't tell it was replaced, so it fills its cache once more and clears the new one;
+                // the new worker then offers its own version to the pages, whose Update Now fills it
+                assert.deepEqual(cacheSizes(newWorker), { [OLD_CACHE]: 1 });
+                const answer = await getVersion(newWorker);
+                assert.deepEqual([answer.currentVersion, answer.newVersion], ['1.3.1', '1.3.2']);
+                assert.ok(newWorker.messages.some((message) => message.type === 'UPDATE_AVAILABLE' && message.newVersion === '1.3.2'));
+            }
+        });
+
+        // With one worker, the active one, every fill clears the older caches as before
+        test(`the active worker's activation fill clears an older cache, ${label}`, async () => {
+            const worker = loadWorker({ ...options, version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_/_V1.3.0'], manifest: ['index.html'] });
+            await install(worker);
+            await activate(worker);
+            assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_/_V1.3.1': 1 });
+        });
+
+        test(`the active worker's Update Now clears an older cache, ${label}`, async () => {
+            const worker = loadWorker({ ...options, version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_/_V1.3.0'], manifest: ['index.html'] });
+            await install(worker);
+            await performUpdate(worker);
+            assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_/_V1.3.1': 1 });
+            assert.deepEqual(answers(worker), [[true, undefined]]);
+        });
+
+        // The activate event fires only at the worker becoming the active one, so its fill clears even in a browser
+        // whose registration names that worker late
+        const replaced = { scriptURL: `${ORIGIN}service-worker.js${options.bareUrl ? '' : '?v=1.3.0'}` };
+        for (const [lag, active] of [['names no worker yet', null], ['still names the worker it replaces', replaced]]) {
+            test(`the activation fill clears an older cache while the registration ${lag}, ${label}`, async () => {
+                const worker = loadWorker({ ...options, version: '1.3.1', registration: { active }, cacheNames: ['DUMBTERM_CACHE_/_V1.3.0'], manifest: ['index.html'] });
+                await install(worker);
+                await activate(worker);
+                assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_/_V1.3.1': 1 });
+            });
+        }
+    }
+
+    // Where a worker has its own object, a worker that shares the active worker's URL and isn't the active one clears
+    // nothing: it isn't the object the registration holds, nor is it activated
+    for (const [label, options] of BROWSERS.filter(([, options]) => options.serviceWorkerObject && options.bareUrl)) {
+        for (const [which, state] of [['a waiting worker', 'installed'], ['a worker its successor replaced', 'redundant']]) {
+            test(`${which} under the active worker's URL clears no cache, ${label}`, async () => {
+                const active = { scriptURL: `${ORIGIN}service-worker.js`, state: 'activated' };
+                const worker = loadWorker({ ...options, version: '1.3.2', registration: { active }, cacheNames: [OLD_CACHE], manifest: ['index.html'] });
+                await install(worker);
+                worker.serviceWorker.state = state;
+                await performUpdate(worker);
+                assert.deepEqual(cacheSizes(worker), { [OLD_CACHE]: 0, [NEW_CACHE]: 1 });
+            });
+        }
+    }
+
+    // Pages send Update Now to the worker controlling them, which it is once its activate event claimed them
+    for (const [label, options] of BROWSERS.filter(([, options]) => options.serviceWorkerObject)) {
+        test(`an Update Now that reaches the active worker while it is still activating clears an older cache, ${label}`, async () => {
+            const worker = loadWorker({ ...options, version: '1.3.2', cacheNames: [OLD_CACHE], manifest: ['index.html'] });
+            await install(worker);
+            worker.serviceWorker.state = 'activating';
+            await performUpdate(worker);
+            assert.deepEqual(cacheSizes(worker), { [NEW_CACHE]: 1 });
+        });
+    }
+
+    // The old worker's Update Now ends while the new worker's activation fill waits on the network
+    async function oldEndsDuringNewFill(options, twoWorkersOptions) {
+        const workers = await twoWorkers(options, twoWorkersOptions);
+        const { held, oldWorker, newWorker, activateNew } = workers;
+        const oldAssets = hold();
+        const newAssets = hold();
+        held.old = oldAssets.promise;
+        held.new = newAssets.promise;
+        const update = oldWorker.listeners.message({ data: { type: 'PERFORM_UPDATE', requestId: 'old-tab' } });
+        await assetRequested(oldWorker);
+        const activation = activateNew();
+        await assetRequested(newWorker);
+        oldAssets.release();
+        await update;
+        newAssets.release();
+        await activation;
+        await settle();
+        return workers;
+    }
+
+    // As above, where the old worker can't tell it was replaced and its fill deletes the new worker's cache: a page's
+    // request to the new worker then makes that cache again, holding one of its two assets
+    for (const asset of ['index.html', 'app.js']) {
+        test(`a new worker's fill whose deleted cache a page's request made again with its ${asset} alone fills it, ${BROWSERS[3][0]}`, async () => {
+            const workers = await twoWorkers(BROWSERS[3][1], { manifest: ['index.html', 'app.js'] });
+            const { store, held, oldWorker, newWorker, activateNew } = workers;
+            const oldAssets = hold();
+            const newAssets = hold();
+            held.old = oldAssets.promise;
+            held.new = newAssets.promise;
+            const update = oldWorker.listeners.message({ data: { type: 'PERFORM_UPDATE', requestId: 'old-tab' } });
+            await assetRequested(oldWorker);
+            const activation = activateNew();
+            await assetRequested(newWorker);
+            oldAssets.release();
+            await update;
+            await settle();
+            await dispatchFetch(newWorker, get(asset));
+            assert.deepEqual(cachedUrls(newWorker, NEW_CACHE), [ORIGIN + asset]);
+            newAssets.release();
+            await activation;
+            await settle();
+            assert.deepEqual(Object.keys(cacheSizes(newWorker)), [NEW_CACHE]);
+            assert.deepEqual(cachedUrls(newWorker, NEW_CACHE), [ORIGIN + 'app.js', ORIGIN + 'index.html']);
+            assert.equal(manifestRequests(newWorker), 2);
+            assert.equal(store.get(NEW_CACHE).get(ORIGIN + 'index.html').body, '1.3.2');
+        });
+    }
+
+    // The spec has the old worker learn it is redundant before its registration names the new worker
+    for (const [label, options] of BROWSERS.filter(([, options]) => options.serviceWorkerObject)) {
+        test(`an old worker that sees itself redundant while its registration still names it leaves the new cache, ${label}`, async () => {
+            const { store, newWorker } = await oldEndsDuringNewFill(options, { oldLearns: 'state' });
+            assert.deepEqual(cacheSizes(newWorker), { [NEW_CACHE]: 1 });
+            assert.equal(store.get(NEW_CACHE).get(ORIGIN + 'index.html').body, '1.3.2');
+            assert.equal(manifestRequests(newWorker), 1);
+        });
+    }
+
+    // A browser can let the old worker learn that its registration names the new worker before it learns its own
+    // state. In one that hands out one object per worker, as the spec has it, the old worker saw its own object held
+    // as the active one, so it goes by that object alone and clears nothing. In one that hands out another, the state
+    // it still shows makes it count as active: its fill deletes the new worker's cache, which fills it once more.
+    for (const [label, options] of BROWSERS.filter(([, options]) => options.serviceWorkerObject)) {
+        const oneObject = options.identicalObjects !== false;
+        for (const [how, oldActivatesHere] of [['started as the active worker', false], ['activated in this run', true]].slice(0, oneObject ? 2 : 1)) {
+            test(`an old worker whose registration names the new worker before its state changes ${oneObject ? 'leaves' : 'ends with'} the new cache, having ${how}, ${label}`, async () => {
+                const { store, newWorker } = await oldEndsDuringNewFill(options, { oldLearns: 'registration', oldActivatesHere });
+                assert.deepEqual(cacheSizes(newWorker), { [NEW_CACHE]: 1 });
+                assert.equal(store.get(NEW_CACHE).get(ORIGIN + 'index.html').body, '1.3.2');
+                assert.equal(manifestRequests(newWorker), oneObject ? 1 : 2);
+            });
+        }
+    }
+
+    // After the upgrade, a tab still controlled by the old worker and one controlled by the new worker each pick
+    // Update Now; each fill checks its cache, then waits on Cache Storage to clear the older ones
+    async function twoUpdateNows(options, twoWorkersOptions, { holdOld = true } = {}) {
+        const workers = await twoWorkers(options, twoWorkersOptions);
+        const { oldWorker, newWorker, activateNew } = workers;
+        await activateNew();
+        const oldKeys = hold();
+        const newKeys = hold();
+        newWorker.cacheStorage.nextKeysHeld = newKeys.promise;
+        const updateNew = newWorker.listeners.message({ data: { type: 'PERFORM_UPDATE', requestId: 'new-tab' } });
+        for (let i = 0; i < 10; i++) await settle();
+        if (holdOld) oldWorker.cacheStorage.nextKeysHeld = oldKeys.promise;
+        const updateOld = oldWorker.listeners.message({ data: { type: 'PERFORM_UPDATE', requestId: 'old-tab' } });
+        for (let i = 0; i < 10; i++) await settle();
+        oldKeys.release();
+        newKeys.release();
+        await Promise.all([updateOld, updateNew]);
+        await settle();
+        return workers;
+    }
+
+    test(`two Update Nows that each delete the other's cache tell neither tab it succeeded, ${BROWSERS[3][0]}`, async () => {
+        // Neither worker can tell which of them is the active one, so the store ends empty; the answers say so
+        const { oldWorker, newWorker } = await twoUpdateNows(BROWSERS[3][1]);
+        assert.deepEqual(answers(oldWorker), [[false, 'old-tab']]);
+        assert.deepEqual(answers(newWorker), [[false, 'new-tab']]);
+    });
+
+    for (const [label, options] of BROWSERS) {
+        test(`an Update Now whose cache an old worker that never learns it was replaced deletes after the check fills it once more, ${label}`, async () => {
+            // The old worker's Update Now clears the new worker's cache while the new worker's waits on Cache Storage;
+            // the new worker's then clears the old cache and finds its own gone
+            const { store, oldWorker, newWorker } = await twoUpdateNows(options, { oldLearns: 'nothing' }, { holdOld: false });
+            assert.deepEqual(cacheSizes(newWorker), { [NEW_CACHE]: 1 });
+            assert.equal(store.get(NEW_CACHE).get(ORIGIN + 'index.html').body, '1.3.2');
+            assert.deepEqual(answers(newWorker), [[true, 'new-tab']]);
+            assert.equal(manifestRequests(newWorker), 3);
+            assert.deepEqual(answers(oldWorker), [[true, 'old-tab']]);
+        });
+    }
+
+    test('an activation fill that fails for the network is not tried again', async () => {
+        const worker = loadWorker({ version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_/_V1.3.0'], manifestStatus: 500 });
+        await activate(worker);
+        assert.equal(manifestRequests(worker), 1);
+        assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_/_V1.3.0': 0 });
+    });
+
+    test('an activation fill that loses its cache fills it once more and clears the older cache, even before the registration names the worker', async () => {
+        const assets = hold();
+        const worker = loadWorker({
+            version: '1.3.1', registration: { active: null }, cacheNames: ['DUMBTERM_CACHE_/_V1.3.0'], manifest: ['index.html'],
+            network: async () => { await assets.promise; return fakeResponse('1.3.1'); },
+        });
+        const pending = [];
+        worker.listeners.activate({ waitUntil(promise) { pending.push(promise); } });
+        await assetRequested(worker);
+        worker.store.delete('DUMBTERM_CACHE_/_V1.3.1');
+        assets.release();
+        await Promise.all(pending);
+        await settle();
+        assert.equal(manifestRequests(worker), 2);
+        assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_/_V1.3.1': 1 });
+    });
+
+    test('an activation fill that loses its cache twice fills it only once more', async () => {
+        let assets = hold();
+        const worker = loadWorker({
+            version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_/_V1.3.0'], manifest: ['index.html'],
+            network: async () => { await assets?.promise; return fakeResponse('1.3.1'); },
+        });
+        const indexRequests = () => worker.fetchCalls.filter((url) => url === ORIGIN + 'index.html').length;
+        const pending = [];
+        worker.listeners.activate({ waitUntil(promise) { pending.push(promise); } });
+        for (const fill of [1, 2]) {
+            for (let i = 0; i < 100 && indexRequests() < fill; i++) await settle();
+            assert.equal(indexRequests(), fill);
+            worker.store.delete('DUMBTERM_CACHE_/_V1.3.1');
+            const held = assets;
+            assets = fill === 1 ? hold() : undefined;
+            held.release();
+        }
+        await Promise.all(pending);
+        await settle();
+        assert.equal(manifestRequests(worker), 2);
+        assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_/_V1.3.0': 0 });
+    });
+
+    test('an Update Now that loses its cache after the check twice fills it only once more, and reports failure', async () => {
+        const worker = loadWorker({ version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_/_V1.3.0'], manifest: ['index.html'] });
+        let keys = hold();
+        worker.cacheStorage.nextKeysHeld = keys.promise;
+        const update = worker.listeners.message({ data: { type: 'PERFORM_UPDATE', requestId: 'tab' } });
+        for (const fill of [1, 2]) {
+            for (let i = 0; i < 10; i++) await settle();
+            assert.equal(manifestRequests(worker), fill);
+            worker.store.delete('DUMBTERM_CACHE_/_V1.3.1');
+            const held = keys;
+            keys = fill === 1 ? hold() : undefined;
+            if (keys) worker.cacheStorage.nextKeysHeld = keys.promise;
+            held.release();
+        }
+        await update;
+        await settle();
+        assert.equal(manifestRequests(worker), 2);
+        assert.deepEqual(answers(worker), [[false, 'tab']]);
+    });
+
+    test('an activation fill whose cache is deleted after a page named another version is not tried again', async () => {
+        // A worker registered without a release version fills 1.3.3; a page running 1.3.2 sends its version, and
+        // then the cache the fill writes to is deleted. Filling again would fill the page's version, not the one the
+        // activation started, with whatever the server now sends.
+        const assets = hold();
+        const worker = await installUnversioned('1.3.3', {
+            cacheNames: ['DUMBTERM_CACHE_/_V1.3.2'], manifest: ['index.html'],
+            network: async () => { await assets.promise; return fakeResponse('1.3.3'); },
+        });
+        const pending = [];
+        worker.listeners.activate({ waitUntil(promise) { pending.push(promise); } });
+        await assetRequested(worker);
+        await worker.listeners.message({ data: { type: 'SET_VERSION', version: '1.3.2' } });
+        worker.store.delete('DUMBTERM_CACHE_/_V1.3.3');
+        assets.release();
+        await Promise.all(pending);
+        await settle();
+        assert.equal(manifestRequests(worker), 1);
+        assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_/_V1.3.2': 0 });
     });
 });

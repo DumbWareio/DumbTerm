@@ -13,7 +13,8 @@ const BASE_PATH = self.registration.scope;
 // served under ('/' or '/a/'), and an install deletes only its own caches
 const SCOPE_PATH = new URL(BASE_PATH).pathname;
 let CACHE_NAME = cacheNameFor(CACHE_VERSION);
-// Names of the caches fills are still filling (a name appears once per fill), so no fill deletes another's cache
+// Names of the caches this worker's fills are still filling (a name appears once per fill), so no fill deletes
+// another's cache. Other workers of this install can't see the list, so only the active worker clears caches.
 const CACHES_BEING_FILLED = [];
 
 /**
@@ -187,6 +188,57 @@ function isStaleCache(key, cacheName) {
     return key !== cacheName && (isOwnCache(key) || isLegacyCache(key));
 }
 
+// Why a fill failed when its cache turned out deleted, or made again without its assets. The page shows it after
+// "Update failed: "
+const CACHE_LOST = 'the offline copy changed while it was being saved. Please try again.';
+
+/**
+ * Whether a cache still holds every asset a fill put in it. A cache deleted while a fill wrote to it took what the
+ * fill wrote with it, and one made again under its name since (by the fetch handler, say) holds only what came after.
+ * caches.match with a cacheName looks in that cache alone, and makes no cache that isn't there.
+ * @param {string} cacheName - The fill's cache
+ * @param {string[]} urls - The assets the fill put in it
+ * @returns {Promise<boolean>} True if the cache holds each of them
+ */
+async function holdsAssets(cacheName, urls) {
+    // Ignoring Vary: the question is only whether the entry is there
+    const found = await Promise.all(urls.map(url => caches.match(url, { cacheName, ignoreVary: true })));
+    return found.every(Boolean);
+}
+
+// Whether this worker saw its registration hold its own ServiceWorker object as the active one, as it started as
+// the active worker or in its activate event. The browser then hands out one object per service worker, as the spec
+// has it, and that object alone tells whether this worker is still the active one
+let ONE_OBJECT_PER_WORKER = false;
+function noteOneObjectPerWorker() {
+    if (self.serviceWorker && self.serviceWorker === self.registration.active) ONE_OBJECT_PER_WORKER = true;
+}
+noteOneObjectPerWorker();
+
+/**
+ * Whether this worker is still its registration's active worker. While a new version's worker activates, the worker
+ * it replaces can still be filling a cache, and each one's cleanup would delete the cache the other fills, so only the
+ * active worker clears caches. A worker registered as service-worker.js?v=<version> tells by its script URL. Under one
+ * URL for every version (an old page's bare registration) its own ServiceWorker object tells:
+ * - a worker whose object shows it 'redundant' was replaced;
+ * - in a browser that hands out one object per worker (see ONE_OBJECT_PER_WORKER), self.serviceWorker is the
+ *   registration's active one only while this worker is, whatever order the browser updates them in;
+ * - in any other, it is the active one, or shows the state of one: 'activating' or 'activated' (a waiting worker is
+ *   'installed').
+ * A browser without self.serviceWorker (Firefox) can't tell there, and the worker counts as active, as every worker
+ * did. A fill the activate event starts doesn't ask (see installCache's activating).
+ * @returns {boolean} True if this worker is the registration's active worker, or can't tell it isn't
+ */
+function isActiveWorker() {
+    const active = self.registration.active;
+    if (!active || active.scriptURL !== self.location.href) return false;
+    const own = self.serviceWorker;
+    if (!own) return true;
+    if (own.state === 'redundant') return false;
+    if (ONE_OBJECT_PER_WORKER) return own === active;
+    return own === active || own.state === 'activated' || own.state === 'activating';
+}
+
 /**
  * Determines if an update notification should be shown
  * @param {string} currentVersion - Current installed version
@@ -247,9 +299,11 @@ async function notifyClients() {
 
 /**
  * Handles initial setup for service worker caching
+ * @param {Object} [options]
+ * @param {boolean} [options.activating=false] - True when the activate event calls it (see installCache)
  * @returns {Promise<void>}
  */
-async function preload() {
+async function preload({ activating = false } = {}) {
     console.log("Preparing to install web app cache");
     
     // Check cache status
@@ -272,7 +326,7 @@ async function preload() {
     // First-time installation case - no existing cache
     if (isFirstInstall) {
         console.log(`First-time installation: creating cache with version ${CACHE_VERSION}`);
-        await installCache(true); // Pass true to indicate first installation
+        await installCache(true, undefined, { activating }); // Pass true to indicate first installation
     }
 }
 
@@ -283,15 +337,26 @@ async function preload() {
  * user asked for is reported to the page.
  * @param {string} [requestId] - The id of the Update Now that asked for this fill. Every tab hears the answer, so it
  * names the request, and the tab that sent it knows the answer is its own
- * @returns {Promise<void>}
+ * @param {Object} [options]
+ * @param {boolean} [options.activating=false] - True for a fill the activate event starts. The event fires only at the
+ * worker becoming the active one, and no successor activates before the event's work ends, so the fill clears older
+ * caches without asking isActiveWorker: a browser can name the worker as the registration's active one late
+ * @param {boolean} [options.refilling=false] - True for the one fill a lost fill makes again (see below)
+ * @returns {Promise<string>} 'filled' when the fill's cache still holds its assets once the fill is done, 'lost' when
+ * it was deleted, or made again without its assets, while the fill filled it or cleared the older ones, 'failed' when
+ * the fill failed otherwise
  */
-async function installCache(isFirstInstall = false, requestId) {
+async function installCache(isFirstInstall = false, requestId, { activating = false, refilling = false } = {}) {
     // In a worker registered without a release version, a page's SET_VERSION can change CACHE_VERSION and CACHE_NAME
     // while this fill waits on the network, so fill, keep and report the version this fill started with
     const version = CACHE_VERSION;
     const cacheName = CACHE_NAME;
     console.log(`${isFirstInstall ? 'First-time installation' : 'Updating'} cache to version ${version}`);
     CACHES_BEING_FILLED.push(cacheName);
+    let outcome;
+    let lostWhileFilling = false;
+    let failure;
+    let assetsToCache;
     
     try {
         // Fetch and cache assets. The manifest comes first so that a failed request leaves no empty cache behind.
@@ -302,83 +367,88 @@ async function installCache(isFirstInstall = false, requestId) {
         // Build the list for this fill only: addAll rejects a list that names an asset twice, so one
         // kept across fills would fail every fill after the first in this worker's lifetime
         const assets = await response.json();
-        const assetsToCache = assets.map(asset => getAssetPath(asset));
+        assetsToCache = assets.map(asset => getAssetPath(asset));
         
         console.log("Caching assets:", assetsToCache);
         const cache = await caches.open(cacheName);
         await cache.addAll(assetsToCache);
+        // What a fill writes into a cache deleted meanwhile (by another worker's cleanup, say) goes with it, so a fill
+        // whose cache is gone, or made again without its assets, has failed, and clears nothing: the older caches are
+        // what still works offline
+        if (!(await holdsAssets(cacheName, assetsToCache))) {
+            lostWhileFilling = true;
+            throw new Error(CACHE_LOST);
+        }
         console.log("Assets cached successfully");
         
         // Clear old caches only now that the new one is filled: until then they are what works offline.
         // A cache another fill is still filling is left alone: that fill keeps it if it succeeds, and the next fill
-        // clears it if it fails.
-        const oldCaches = (await caches.keys())
-            .filter(key => isStaleCache(key, cacheName) && !CACHES_BEING_FILLED.includes(key));
-        if (oldCaches.length > 0) {
-            console.log(`Deleting old caches: ${oldCaches}`);
-            await Promise.all(
-                oldCaches.map(key => caches.delete(key))
-            );
+        // clears it if it fails. Only the active worker clears them: a worker whose successor has activated can't see
+        // which caches the successor's fills are filling. What such a worker leaves stays until the active worker's
+        // next fill, which may be the next release's activation. One that can't tell it was replaced still clears, and
+        // can delete the cache a fill of its successor fills; that fill may then fill it once more (see below).
+        if (activating || isActiveWorker()) {
+            const oldCaches = (await caches.keys())
+                .filter(key => isStaleCache(key, cacheName) && !CACHES_BEING_FILLED.includes(key));
+            if (oldCaches.length > 0) {
+                console.log(`Deleting old caches: ${oldCaches}`);
+                await Promise.all(
+                    oldCaches.map(key => caches.delete(key))
+                );
+            }
         }
         
-        // Notify clients
-        self.clients.matchAll().then(clients => {
-            clients.forEach(client => {
-                if (isFirstInstall) {
-                    // For first-time installations, just update the version display
-                    client.postMessage({
-                        type: 'CACHE_VERSION_INFO',
-                        currentVersion: version,
-                        cacheName
-                    });
-                } else {
-                    // For updates, notify about completion and update version display
-                    client.postMessage({
-                        type: 'UPDATE_COMPLETE',
-                        version,
-                        cacheName,
-                        requestId,
-                        success: true
-                    });
-                    
-                    // Also send specific version info message to maintain compatibility
-                    client.postMessage({
-                        type: 'CACHE_VERSION_INFO',
-                        currentVersion: version,
-                        cacheName
-                    });
-                }
-            });
-        });
+        outcome = 'filled';
     } catch (error) {
         console.error("Failed to cache assets:", error);
-        
-        // Notify clients of failure, but only when the user asked for the update: nobody is waiting on a fill
-        // the worker started itself, and the previous version's cache is still there to fall back on
-        self.clients.matchAll().then(clients => {
-            clients.forEach(client => {
-                if (!isFirstInstall) {
-                    client.postMessage({
-                        type: 'UPDATE_COMPLETE',
-                        version,
-                        cacheName,
-                        requestId,
-                        success: false,
-                        error: error.message
-                    });
-                }
-                
-                // Still send version info for UI consistency
-                client.postMessage({
-                    type: 'CACHE_VERSION_INFO',
-                    currentVersion: version,
-                    cacheName
-                });
-            });
-        });
+        failure = error;
+        outcome = lostWhileFilling ? 'lost' : 'failed';
     } finally {
         CACHES_BEING_FILLED.splice(CACHES_BEING_FILLED.indexOf(cacheName), 1);
     }
+    // Another worker's cleanup can delete the cache even after this fill checked it: one that can't tell it was
+    // replaced does, when it runs while this fill clears the older caches, and leaves no cache at all. Unlike a fill
+    // whose check found its cache gone, this one has cleared the older caches by then, so if filling it once more
+    // (below) fails too, no offline copy is left until the next fill
+    if (outcome === 'filled') {
+        try {
+            if (!(await holdsAssets(cacheName, assetsToCache))) {
+                outcome = 'lost';
+                failure = new Error(CACHE_LOST);
+            }
+        } catch (error) {
+            // Cache Storage itself failed: the fill can't tell its cache is there, and the page still gets an answer
+            console.error("Failed to check the filled cache:", error);
+            outcome = 'failed';
+            failure = error;
+        }
+    }
+    // A fill of the activate event that lost its cache, or an Update Now of the active worker whose cache was deleted
+    // after it checked it (by a worker this one replaced that can't tell it was, say), fills it once more and reports
+    // how that went; such an Update Now answers only after both fills, which on a slow network can outlast the page's
+    // wait for it. Not an Update Now whose cache was deleted while it filled it: the active worker deleted that cache
+    // as an older one, and filling it again would have a worker that can't tell it was replaced clear the active
+    // worker's cache. Nor one of a worker that was replaced, whose cache its successor cleared, nor when a page has
+    // named another version since: that fill would fill the page's version instead.
+    const refills = activating || (!isFirstInstall && !lostWhileFilling && isActiveWorker());
+    if (outcome === 'lost' && refills && !refilling && CACHE_NAME === cacheName) {
+        return installCache(isFirstInstall, requestId, { activating, refilling: true });
+    }
+    
+    // Tell the pages how the fill ended, once it has. Only a failed fill the user asked for is reported as failed:
+    // nobody is waiting on a fill the worker started itself, and the previous version's cache is still there
+    self.clients.matchAll().then(clients => {
+        clients.forEach(client => {
+            if (!isFirstInstall) {
+                const answer = { type: 'UPDATE_COMPLETE', version, cacheName, requestId };
+                client.postMessage(outcome === 'filled'
+                    ? { ...answer, success: true }
+                    : { ...answer, success: false, error: failure.message });
+            }
+            client.postMessage({ type: 'CACHE_VERSION_INFO', currentVersion: version, cacheName });
+        });
+    });
+    return outcome;
 }
 
 // Service Worker event listeners
@@ -397,6 +467,7 @@ self.addEventListener("install", event => {
 
 self.addEventListener("activate", event => {
     console.log("Service Worker activating...");
+    noteOneObjectPerWorker();
     
     event.waitUntil(
         Promise.resolve()
@@ -412,7 +483,7 @@ self.addEventListener("activate", event => {
                 if (CACHE_VERSION !== "1.0.0") {
                     const keys = await caches.keys();
                     if (!keys.includes(CACHE_NAME) || keys.some(key => isStaleCache(key, CACHE_NAME))) {
-                        await installCache(true);
+                        await installCache(true, undefined, { activating: true });
                     } else {
                         await notifyClients();
                     }
@@ -427,7 +498,7 @@ self.addEventListener("activate", event => {
                 // First-time install: set up cache immediately
                 if (isFirstInstall) {
                     console.log("First-time installation detected, setting up cache");
-                    await preload();
+                    await preload({ activating: true });
                 } else {
                     // Existing installation: check for updates and notify clients
                     console.log("Existing installation detected, checking for updates");
@@ -452,7 +523,7 @@ self.addEventListener("activate", event => {
                     // If versions differ, call preload to handle update logic
                     if (existingVersion !== CACHE_VERSION) {
                         console.log(`Version difference detected on activation: existing=${existingVersion}, new=${CACHE_VERSION}`);
-                        await preload();
+                        await preload({ activating: true });
                     }
                 }
             })
