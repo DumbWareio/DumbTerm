@@ -1727,6 +1727,37 @@ describe('terminal control sequences', () => {
         });
     }
 
+    for (const length of [320, 600]) {
+        test(`a saved session leaves out a Starship prompt after output with no final newline, with a half-typed command of ${length} characters`, async () => {
+            // The output's row takes the place of the prompt's blank first row, as the mark goes on the row below it
+            const saves = recordSavedSessions();
+            await receiveOutput(`${STARSHIP_PROMPT}printf hello\r\n\x1b[?2004l\rhello`);
+            await receiveOutput(`${STARSHIP_PROMPT}${typedCommand(length)}`);
+
+            assert.deepEqual(savedLines(saves.at(-1)), ['', plain(STARSHIP_TOP_LINE), '❯ printf hello', 'hello', '']);
+        });
+    }
+
+    test('a saved session leaves out a Starship prompt after output with no final newline, with a long half-typed command at the bottom of the screen', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput(`${SCREENFULS}${STARSHIP_PROMPT}printf hello\r\n\x1b[?2004l\rhello`);
+        await receiveOutput(`${STARSHIP_PROMPT}${typedCommand(400)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(-6), ['line 39', '', plain(STARSHIP_TOP_LINE), '❯ printf hello', 'hello', '']);
+    });
+
+    test('a saved session leaves out a Starship prompt after output with no final newline, with a long half-typed command at 40 columns', async () => {
+        const saves = recordSavedSessions();
+        terminal.resize(40, terminal.rows);
+        const [{ output: prompt }] = LISTINGS.starshipNarrow.steps;
+        await receiveOutput(`${prompt}printf hello\r\n\x1b[?2004l\rhello${prompt}`);
+        const savedAtPrompt = saves.at(-1);
+        await receiveOutput(typedCommand(200));
+
+        assert.deepEqual(savedLines(savedAtPrompt).slice(-3), ['❯ printf hello', 'hello', '']);
+        assert.equal(saves.at(-1), savedAtPrompt);
+    });
+
     test('a saved session leaves out a Starship prompt with a half-typed command at 40 columns', async () => {
         // At 40 columns the prompt's top line wraps its last space onto a row of its own, so the command starts on the
         // prompt's third row and a command three rows long takes the cursor five rows below the marked one
@@ -1858,6 +1889,28 @@ describe('terminal control sequences', () => {
         await receiveOutput(`$ app\r\n${'x'.repeat(50)}\x1b[?2004h${'x'.repeat(600)}`);
 
         assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '']);
+    });
+
+    test('a saved session leaves out the output of an app that turned bracketed paste on away from the start of a row, then printed a line and a line running past four rows', async () => {
+        // Known limit: the first line lands on the marked row, which reads as the top line of a prompt like Starship's
+        // printed after output with no final newline, and the long line as its command, so the save stops at the marked
+        // row. Within four rows of the mark the save left these lines out before too. Pinned so that changing it is
+        // deliberate
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\nout\x1b[?2004h\r\nTitle\r\n${'x'.repeat(450)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'out', '']);
+    });
+
+    test('a saved session leaves out a job\'s line that starts with a newline, printed at a plain prompt after output with no final newline, with a long command typed under it', async () => {
+        // Known limit: the job's line lands on the marked row, the row below the output's, and reads as the top line of
+        // a prompt like Starship's, so the save stops at it. Within four rows of the mark the save left it out before
+        // too. Pinned so that changing it is deliberate
+        const saves = recordSavedSessions();
+        const prompt = '\x1b[?2004hroot@box:/app# ';
+        await receiveOutput(`${prompt}printf hello\r\n\x1b[?2004l\rhello${prompt}\r\njob done\r\n${typedCommand(400)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['root@box:/app# printf hello', 'helloroot@box:/app#', '']);
     });
 
     // bash 5.2's output at each keystroke, a long command typed a key at a time (test/fixtures/bash-long-commands.json)
