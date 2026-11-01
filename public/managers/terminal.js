@@ -1425,7 +1425,7 @@ export default class TerminalManager {
                             // redrawn below. A line runs on across the rows the terminal marks as wrapped and those the
                             // cursor moved up over at the prompt (see initTerminal), and the last Tab typed at the
                             // prompt marks the row it was typed on. With a below mark (on the row below a cursor away
-                            // from its row's first column and short of its last), a line that runs on onto it from the
+                            // from its row's first column and not past its last), a line that runs on onto it from the
                             // row above or higher up, however far down, is the prompt's from the row above: zsh's with
                             // the command typed after it, or bash's printed after output with no final newline, which
                             // goes with it, as a save cuts whole rows (the output's rows above it stay). zsh draws a
@@ -1433,7 +1433,8 @@ export default class TerminalManager {
                             // row as wrapped, so from the marked row down a row also counts as run onto when the row
                             // above reaches its last column. Rows above the prompt are all kept, so no prompt patterns
                             // here. Known limits: zsh turns it on after the prompt, so the upper lines of a multi-line
-                            // zsh prompt stay in the save. And the other way: an app that turned bracketed paste on
+                            // zsh prompt stay in the save, as do the rows of one wider than the terminal above the row
+                            // it ends on. And the other way: an app that turned bracketed paste on
                             // partway through a row and then ran its line on onto the next row, however few rows it
                             // runs onto, or printed lines filling their rows, each ending with a newline, reads as such
                             // a line, so its output from the row it turned the mode on in is left out
