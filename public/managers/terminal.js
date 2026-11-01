@@ -1407,23 +1407,25 @@ export default class TerminalManager {
                         // alternate buffer it is an editor's (vim turns it on)
                         const idleAtPrompt = terminal.modes.bracketedPasteMode && buffer.type === 'normal';
                         if (idleAtPrompt) {
-                            // The prompt starts on the row marked when the shell turned bracketed paste on, or on
-                            // the cursor's row if that is higher (zsh marks after its prompt), the marked row is
-                            // gone (erased by a screen clear, or out of the scrollback) or it is too far up to be
-                            // the prompt's, unless a command typed at the prompt runs on that far down or the prompt
-                            // was redrawn below. A line runs on across the rows the terminal marks as wrapped and
-                            // those the cursor moved up over at the prompt (see initTerminal), and the last Tab typed
-                            // at the prompt marks the row it was typed on. With the mark on the row below the cursor,
-                            // a line that runs on onto it from the row above, however far down, is the prompt's: zsh's
-                            // with the command typed after it, or bash's printed after output with no final newline
-                            // (which goes with it, as a save cuts whole rows). zsh draws a command past the margin
-                            // itself and erases each row it moves onto first, which unmarks the row as wrapped, so
-                            // from the marked row down a row also counts as run onto when the row above reaches its
-                            // last column. Rows above the prompt are all kept, so no prompt patterns here. Known
-                            // limits: zsh turns it on after the prompt, so the upper lines of a multi-line zsh prompt
-                            // stay in the save. And the other way: an app that turned bracketed paste on partway
-                            // through a row, then printed lines filling their rows, each ending with a newline, reads
-                            // as such a line, so its output from that row on is left out
+                            // The prompt starts on the row marked when the shell turned bracketed paste on, or on the
+                            // cursor's row if that is higher (zsh marks after its prompt), the marked row is gone
+                            // (erased by a screen clear, or out of the scrollback) or it is too far up to be the
+                            // prompt's, unless a command typed at the prompt runs on that far down or the prompt was
+                            // redrawn below. A line runs on across the rows the terminal marks as wrapped and those the
+                            // cursor moved up over at the prompt (see initTerminal), and the last Tab typed at the
+                            // prompt marks the row it was typed on. With the mark on the row below the cursor, a line
+                            // that runs on onto it from the row above or higher up, however far down, is the prompt's
+                            // from the row above: zsh's with the command typed after it, or bash's printed after output
+                            // with no final newline, which goes with it, as a save cuts whole rows (the output's rows
+                            // above it stay). zsh draws a command past the margin itself and erases each row it moves
+                            // onto first, which unmarks the row as wrapped, so from the marked row down a row also
+                            // counts as run onto when the row above reaches its last column. Rows above the prompt are
+                            // all kept, so no prompt patterns here. Known limits: zsh turns it on after the prompt, so
+                            // the upper lines of a multi-line zsh prompt stay in the save. And the other way: an app
+                            // that turned bracketed paste on partway through a row and then ran its line on onto the
+                            // next row, however few rows it runs onto, or printed lines filling their rows, each ending
+                            // with a newline, reads as such a line, so its output from the row it turned the mode on in
+                            // is left out
                             const cursorRow = buffer.baseY + buffer.cursorY;
                             const mark = promptMarkers.get(terminal);
                             const markedRow = !mark ? cursorRow
@@ -1458,7 +1460,7 @@ export default class TerminalManager {
                             while (below && (wrapped(lineStart) || (lineStart >= markedRow && reachesEnd(lineStart)))) {
                                 lineStart--;
                             }
-                            const promptStart = below && lineStart === markedRow - 1 ? lineStart
+                            const promptStart = below && lineStart < markedRow ? Math.min(markedRow - 1, cursorRow)
                                 : cursorRow - markedRow <= PROMPT_MAX_ROWS_BELOW_MARK ? Math.min(markedRow, cursorRow)
                                 : typedOnPromptRow(buffer, wrapped, markedRow, cursorRow, below)
                                     ?? redrawnPromptRow(buffer, wrapped, markedRow, cursorRow, tabRow) ?? cursorRow;

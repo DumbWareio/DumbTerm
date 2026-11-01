@@ -1756,6 +1756,18 @@ describe('terminal control sequences', () => {
         });
     }
 
+    for (const [rows, length] of [[2, 71], [6, 400]]) {
+        test(`a saved session leaves out a plain prompt printed after output that wrapped with no final newline, with a half-typed command ${rows} rows long`, async () => {
+            // The command runs on from the output's first row, above the row the prompt is printed on, which goes with
+            // the prompt, as a save cuts whole rows
+            const saves = recordSavedSessions();
+            const prompt = '\x1b[?2004hroot@box:/app# ';
+            await receiveOutput(`${prompt}printf '%0120d' 0\r\n\x1b[?2004l\r${'0'.repeat(120)}${prompt}${typedCommand(length)}`);
+
+            assert.deepEqual(savedLines(saves.at(-1)), ["root@box:/app# printf '%0120d' 0", '0'.repeat(80), '']);
+        });
+    }
+
     test('a saved session leaves out a zsh prompt with a pasted command six rows long', async () => {
         // zsh draws pasted text straight on, in reverse video, and the terminal wraps it
         const saves = recordSavedSessions();
@@ -1944,12 +1956,15 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '', '', 'x'.repeat(320), '']);
     });
 
-    test('a saved session keeps the output of an app that turned bracketed paste on partway through a line it ran on past four rows', async () => {
-        // The line starts above the prompt's rows, so it is no command typed there: here it had wrapped before
+    test('a saved session keeps only the first row of an app\'s line that wrapped before it turned bracketed paste on partway through a row and ran on past four rows', async () => {
+        // Known limit: the mark goes on the row below, and the line runs on onto it from higher up, as a command typed
+        // after a plain prompt printed after output that wrapped with no final newline does, so the save stops above
+        // the row the app turned the mode on in. Before, the save kept the line up to the cursor's row: 720 characters,
+        // 9 of its 10 rows. Pinned so that changing it is deliberate
         const saves = recordSavedSessions();
         await receiveOutput(`$ app\r\n${'x'.repeat(130)}\x1b[?2004h${'x'.repeat(600)}`);
 
-        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'x'.repeat(9 * 80), '']);
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'x'.repeat(80), '']);
     });
 
     test('a saved session leaves out the output of an app that turned bracketed paste on partway through the first row of a line it ran on past four rows', async () => {
