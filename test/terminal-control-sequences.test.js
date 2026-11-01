@@ -1744,6 +1744,18 @@ describe('terminal control sequences', () => {
         });
     }
 
+    for (const [shape, typed] of [['', ''], [', with a command typed', 'echo hi']]) {
+        test(`a saved session keeps output that filled its row with no final newline above a plain prompt${shape}`, async () => {
+            // The wrap is still pending when bash turns bracketed paste on, so the prompt starts the row below, which
+            // is marked: the output's row holds no prompt
+            const saves = recordSavedSessions();
+            const prompt = '\x1b[?2004hroot@box:/app# ';
+            await receiveOutput(`${prompt}printf '%080d' 0\r\n\x1b[?2004l\r${'0'.repeat(80)}${prompt}${typed}`);
+
+            assert.deepEqual(savedLines(saves.at(-1)), ["root@box:/app# printf '%080d' 0", '0'.repeat(80), '']);
+        });
+    }
+
     test('a saved session leaves out a zsh prompt with a pasted command six rows long', async () => {
         // zsh draws pasted text straight on, in reverse video, and the terminal wraps it
         const saves = recordSavedSessions();

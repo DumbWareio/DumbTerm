@@ -844,13 +844,14 @@ export default class TerminalManager {
         // when the cursor is not at the start of a line (below): the row holds output with no final newline, and a
         // prompt that starts with a newline (Starship's) begins below it. The row may hold the prompt too (zsh's, or
         // bash's printed after that output), and a command typed after it runs on onto the marked row (see
-        // saveSessionState). Returns false so xterm.js still sets the mode. In the alternate buffer the mode is an
-        // editor's, not the shell's
+        // saveSessionState). Past the last column (output that filled its row, the wrap still pending) the prompt
+        // starts on the row below, so that row is marked but the mark is not below. Returns false so xterm.js still
+        // sets the mode. In the alternate buffer the mode is an editor's, not the shell's
         terminal.parser.registerCsiHandler({ prefix: '?', final: 'h' }, (params) => {
             const buffer = terminal.buffer.active;
             if (params.includes(2004) && buffer.type === 'normal') {
-                const below = buffer.cursorX !== 0;
-                setMark({ marker: terminal.registerMarker(below ? 1 : 0), rowsBelow: 0, below });
+                const below = buffer.cursorX !== 0 && buffer.cursorX < terminal.cols;
+                setMark({ marker: terminal.registerMarker(buffer.cursorX === 0 ? 0 : 1), rowsBelow: 0, below });
             }
             return false;
         });
