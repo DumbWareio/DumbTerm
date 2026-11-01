@@ -831,13 +831,13 @@ describe('service worker instances of one install during an upgrade', () => {
     // `oldActivatesHere` it starts before the registration names it and activates in this run. `oldLearns` is what the
     // old worker learns as the new one activates: 'both' that its registration names the new worker and that its own
     // state is 'redundant', 'nothing', or only 'registration' or 'state'.
-    async function twoWorkers(options, { oldLearns = 'both', oldActivatesHere = false } = {}) {
+    async function twoWorkers(options, { oldLearns = 'both', oldActivatesHere = false, manifest = ['index.html'] } = {}) {
         const store = new Map([[OLD_CACHE, new Map([[ORIGIN + 'index.html', fakeResponse('1.3.1')]])]]);
         const registration = { active: null };
         const oldRegistration = ['both', 'registration'].includes(oldLearns) ? registration : { active: null };
         const held = { old: undefined, new: undefined };
         const workerOf = (version, which, workerRegistration, startsActive = false) => loadWorker({
-            ...options, version, store, registration: workerRegistration, startsActive, manifest: ['index.html'],
+            ...options, version, store, registration: workerRegistration, startsActive, manifest,
             network: async (request) => {
                 if (request === ORIGIN + 'index.html') await held[which];
                 return fakeResponse(version);
@@ -850,17 +850,16 @@ describe('service worker instances of one install during an upgrade', () => {
         if (oldActivatesHere) await activate(oldWorker);
         const newWorker = workerOf('1.3.2', 'new', registration);
         await install(newWorker);
-        newWorker.serviceWorker.state = 'installed';
         oldWorker.messages.length = 0;
         // What the browser does as the new worker activates (Activate, in the spec): the old worker becomes redundant
-        // and the registration names the new one, which is activating until its activate event's work is done
+        // and the registration names the new one. The new worker's own state goes unread: its fills while it
+        // activates are the activate event's, which don't ask isActiveWorker
         const activateNew = () => {
             if (['both', 'state'].includes(oldLearns)) oldWorker.serviceWorker.state = 'redundant';
             registration.active = newWorker.serviceWorker;
-            newWorker.serviceWorker.state = 'activating';
             const pending = [];
             newWorker.listeners.activate({ waitUntil(promise) { pending.push(promise); } });
-            return Promise.all(pending).then(() => { newWorker.serviceWorker.state = 'activated'; });
+            return Promise.all(pending);
         };
         return { store, held, oldWorker, newWorker, activateNew };
     }
@@ -1124,6 +1123,35 @@ describe('service worker instances of one install during an upgrade', () => {
         return workers;
     }
 
+    // As above, where the old worker can't tell it was replaced and its fill deletes the new worker's cache: a page's
+    // request to the new worker then makes that cache again, holding one of its two assets
+    for (const asset of ['index.html', 'app.js']) {
+        test(`a new worker's fill whose deleted cache a page's request made again with its ${asset} alone fills it, ${BROWSERS[3][0]}`, async () => {
+            const workers = await twoWorkers(BROWSERS[3][1], { manifest: ['index.html', 'app.js'] });
+            const { store, held, oldWorker, newWorker, activateNew } = workers;
+            const oldAssets = hold();
+            const newAssets = hold();
+            held.old = oldAssets.promise;
+            held.new = newAssets.promise;
+            const update = oldWorker.listeners.message({ data: { type: 'PERFORM_UPDATE', requestId: 'old-tab' } });
+            await assetRequested(oldWorker);
+            const activation = activateNew();
+            await assetRequested(newWorker);
+            oldAssets.release();
+            await update;
+            await settle();
+            await dispatchFetch(newWorker, get(asset));
+            assert.deepEqual(cachedUrls(newWorker, NEW_CACHE), [ORIGIN + asset]);
+            newAssets.release();
+            await activation;
+            await settle();
+            assert.deepEqual(Object.keys(cacheSizes(newWorker)), [NEW_CACHE]);
+            assert.deepEqual(cachedUrls(newWorker, NEW_CACHE), [ORIGIN + 'app.js', ORIGIN + 'index.html']);
+            assert.equal(manifestRequests(newWorker), 2);
+            assert.equal(store.get(NEW_CACHE).get(ORIGIN + 'index.html').body, '1.3.2');
+        });
+    }
+
     // The spec has the old worker learn it is redundant before its registration names the new worker
     for (const [label, options] of BROWSERS.filter(([, options]) => options.serviceWorkerObject)) {
         test(`an old worker that sees itself redundant while its registration still names it leaves the new cache, ${label}`, async () => {
@@ -1134,16 +1162,18 @@ describe('service worker instances of one install during an upgrade', () => {
         });
     }
 
-    // A browser that hands out one object per worker, as the spec has it, can still let the old worker learn that its
-    // registration names the new worker before it learns its own state; the old worker saw its own object held as the
-    // active one, so it goes by that object alone
-    for (const [label, options] of BROWSERS.filter(([, options]) => options.serviceWorkerObject && options.identicalObjects !== false)) {
-        for (const [how, oldActivatesHere] of [['started as the active worker', false], ['activated in this run', true]]) {
-            test(`an old worker whose registration names the new worker before its state changes leaves the new cache, having ${how}, ${label}`, async () => {
+    // A browser can let the old worker learn that its registration names the new worker before it learns its own
+    // state. In one that hands out one object per worker, as the spec has it, the old worker saw its own object held
+    // as the active one, so it goes by that object alone and clears nothing. In one that hands out another, the state
+    // it still shows makes it count as active: its fill deletes the new worker's cache, which fills it once more.
+    for (const [label, options] of BROWSERS.filter(([, options]) => options.serviceWorkerObject)) {
+        const oneObject = options.identicalObjects !== false;
+        for (const [how, oldActivatesHere] of [['started as the active worker', false], ['activated in this run', true]].slice(0, oneObject ? 2 : 1)) {
+            test(`an old worker whose registration names the new worker before its state changes ${oneObject ? 'leaves' : 'ends with'} the new cache, having ${how}, ${label}`, async () => {
                 const { store, newWorker } = await oldEndsDuringNewFill(options, { oldLearns: 'registration', oldActivatesHere });
                 assert.deepEqual(cacheSizes(newWorker), { [NEW_CACHE]: 1 });
                 assert.equal(store.get(NEW_CACHE).get(ORIGIN + 'index.html').body, '1.3.2');
-                assert.equal(manifestRequests(newWorker), 1);
+                assert.equal(manifestRequests(newWorker), oneObject ? 1 : 2);
             });
         }
     }
