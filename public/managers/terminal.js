@@ -159,8 +159,10 @@ function redrawnPromptRow(buffer, wrapped, markedRow, cursorRow, tabRow) {
 // then such a line, with the cursor at its end, reads as such a command, so its output from the first row on is left
 // out, as does one that turned bracketed paste on away from the start of a row and then printed one line and then such
 // a line (one that ran its row's line on onto the next row is left out from two rows on, see saveSessionState), and one
-// that turned it on with the wrap still pending and then ran a line on onto the next row past four rows (the line
-// starts the marked row, as a prompt printed after output that filled its row does); so does one that printed a blank
+// that turned it on with the wrap still pending and then ran a line on onto the next row past four rows (the line reads
+// as starting on the marked row, as a prompt printed after output that filled its row does), or that went back to the
+// start of a row its line had wrapped onto, turned it on there and wrote a line running past four rows (the line reads
+// as starting there, as a prompt printed over a progress line's wrapped row does); so does one that printed a blank
 // row, such a line and then a short line, with the cursor on the short one (the long line reads as the top line of a
 // prompt like Starship's, the short one as its command), as it did before the rows the cursor moved up over were
 // recorded, and so does one that moved the cursor up over such a line and back down with newlines, each row it moved up
@@ -1422,19 +1424,19 @@ export default class TerminalManager {
                             // prompt's, unless a command typed at the prompt runs on that far down or the prompt was
                             // redrawn below. A line runs on across the rows the terminal marks as wrapped and those the
                             // cursor moved up over at the prompt (see initTerminal), and the last Tab typed at the
-                            // prompt marks the row it was typed on. With the mark on the row below the cursor, a line
-                            // that runs on onto it from the row above or higher up, however far down, is the prompt's
-                            // from the row above: zsh's with the command typed after it, or bash's printed after output
-                            // with no final newline, which goes with it, as a save cuts whole rows (the output's rows
-                            // above it stay). zsh draws a command past the margin itself and erases each row it moves
-                            // onto first, which unmarks the row as wrapped, so from the marked row down a row also
-                            // counts as run onto when the row above reaches its last column. Rows above the prompt are
-                            // all kept, so no prompt patterns here. Known limits: zsh turns it on after the prompt, so
-                            // the upper lines of a multi-line zsh prompt stay in the save. And the other way: an app
-                            // that turned bracketed paste on partway through a row and then ran its line on onto the
-                            // next row, however few rows it runs onto, or printed lines filling their rows, each ending
-                            // with a newline, reads as such a line, so its output from the row it turned the mode on in
-                            // is left out
+                            // prompt marks the row it was typed on. With a below mark (on the row below a cursor away
+                            // from its row's first column and short of its last), a line that runs on onto it from the
+                            // row above or higher up, however far down, is the prompt's from the row above: zsh's with
+                            // the command typed after it, or bash's printed after output with no final newline, which
+                            // goes with it, as a save cuts whole rows (the output's rows above it stay). zsh draws a
+                            // command past the margin itself and erases each row it moves onto first, which unmarks the
+                            // row as wrapped, so from the marked row down a row also counts as run onto when the row
+                            // above reaches its last column. Rows above the prompt are all kept, so no prompt patterns
+                            // here. Known limits: zsh turns it on after the prompt, so the upper lines of a multi-line
+                            // zsh prompt stay in the save. And the other way: an app that turned bracketed paste on
+                            // partway through a row and then ran its line on onto the next row, however few rows it
+                            // runs onto, or printed lines filling their rows, each ending with a newline, reads as such
+                            // a line, so its output from the row it turned the mode on in is left out
                             const cursorRow = buffer.baseY + buffer.cursorY;
                             const mark = promptMarkers.get(terminal);
                             const markedRow = !mark ? cursorRow

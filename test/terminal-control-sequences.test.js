@@ -2086,10 +2086,10 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '']);
     });
 
-    test('a saved session leaves out the output of an app that turned bracketed paste on partway through a row, then printed lines filling their rows', async () => {
-        // Known limit: zsh draws a command past the margin itself, so a row below the marked one counts as run onto
-        // when the row above reaches its last column, and lines that fill their rows, each ending with a newline, read
-        // as such a command. The save stops above the row the app turned the mode on in, which it kept before.
+    test('a saved session leaves out the output of an app that turned bracketed paste on partway through a line that then filled its row, and printed lines filling their rows', async () => {
+        // Known limit: zsh draws a command past the margin itself, so a row at or below the marked one counts as run
+        // onto when the row above reaches its last column, and lines that fill their rows, each ending with a newline,
+        // read as such a command. The save stops above the row the app turned the mode on in, which it kept before.
         // Pinned so that changing it is deliberate
         const saves = recordSavedSessions();
         await receiveOutput(`$ app\r\n${'x'.repeat(50)}\x1b[?2004h${'x'.repeat(30)}\r\n${`${'y'.repeat(80)}\r\n`.repeat(3)}`);
@@ -2107,8 +2107,9 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'y'.repeat(80), '']);
     });
 
-    test('a saved session keeps the output of an app that turned bracketed paste on away from the start of a row, then printed lines filling their rows', async () => {
-        // The lines start below the marked row, and each ends with a newline, so they run on from no prompt there
+    test('a saved session keeps the output of an app that turned bracketed paste on after a line that did not fill its row, and printed lines filling their rows', async () => {
+        // The first of the lines is on the marked row, but the row the app turned the mode on in does not reach its
+        // last column, so no line runs on onto the marked row from it
         const saves = recordSavedSessions();
         await receiveOutput(`$ app\r\nout\x1b[?2004h\r\n${`${'y'.repeat(80)}\r\n`.repeat(6)}> type`);
 
