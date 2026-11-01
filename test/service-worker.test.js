@@ -687,6 +687,27 @@ describe('service worker versions a page sends', () => {
         assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_/_V1.3.3': 2 });
     });
 
+    test('a first fill that a page\'s version starts and whose cache goes after its check is not filled again', async () => {
+        // Registered without a release version and unable to read config.js, the worker takes the page's version and,
+        // with no cache yet, fills it; the cache is deleted while the fill waits on Cache Storage to clear older ones
+        const worker = loadWorker({ version: '1730000000000', config: null, manifest: ['index.html'] });
+        let releaseManifest;
+        let releaseKeys;
+        worker.server.manifestHeld = new Promise((resolve) => { releaseManifest = resolve; });
+        const sent = worker.listeners.message({ data: { type: 'SET_VERSION', version: '1.3.2' } });
+        await manifestRequested(worker);
+        worker.cacheStorage.nextKeysHeld = new Promise((resolve) => { releaseKeys = resolve; });
+        releaseManifest();
+        for (let i = 0; i < 10; i++) await settle();
+        assert.deepEqual(cachedUrls(worker, 'DUMBTERM_CACHE_/_V1.3.2'), [ORIGIN + 'index.html']);
+        worker.store.delete('DUMBTERM_CACHE_/_V1.3.2');
+        releaseKeys();
+        await sent;
+        await settle();
+        assert.equal(worker.fetchCalls.filter((url) => url.endsWith('asset-manifest.json')).length, 1);
+        assert.deepEqual(cacheSizes(worker), {});
+    });
+
     for (const [label, version] of [['without a release version', '1730000000000'], ['with the default version 1.0.0', '1.0.0'], ['with something that is no version', 'garbage']]) {
         test(`registered ${label}, takes the version a page sends`, async () => {
             const worker = loadWorker({ version, config: null, cacheNames: ['DUMBTERM_CACHE_/_V1.3.1'] });
