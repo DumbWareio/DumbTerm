@@ -1213,6 +1213,49 @@ describe('service worker instances of one install during an upgrade', () => {
         assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_/_V1.3.1': 1 });
     });
 
+    test('an activation fill that loses its cache twice fills it only once more', async () => {
+        let assets = hold();
+        const worker = loadWorker({
+            version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_/_V1.3.0'], manifest: ['index.html'],
+            network: async () => { await assets?.promise; return fakeResponse('1.3.1'); },
+        });
+        const indexRequests = () => worker.fetchCalls.filter((url) => url === ORIGIN + 'index.html').length;
+        const pending = [];
+        worker.listeners.activate({ waitUntil(promise) { pending.push(promise); } });
+        for (const fill of [1, 2]) {
+            for (let i = 0; i < 100 && indexRequests() < fill; i++) await settle();
+            assert.equal(indexRequests(), fill);
+            worker.store.delete('DUMBTERM_CACHE_/_V1.3.1');
+            const held = assets;
+            assets = fill === 1 ? hold() : undefined;
+            held.release();
+        }
+        await Promise.all(pending);
+        await settle();
+        assert.equal(manifestRequests(worker), 2);
+        assert.deepEqual(cacheSizes(worker), { 'DUMBTERM_CACHE_/_V1.3.0': 0 });
+    });
+
+    test('an Update Now that loses its cache after the check twice fills it only once more, and reports failure', async () => {
+        const worker = loadWorker({ version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_/_V1.3.0'], manifest: ['index.html'] });
+        let keys = hold();
+        worker.cacheStorage.nextKeysHeld = keys.promise;
+        const update = worker.listeners.message({ data: { type: 'PERFORM_UPDATE', requestId: 'tab' } });
+        for (const fill of [1, 2]) {
+            for (let i = 0; i < 10; i++) await settle();
+            assert.equal(manifestRequests(worker), fill);
+            worker.store.delete('DUMBTERM_CACHE_/_V1.3.1');
+            const held = keys;
+            keys = fill === 1 ? hold() : undefined;
+            if (keys) worker.cacheStorage.nextKeysHeld = keys.promise;
+            held.release();
+        }
+        await update;
+        await settle();
+        assert.equal(manifestRequests(worker), 2);
+        assert.deepEqual(answers(worker), [[false, 'tab']]);
+    });
+
     test('an activation fill whose cache is deleted after a page named another version is not tried again', async () => {
         // A worker registered without a release version fills 1.3.3; a page running 1.3.2 sends its version, and
         // then the cache the fill writes to is deleted. Filling again would fill the page's version, not the one the
