@@ -843,7 +843,7 @@ export default class TerminalManager {
         // the prompt, zsh after. Mark that row so a saved session can leave the prompt out, or the row below
         // when the cursor is not at the start of a line (below): the row holds output with no final newline, and a
         // prompt that starts with a newline (Starship's) begins below it. The row may hold the prompt too (zsh's, or
-        // bash's printed after that output), and a command typed after it wraps onto the marked row (see
+        // bash's printed after that output), and a command typed after it runs on onto the marked row (see
         // saveSessionState). Returns false so xterm.js still sets the mode. In the alternate buffer the mode is an
         // editor's, not the shell's
         terminal.parser.registerCsiHandler({ prefix: '?', final: 'h' }, (params) => {
@@ -1415,9 +1415,14 @@ export default class TerminalManager {
                             // at the prompt marks the row it was typed on. With the mark on the row below the cursor,
                             // a line that runs on onto it from the row above, however far down, is the prompt's: zsh's
                             // with the command typed after it, or bash's printed after output with no final newline
-                            // (which goes with it, as a save cuts whole rows). Rows above the prompt are all kept, so
-                            // no prompt patterns here. Known limit: zsh turns it on after the prompt, so the upper
-                            // lines of a multi-line zsh prompt stay in the save
+                            // (which goes with it, as a save cuts whole rows). zsh draws a command past the margin
+                            // itself and erases each row it moves onto first, which unmarks the row as wrapped, so
+                            // from the marked row down a row also counts as run onto when the row above reaches its
+                            // last column. Rows above the prompt are all kept, so no prompt patterns here. Known
+                            // limits: zsh turns it on after the prompt, so the upper lines of a multi-line zsh prompt
+                            // stay in the save. And the other way: an app that turned bracketed paste on partway
+                            // through a row, then printed lines filling their rows, each ending with a newline, reads
+                            // as such a line, so its output from that row on is left out
                             const cursorRow = buffer.baseY + buffer.cursorY;
                             const mark = promptMarkers.get(terminal);
                             const markedRow = !mark ? cursorRow
@@ -1449,7 +1454,9 @@ export default class TerminalManager {
                             const tabRow = mark?.tab && !mark.tab.isDisposed ? mark.tab.line : null;
                             const below = !!mark?.below && !mark.marker.isDisposed;
                             let lineStart = cursorRow;
-                            while (below && wrapped(lineStart)) lineStart--;
+                            while (below && (wrapped(lineStart) || (lineStart >= markedRow && reachesEnd(lineStart)))) {
+                                lineStart--;
+                            }
                             const promptStart = below && lineStart === markedRow - 1 ? lineStart
                                 : cursorRow - markedRow <= PROMPT_MAX_ROWS_BELOW_MARK ? Math.min(markedRow, cursorRow)
                                 : typedOnPromptRow(buffer, wrapped, markedRow, cursorRow, below)
