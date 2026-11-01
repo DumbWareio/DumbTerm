@@ -622,6 +622,18 @@ describe('service worker Update Now', () => {
         assert.deepEqual(failures(worker).map((message) => message.requestId).sort(), ['tab-1', 'tab-2']);
     });
 
+    test('tells the page it failed when Cache Storage fails its last check', async () => {
+        const worker = loadWorker({ version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_/_V1.3.0'], manifest: ['index.html'] });
+        // Its check before clearing looks its one asset up; the lookup after that is its last check. A thenable
+        // rejects only once awaited, so no rejection goes unhandled before the worker gets to it
+        worker.cacheStorage.matchHolds[2] = { then: (resolve, reject) => reject(new Error('Cache Storage is unavailable')) };
+        await worker.listeners.message({ data: { type: 'PERFORM_UPDATE', requestId: 'tab-1' } });
+        await settle();
+        assert.deepEqual(worker.messages.filter((message) => message.type === 'UPDATE_COMPLETE').map((message) => [message.success, message.requestId]), [[false, 'tab-1']]);
+        assert.match(failures(worker)[0].error, /Cache Storage is unavailable/);
+        assert.equal(worker.fetchCalls.filter((url) => url.endsWith('asset-manifest.json')).length, 1);
+    });
+
     test('works after the same worker already filled its cache at activation', async () => {
         const worker = loadWorker({ version: '1.3.1', manifest: ['index.html', 'index.js'] });
         await activate(worker);

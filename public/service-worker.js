@@ -407,9 +407,18 @@ async function installCache(isFirstInstall = false, requestId, { activating = fa
     }
     // Another worker's cleanup can delete the cache even after this fill checked it: one that can't tell it was
     // replaced does, when it runs while this fill clears the older caches, and leaves no cache at all
-    if (outcome === 'filled' && !(await holdsAssets(cacheName, assetsToCache))) {
-        outcome = 'lost';
-        failure = new Error(CACHE_LOST);
+    if (outcome === 'filled') {
+        try {
+            if (!(await holdsAssets(cacheName, assetsToCache))) {
+                outcome = 'lost';
+                failure = new Error(CACHE_LOST);
+            }
+        } catch (error) {
+            // Cache Storage itself failed: the fill can't tell its cache is there, and the page still gets an answer
+            console.error("Failed to check the filled cache:", error);
+            outcome = 'failed';
+            failure = error;
+        }
     }
     // A fill of the activate event that lost its cache, or an Update Now of the active worker whose cache was deleted
     // after it checked it (by a worker this one replaced that can't tell it was, say), fills it once more and reports
