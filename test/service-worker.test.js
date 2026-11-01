@@ -63,6 +63,10 @@ function loadWorker({ version = '1.3.0', scope = '/', store = new Map(), config 
             return config ? fakeResponse(`window.appConfig = ${JSON.stringify({ version, ...config })};`) : fakeResponse('error', { status: 500 });
         }
         if (url.endsWith('asset-manifest.json')) {
+            // A fill that never stops filling again would hold the suite up for good: fail it instead
+            if (fetchCalls.filter((call) => call.endsWith('asset-manifest.json')).length > 20) {
+                throw new Error('More than 20 manifest requests from one worker: a fill that does not stop');
+            }
             await server.manifestHeld;
             return fakeResponse(JSON.stringify(server.manifest), { status: server.manifestStatus });
         }
