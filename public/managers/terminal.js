@@ -5,10 +5,11 @@ const IS_MAC = /mac/i.test(navigator.userAgentData?.platform || navigator.platfo
 // Where each terminal's prompt starts (see initTerminal): a marker and the number of rows below it, or no
 // marker for the buffer's first row
 const promptMarkers = new WeakMap();
-// The furthest the cursor gets below that row at a prompt: the tallest prompt plus a little typed input.
-// Further down, the row is an app's that left bracketed paste on and kept printing (Claude Code), unless a long
-// command typed at the prompt runs on that far (see typedOnPromptRow) or the prompt was redrawn below (see
-// redrawnPromptRow)
+// The furthest the cursor gets below that row at a prompt: the tallest prompt plus a little typed input. Further down,
+// the row is an app's that left bracketed paste on and kept printing (Claude Code), unless a long command typed at the
+// prompt runs on that far (see typedOnPromptRow) or the prompt was redrawn below (see redrawnPromptRow). A line that
+// runs on onto a mark put below the cursor from the row above starts the prompt on that row, however far below the
+// mark the cursor is (see saveSessionState)
 const PROMPT_MAX_ROWS_BELOW_MARK = 4;
 // The most rows recorded as wrapped at a prompt (see initTerminal): more than a screen holds, and the cursor moves up
 // no higher than the screen's top
