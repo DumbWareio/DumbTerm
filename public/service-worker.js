@@ -188,8 +188,9 @@ function isStaleCache(key, cacheName) {
     return key !== cacheName && (isOwnCache(key) || isLegacyCache(key));
 }
 
-// Why a fill failed when its cache turned out deleted, or made again without its assets
-const CACHE_LOST = 'The cache was deleted, or made again without its assets, while it was being filled';
+// Why a fill failed when its cache turned out deleted, or made again without its assets. The page shows it after
+// "Update failed: "
+const CACHE_LOST = 'the offline copy changed while it was being saved. Please try again.';
 
 /**
  * Whether a cache still holds every asset a fill put in it. A cache deleted while a fill wrote to it took what the
