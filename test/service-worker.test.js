@@ -21,7 +21,9 @@ function fakeResponse(body, { status = 200, type = 'basic', redirected = false }
 // makes config.js fail.
 // `server.manifest` is what assets/asset-manifest.json lists, and `server.manifestStatus` its HTTP status;
 // tests can change either between steps, and hold the manifest's answer back by setting `server.manifestHeld`
-// to a promise. Setting `cacheStorage.nextKeysHeld` to a promise holds back the answer of the next caches.keys() only.
+// to a promise. Setting `cacheStorage.nextKeysHeld` to a promise holds back the answer of the next caches.keys() only,
+// and setting `cacheStorage.matchHolds[n]` to one holds back the nth caches.match() (they count in `matchCalls`), or
+// makes it reject when the promise does.
 // Messages the worker posts to its one page land in `messages`.
 // `serviceWorker` is this worker as the browser knows it. `registration` is the install's registration as the browser
 // keeps it, which two workers of one install share: its `active` is the worker that last activated, and by default
@@ -53,7 +55,7 @@ function loadWorker({ version = '1.3.0', scope = '/', store = new Map(), config 
     const fetchCalls = [];
     const messages = [];
     const server = { manifest, manifestStatus };
-    const cacheStorage = { nextKeysHeld: undefined };
+    const cacheStorage = { nextKeysHeld: undefined, matchCalls: 0, matchHolds: {} };
     const fetch = async (request) => {
         const url = typeof request === 'string' ? request : request.url;
         fetchCalls.push(url);
@@ -100,6 +102,8 @@ function loadWorker({ version = '1.3.0', scope = '/', store = new Map(), config 
             delete: async (name) => store.delete(name),
             // As in the browser: with a cacheName it looks in that cache alone, and makes no cache that isn't there
             match: async (request, { cacheName } = {}) => {
+                const call = ++cacheStorage.matchCalls;
+                await cacheStorage.matchHolds[call];
                 const url = typeof request === 'string' ? request : request.url;
                 const searched = cacheName === undefined ? [...store.values()] : [store.get(cacheName)].filter(Boolean);
                 for (const entries of searched) if (entries.has(url)) return entries.get(url);
@@ -1046,6 +1050,46 @@ describe('service worker instances of one install during an upgrade', () => {
             assert.deepEqual(cachedUrls(newWorker, NEW_CACHE), [ORIGIN + 'index.html', ORIGIN + 'page.js']);
             assert.equal(store.get(NEW_CACHE).get(ORIGIN + 'index.html').body, '1.3.2');
             assert.equal(manifestRequests(newWorker), newFills);
+        });
+
+        test(`an old worker's Update Now whose cache the new worker's activation clears after its check ${canTell ? 'reports failure and is not filled again' : 'fills it again and clears the new cache, a known limit'}, ${label}`, async () => {
+            // The old worker's Update Now has checked its cache and makes its last check while the new worker's
+            // activation clears the older caches, the old worker's among them
+            const { held, oldWorker, newWorker, activateNew } = await twoWorkers(options);
+            const oldAssets = hold();
+            const newAssets = hold();
+            const newKeys = hold();
+            const oldLastCheck = hold();
+            held.old = oldAssets.promise;
+            held.new = newAssets.promise;
+            const update = oldWorker.listeners.message({ data: { type: 'PERFORM_UPDATE', requestId: 'old-tab' } });
+            await assetRequested(oldWorker);
+            const activation = activateNew();
+            await assetRequested(newWorker);
+            newWorker.cacheStorage.nextKeysHeld = newKeys.promise;
+            newAssets.release();
+            for (let i = 0; i < 10; i++) await settle();
+            // Its check looks its one asset up; the lookup after that is its last check
+            oldWorker.cacheStorage.matchHolds[oldWorker.cacheStorage.matchCalls + 2] = oldLastCheck.promise;
+            oldAssets.release();
+            for (let i = 0; i < 10; i++) await settle();
+            newKeys.release();
+            await activation;
+            oldLastCheck.release();
+            await update;
+            await settle();
+            if (canTell) {
+                assert.deepEqual(cacheSizes(newWorker), { [NEW_CACHE]: 1 });
+                assert.deepEqual(answers(oldWorker), [[false, 'old-tab']]);
+                assert.equal(manifestRequests(oldWorker), 1);
+            } else {
+                // The old worker can't tell it was replaced, so it fills its cache once more and clears the new one;
+                // the new worker then offers its own version to the pages, whose Update Now fills it
+                assert.deepEqual(cacheSizes(newWorker), { [OLD_CACHE]: 1 });
+                const answer = await getVersion(newWorker);
+                assert.deepEqual([answer.currentVersion, answer.newVersion], ['1.3.1', '1.3.2']);
+                assert.ok(newWorker.messages.some((message) => message.type === 'UPDATE_AVAILABLE' && message.newVersion === '1.3.2'));
+            }
         });
 
         // With one worker, the active one, every fill clears the older caches as before

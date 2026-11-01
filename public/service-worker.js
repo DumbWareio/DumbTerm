@@ -411,12 +411,14 @@ async function installCache(isFirstInstall = false, requestId, { activating = fa
         outcome = 'lost';
         failure = new Error(CACHE_LOST);
     }
-    // A fill of the activate event that lost its cache, or an Update Now whose cache was deleted after it checked it
-    // (by a worker this one replaced that can't tell it was, say), fills it once more and reports how that went. Not
-    // an Update Now whose cache was deleted while it filled it: the active worker deleted that cache as an older one,
-    // and filling it again would have a worker that can't tell it was replaced clear the active worker's cache. Nor
-    // when a page has named another version since: that fill would fill the page's version instead.
-    const refills = activating || (!isFirstInstall && !lostWhileFilling);
+    // A fill of the activate event that lost its cache, or an Update Now of the active worker whose cache was deleted
+    // after it checked it (by a worker this one replaced that can't tell it was, say), fills it once more and reports
+    // how that went; such an Update Now answers only after both fills, which on a slow network can outlast the page's
+    // wait for it. Not an Update Now whose cache was deleted while it filled it: the active worker deleted that cache
+    // as an older one, and filling it again would have a worker that can't tell it was replaced clear the active
+    // worker's cache. Nor one of a worker that was replaced, whose cache its successor cleared, nor when a page has
+    // named another version since: that fill would fill the page's version instead.
+    const refills = activating || (!isFirstInstall && !lostWhileFilling && isActiveWorker());
     if (outcome === 'lost' && refills && !refilling && CACHE_NAME === cacheName) {
         return installCache(isFirstInstall, requestId, { activating, refilling: true });
     }
