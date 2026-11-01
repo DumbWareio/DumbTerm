@@ -205,23 +205,37 @@ async function holdsAssets(cacheName, urls) {
     return found.every(Boolean);
 }
 
+// Whether this worker saw its registration hold its own ServiceWorker object as the active one, as it started as
+// the active worker or in its activate event. The browser then hands out one object per service worker, as the spec
+// has it, and that object alone tells whether this worker is still the active one
+let ONE_OBJECT_PER_WORKER = false;
+function noteOneObjectPerWorker() {
+    if (self.serviceWorker && self.serviceWorker === self.registration.active) ONE_OBJECT_PER_WORKER = true;
+}
+noteOneObjectPerWorker();
+
 /**
  * Whether this worker is still its registration's active worker. While a new version's worker activates, the worker
  * it replaces can still be filling a cache, and each one's cleanup would delete the cache the other fills, so only the
  * active worker clears caches. A worker registered as service-worker.js?v=<version> tells by its script URL. Under one
- * URL for every version (an old page's bare registration) its own ServiceWorker object tells: a worker has one such
- * object per service worker, so self.serviceWorker is the registration's active one only while this worker is. A
- * browser that hands out another object still shows the worker's state, 'activated' only while it is active (a
- * waiting worker is 'installed', a replaced one 'redundant'). A browser without self.serviceWorker (Firefox) can't
- * tell there, and the worker counts as active, as every worker did.
- * A fill the activate event starts doesn't ask (see installCache's activating).
+ * URL for every version (an old page's bare registration) its own ServiceWorker object tells:
+ * - a worker whose object shows it 'redundant' was replaced;
+ * - in a browser that hands out one object per worker (see ONE_OBJECT_PER_WORKER), self.serviceWorker is the
+ *   registration's active one only while this worker is, whatever order the browser updates them in;
+ * - in any other, it is the active one, or shows the state of one: 'activating' or 'activated' (a waiting worker is
+ *   'installed').
+ * A browser without self.serviceWorker (Firefox) can't tell there, and the worker counts as active, as every worker
+ * did. A fill the activate event starts doesn't ask (see installCache's activating).
  * @returns {boolean} True if this worker is the registration's active worker, or can't tell it isn't
  */
 function isActiveWorker() {
     const active = self.registration.active;
     if (!active || active.scriptURL !== self.location.href) return false;
     const own = self.serviceWorker;
-    return !own || own === active || own.state === 'activated';
+    if (!own) return true;
+    if (own.state === 'redundant') return false;
+    if (ONE_OBJECT_PER_WORKER) return own === active;
+    return own === active || own.state === 'activated' || own.state === 'activating';
 }
 
 /**
@@ -438,6 +452,7 @@ self.addEventListener("install", event => {
 
 self.addEventListener("activate", event => {
     console.log("Service Worker activating...");
+    noteOneObjectPerWorker();
     
     event.waitUntil(
         Promise.resolve()
