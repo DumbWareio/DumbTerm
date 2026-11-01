@@ -320,6 +320,16 @@ describe('terminal control sequences', () => {
     // zsh 5.9 marks a partial last line (PROMPT_SP), then prints the prompt and turns bracketed paste on after it
     const ZSH_PROMPT_SP = `\x1b[1m\x1b[7m%\x1b[27m\x1b[1m\x1b[0m${' '.repeat(79)}\r \r\r\x1b[0m\x1b[27m\x1b[24m\x1b[J`;
     const zshPrompt = (prompt) => `${ZSH_PROMPT_SP}${prompt}\x1b[K\x1b[?2004h`;
+    // zsh 5.9 draws a command typed after its prompt past the margin itself: after a row's last character it writes a
+    // space, which takes the cursor onto the next row, goes back to that row's start and erases it (which unmarks it as
+    // wrapped), writes the row's first character, and from the row's start again the whole row. A command that ends at
+    // the last column leaves the cursor at the start of the next row, which zsh moves onto and erases the same way
+    const zshTyped = (prompt, command, columns = 80) => {
+        const rows = [command.slice(0, columns - prompt.length)];
+        for (let at = rows[0].length; at < command.length; at += columns) rows.push(command.slice(at, at + columns));
+        const filled = (prompt.length + command.length) % columns === 0 ? ' \r\x1b[K' : '';
+        return `${command[0]}\b${rows[0]}${rows.slice(1).map((row) => ` \r\x1b[K${row[0]}\r${row}`).join('')}${filled}`;
+    };
     const ZSH_PRINT_PASS = 'p\bprint -P "%F{green}# pass 12%f"\x1b[?2004l\r\r\n\x1b[32m# pass 12\x1b[39m\r\n';
 
     // The text of each saved line, without its colours
@@ -486,6 +496,15 @@ describe('terminal control sequences', () => {
         await receiveOutput(Array.from({ length: 5100 }, (_, i) => `line ${i}\r\n`).join(''));
 
         assert.deepEqual(savedLines(saves.at(-1)).slice(-3), ['line 5098', 'line 5099', '']);
+    });
+
+    test('a saved session keeps the first row of a wrapped line once output pushed a mark put below the cursor out of the scrollback', async () => {
+        // The marked row is gone, so the row above it is no prompt's either
+        const saves = recordSavedSessions();
+        await receiveOutput(zshPrompt('host% '));
+        await receiveOutput(`\r\n${Array.from({ length: 5100 }, (_, i) => `line ${i}\r\n`).join('')}${'x'.repeat(100)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(-3), ['line 5099', 'x'.repeat(80), '']);
     });
 
     // An app in the normal screen that turns bracketed paste on once and keeps printing below, as Claude Code
@@ -1706,6 +1725,222 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)), ['root@box:/app# echo out', 'out', '']);
     });
 
+    // zsh turns bracketed paste on after its prompt, and bash after output with no final newline, so the mark goes on
+    // the row below the cursor and a command typed at the prompt runs on onto it from the row above
+    for (const [rows, length] of [[2, 70], [6, 400], [8, 560]]) {
+        test(`a saved session leaves out a zsh prompt with a half-typed command ${rows} rows long`, async () => {
+            const saves = recordSavedSessions();
+            await receiveOutput(`${zshPrompt('host% ')}p\bprint out\x1b[?2004l\r\r\nout\r\n`);
+            await receiveOutput(`${zshPrompt('host% ')}${zshTyped('host% ', typedCommand(length))}`);
+
+            assert.deepEqual(savedLines(saves.at(-1)), ['host% print out', 'out', '']);
+        });
+
+        test(`a saved session leaves out a plain prompt printed after output with no final newline, with a half-typed command ${rows} rows long`, async () => {
+            // A save cuts whole rows, so the output goes with the prompt printed on its row, as with a short command
+            const saves = recordSavedSessions();
+            const prompt = '\x1b[?2004hroot@box:/app# ';
+            await receiveOutput(`${prompt}printf hello\r\n\x1b[?2004l\rhello${prompt}${typedCommand(length - 10)}`);
+
+            assert.deepEqual(savedLines(saves.at(-1)), ['root@box:/app# printf hello', '']);
+        });
+    }
+
+    for (const [shape, typed] of [['', ''], [', with a command typed', 'echo hi']]) {
+        test(`a saved session keeps output that filled its row with no final newline above a plain prompt${shape}`, async () => {
+            // The wrap is still pending when bash turns bracketed paste on, so the prompt starts the row below, which
+            // is marked: the output's row holds no prompt
+            const saves = recordSavedSessions();
+            const prompt = '\x1b[?2004hroot@box:/app# ';
+            await receiveOutput(`${prompt}printf '%080d' 0\r\n\x1b[?2004l\r${'0'.repeat(80)}${prompt}${typed}`);
+
+            assert.deepEqual(savedLines(saves.at(-1)), ["root@box:/app# printf '%080d' 0", '0'.repeat(80), '']);
+        });
+    }
+
+    for (const [rows, length] of [[2, 71], [6, 400]]) {
+        test(`a saved session leaves out a plain prompt printed after output that wrapped with no final newline, with a half-typed command ${rows} rows long`, async () => {
+            // The command runs on from the output's first row, above the row the prompt is printed on, which goes with
+            // the prompt, as a save cuts whole rows
+            const saves = recordSavedSessions();
+            const prompt = '\x1b[?2004hroot@box:/app# ';
+            await receiveOutput(`${prompt}printf '%0120d' 0\r\n\x1b[?2004l\r${'0'.repeat(120)}${prompt}${typedCommand(length)}`);
+
+            assert.deepEqual(savedLines(saves.at(-1)), ["root@box:/app# printf '%0120d' 0", '0'.repeat(80), '']);
+        });
+    }
+
+    test('a saved session keeps the first row of a progress line that wrapped, when bash prints its prompt over the start of the row the line wrapped onto', async () => {
+        // The progress line goes back to the start of its row with no final newline, so the mark is at the cursor's
+        // row, not below it: the line running on onto it from the row above is output, not the prompt's
+        const saves = recordSavedSessions();
+        const prompt = '\x1b[?2004hroot@box:/app# ';
+        await receiveOutput(`${prompt}make\r\n\x1b[?2004l\r${'#'.repeat(100)}\r${prompt}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['root@box:/app# make', '#'.repeat(80), '']);
+    });
+
+    test('a saved session keeps the first row of a progress line that wrapped, when bash prints its prompt over the start of the row the line wrapped onto, with a long half-typed command', async () => {
+        // The mark is at the start of the cursor's row, not below it, so the line starts on the marked row: the prompt
+        // printed over it there, the terminal having wrapped it there from the progress line's first row
+        const saves = recordSavedSessions();
+        const prompt = '\x1b[?2004hroot@box:/app# ';
+        await receiveOutput(`${prompt}printf '%0100d\\r' 0\r\n\x1b[?2004l\r${'0'.repeat(100)}\r${prompt}${typedCommand(400)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ["root@box:/app# printf '%0100d\\r' 0", '0'.repeat(80), '']);
+    });
+
+    test('a saved session keeps output with no final newline above a one-line prompt after a blank row', async () => {
+        // The prompt's newline ends the output's row, and the cursor's line starts on the marked row
+        const saves = recordSavedSessions();
+        const prompt = '\x1b[?2004h\r\n$ ';
+        await receiveOutput(`${prompt}printf hello\r\n\x1b[?2004l\rhello${prompt}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['', '$ printf hello', 'hello', '']);
+    });
+
+    test('a saved session leaves out the rows from the cursor\'s down when an app moved it up above the row it turned bracketed paste on in, away from the start of the row', async () => {
+        // The prompt starts no lower than the cursor's row, as before
+        const saves = recordSavedSessions();
+        await receiveOutput('$ app\r\nline 1\r\nline 2\r\nstatus\x1b[?2004h\x1b[2A');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '']);
+    });
+
+    for (const [rows, length] of [['its first row', 69], ['two rows', 149]]) {
+        test(`a saved session leaves out a zsh prompt with a half-typed command that fills ${rows} to the last column`, async () => {
+            // The cursor is on the blank row below, the marked one
+            const saves = recordSavedSessions();
+            await receiveOutput(`${zshPrompt('host% ')}p\bprint out\x1b[?2004l\r\r\nout\r\n`);
+            await receiveOutput(`${zshPrompt('host% ')}${zshTyped('host% ', typedCommand(length))}`);
+
+            assert.deepEqual(savedLines(saves.at(-1)), ['host% print out', 'out', '']);
+        });
+    }
+
+    test('a saved session leaves out a plain prompt printed after output that filled its row with no final newline, with a long half-typed command', async () => {
+        // The prompt starts on the marked row, the terminal having wrapped it there from the output's
+        const saves = recordSavedSessions();
+        const prompt = '\x1b[?2004hroot@box:/app# ';
+        await receiveOutput(`${prompt}printf '%080d' 0\r\n\x1b[?2004l\r${'0'.repeat(80)}${prompt}${typedCommand(400)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ["root@box:/app# printf '%080d' 0", '0'.repeat(80), '']);
+    });
+
+    test('a saved session leaves out a plain prompt printed after output that filled its row with no final newline, with a long half-typed command after Ctrl-A and Ctrl-E', async () => {
+        const saves = recordSavedSessions();
+        const prompt = '\x1b[?2004hroot@box:/app# ';
+        await receiveOutput(`${prompt}printf '%080d' 0\r\n\x1b[?2004l\r${'0'.repeat(80)}${prompt}${typedCommand(400)}`);
+        await receiveOutput(`${'\x1b[A'.repeat(5)}${'\b'.repeat(5)}`);
+        await receiveOutput(ctrlE(5, 20));
+
+        assert.deepEqual(savedLines(saves.at(-1)), ["root@box:/app# printf '%080d' 0", '0'.repeat(80), '']);
+    });
+
+    test('a saved session leaves out a plain prompt printed after output that filled its row with no final newline, with a long half-typed command at the bottom of the screen', async () => {
+        const saves = recordSavedSessions();
+        const prompt = '\x1b[?2004hroot@box:/app# ';
+        await receiveOutput(`${SCREENFULS}${prompt}printf '%080d' 0\r\n\x1b[?2004l\r${'0'.repeat(80)}${prompt}${typedCommand(400)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(-3), ["root@box:/app# printf '%080d' 0", '0'.repeat(80), '']);
+    });
+
+    for (const [where, before] of [['', ''], [' at the bottom of the screen', SCREENFULS]]) {
+        test(`a saved session leaves out a Starship prompt after output that filled its row with no final newline, with a long half-typed command${where}`, async () => {
+            // The output's row takes the place of the prompt's blank first row, as after other output with no final
+            // newline
+            const saves = recordSavedSessions();
+            await receiveOutput(`${before}${STARSHIP_PROMPT}printf '%080d' 0\r\n\x1b[?2004l\r${'0'.repeat(80)}`);
+            await receiveOutput(`${STARSHIP_PROMPT}${typedCommand(400)}`);
+
+            assert.deepEqual(savedLines(saves.at(-1)).slice(-4), [plain(STARSHIP_TOP_LINE), "❯ printf '%080d' 0", '0'.repeat(80), '']);
+        });
+    }
+
+    test('a saved session leaves out a notice line under a zsh prompt, with a pasted command under it', async () => {
+        // Known limit: the notice lands on the marked row, the row below the prompt's, and reads as the top line of a
+        // prompt like Starship's, so the save stops at it and keeps the prompt's row. Before, the save kept the notice
+        // and the command's rows above the cursor's. Pinned so that changing it is deliberate
+        const saves = recordSavedSessions();
+        await receiveOutput(`${zshPrompt('host% ')}p\bprint out\x1b[?2004l\r\r\nout\r\n`);
+        await receiveOutput(`${zshPrompt('host% ')}\r\nnotice\r\n\x1b[7m${typedCommand(400)}\x1b[27m\x1b[K`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['host% print out', 'out', 'host%', '']);
+    });
+
+    test('a saved session leaves out a zsh prompt with a pasted command six rows long', async () => {
+        // zsh draws pasted text straight on, in reverse video, and the terminal wraps it
+        const saves = recordSavedSessions();
+        await receiveOutput(`${zshPrompt('host% ')}p\bprint out\x1b[?2004l\r\r\nout\r\n`);
+        await receiveOutput(`${zshPrompt('host% ')}\x1b[7m${typedCommand(400)}\x1b[27m\x1b[K`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['host% print out', 'out', '']);
+    });
+
+    test('a saved session leaves out a zsh prompt with a half-typed command six rows long after Ctrl-A and Ctrl-E', async () => {
+        // zsh moves the cursor up the command with CSI A and back down with CSI B
+        const saves = recordSavedSessions();
+        await receiveOutput(`${zshPrompt('host% ')}p\bprint out\x1b[?2004l\r\r\nout\r\n`);
+        await receiveOutput(`${zshPrompt('host% ')}${zshTyped('host% ', typedCommand(400))}`);
+        await receiveOutput(`\x1b[5A${'\b'.repeat(5)}`);
+        await receiveOutput('\x1b[5B\x1b[5C');
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['host% print out', 'out', '']);
+    });
+
+    test('a saved session leaves out a zsh prompt with a half-typed command six rows long after ← back across the wrap and Backspace', async () => {
+        // zsh moves the cursor up across the wrap with CSI A and CSI C, and for each Backspace blanks the cell the
+        // command now ends before on the row below, moving down to it and back up
+        const saves = recordSavedSessions();
+        await receiveOutput(`${zshPrompt('host% ')}p\bprint out\x1b[?2004l\r\r\nout\r\n`);
+        await receiveOutput(`${zshPrompt('host% ')}${zshTyped('host% ', typedCommand(400))}`);
+        await receiveOutput(`${'\b'.repeat(10)}\r\x1b[A\x1b[79C${'\b'.repeat(8)}`);
+        await receiveOutput('\x1b[1B\x1b[61D \x1b[A\x1b[59C'.repeat(5));
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['host% print out', 'out', '']);
+    });
+
+    test('a saved session leaves out a zsh prompt with a half-typed command at 40 columns', async () => {
+        const saves = recordSavedSessions();
+        terminal.resize(40, terminal.rows);
+        const prompt = `${ZSH_PROMPT_SP.replace(' '.repeat(79), ' '.repeat(39))}host% \x1b[K\x1b[?2004h`;
+        await receiveOutput(`${prompt}p\bprint out\x1b[?2004l\r\r\nout\r\n`);
+        await receiveOutput(`${prompt}${zshTyped('host% ', typedCommand(400), 40)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['host% print out', 'out', '']);
+    });
+
+    for (const length of [320, 600]) {
+        test(`a saved session leaves out a Starship prompt after output with no final newline, with a half-typed command of ${length} characters`, async () => {
+            // The output's row takes the place of the prompt's blank first row, as the mark goes on the row below it
+            const saves = recordSavedSessions();
+            await receiveOutput(`${STARSHIP_PROMPT}printf hello\r\n\x1b[?2004l\rhello`);
+            await receiveOutput(`${STARSHIP_PROMPT}${typedCommand(length)}`);
+
+            assert.deepEqual(savedLines(saves.at(-1)), ['', plain(STARSHIP_TOP_LINE), '❯ printf hello', 'hello', '']);
+        });
+    }
+
+    test('a saved session leaves out a Starship prompt after output with no final newline, with a long half-typed command at the bottom of the screen', async () => {
+        const saves = recordSavedSessions();
+        await receiveOutput(`${SCREENFULS}${STARSHIP_PROMPT}printf hello\r\n\x1b[?2004l\rhello`);
+        await receiveOutput(`${STARSHIP_PROMPT}${typedCommand(400)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(-6), ['line 39', '', plain(STARSHIP_TOP_LINE), '❯ printf hello', 'hello', '']);
+    });
+
+    test('a saved session leaves out a Starship prompt after output with no final newline, with a long half-typed command at 40 columns', async () => {
+        const saves = recordSavedSessions();
+        terminal.resize(40, terminal.rows);
+        const [{ output: prompt }] = LISTINGS.starshipNarrow.steps;
+        await receiveOutput(`${prompt}printf hello\r\n\x1b[?2004l\rhello${prompt}`);
+        const savedAtPrompt = saves.at(-1);
+        await receiveOutput(typedCommand(200));
+
+        assert.deepEqual(savedLines(savedAtPrompt).slice(-3), ['❯ printf hello', 'hello', '']);
+        assert.equal(saves.at(-1), savedAtPrompt);
+    });
+
     test('a saved session leaves out a Starship prompt with a half-typed command at 40 columns', async () => {
         // At 40 columns the prompt's top line wraps its last space onto a row of its own, so the command starts on the
         // prompt's third row and a command three rows long takes the cursor five rows below the marked one
@@ -1821,12 +2056,97 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '', '', 'x'.repeat(320), '']);
     });
 
-    test('a saved session keeps the output of an app that turned bracketed paste on partway through a line it ran on past four rows', async () => {
-        // The line starts above the prompt's rows, so it is no command typed there
+    test('a saved session keeps only the first row of an app\'s line that wrapped before it turned bracketed paste on partway through a row and ran on past four rows', async () => {
+        // Known limit: the mark goes on the row below, and the line runs on onto it from higher up, as a command typed
+        // after a plain prompt printed after output that wrapped with no final newline does, so the save stops above
+        // the row the app turned the mode on in. Before, the save kept the line up to the cursor's row: 720 characters,
+        // 9 of its 10 rows. Pinned so that changing it is deliberate
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n${'x'.repeat(130)}\x1b[?2004h${'x'.repeat(600)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'x'.repeat(80), '']);
+    });
+
+    test('a saved session leaves out the output of an app that turned bracketed paste on partway through the first row of a line it ran on past four rows', async () => {
+        // Known limit: the mark goes on the row below, and the line runs on onto it from the row above, as a command
+        // typed at a zsh prompt does, so the save stops above the app's line. Before, the save kept the line up to the
+        // cursor's row: 640 characters, 8 of its 9 rows. Pinned so that changing it is deliberate
         const saves = recordSavedSessions();
         await receiveOutput(`$ app\r\n${'x'.repeat(50)}\x1b[?2004h${'x'.repeat(600)}`);
 
-        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'x'.repeat(8 * 80), '']);
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '']);
+    });
+
+    test('a saved session leaves out the output of an app that turned bracketed paste on partway through the first row of a line it ran on onto one more row', async () => {
+        // Known limit: the same as above, however few rows the line runs onto. Before, the save kept the line's first
+        // row. Pinned so that changing it is deliberate
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n${'x'.repeat(50)}\x1b[?2004h${'x'.repeat(60)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '']);
+    });
+
+    test('a saved session leaves out the output of an app that turned bracketed paste on partway through a line that then filled its row, and printed lines filling their rows', async () => {
+        // Known limit: zsh draws a command past the margin itself, so a row at or below the marked one counts as run
+        // onto when the row above reaches its last column, and lines that fill their rows, each ending with a newline,
+        // read as such a command. The save stops above the row the app turned the mode on in, which it kept before.
+        // Pinned so that changing it is deliberate
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n${'x'.repeat(50)}\x1b[?2004h${'x'.repeat(30)}\r\n${`${'y'.repeat(80)}\r\n`.repeat(3)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', '']);
+    });
+
+    test('a saved session leaves out the output of an app that turned bracketed paste on with the wrap still pending, then ran a line on onto the next row past four rows', async () => {
+        // Known limit: the line starts on the marked row, which the terminal wrapped it onto, as a prompt printed after
+        // output that filled its row does, so the save stops at the marked row. Before, the save kept the line's rows
+        // above the cursor's. Pinned so that changing it is deliberate
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n${'y'.repeat(80)}\x1b[?2004h${'x'.repeat(450)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'y'.repeat(80), '']);
+    });
+
+    test('a saved session keeps the output of an app that turned bracketed paste on after a line that did not fill its row, and printed lines filling their rows', async () => {
+        // The first of the lines is on the marked row, but the row the app turned the mode on in does not reach its
+        // last column, so no line runs on onto the marked row from it
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\nout\x1b[?2004h\r\n${`${'y'.repeat(80)}\r\n`.repeat(6)}> type`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'out', ...Array(6).fill('y'.repeat(80)), '']);
+    });
+
+    test('a saved session leaves out the output of an app that went back to the start of a row its line wrapped onto, turned bracketed paste on there and wrote a line running past four rows', async () => {
+        // Known limit: the line starts on the marked row, as a prompt printed over a progress line's wrapped row does,
+        // so the save stops at the marked row. Before, the save kept the rows above the cursor's: the first line's
+        // first row and 400 of the 450 characters written over its wrapped one, 480 characters. Pinned so that
+        // changing it is deliberate
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\n${'x'.repeat(100)}\r\x1b[?2004h${'y'.repeat(450)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'x'.repeat(80), '']);
+    });
+
+    test('a saved session leaves out the output of an app that turned bracketed paste on away from the start of a row, then printed a line and a line running past four rows', async () => {
+        // Known limit: the first line lands on the marked row, which reads as the top line of a prompt like Starship's
+        // printed after output with no final newline, and the long line as its command, so the save stops at the marked
+        // row. Before, the save kept the first line and the long line's rows above the cursor's: 400 of its 450
+        // characters. Pinned so that changing it is deliberate
+        const saves = recordSavedSessions();
+        await receiveOutput(`$ app\r\nout\x1b[?2004h\r\nTitle\r\n${'x'.repeat(450)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['$ app', 'out', '']);
+    });
+
+    test('a saved session leaves out a job\'s line that starts with a newline, printed at a plain prompt after output with no final newline, with a long command typed under it', async () => {
+        // Known limit: the job's line lands on the marked row, the row below the output's, and reads as the top line of
+        // a prompt like Starship's, so the save stops at it. Before, the save kept the job's line and the command's
+        // rows above the cursor's: 400 of its 405 characters. Pinned so that changing it is deliberate
+        const saves = recordSavedSessions();
+        const prompt = '\x1b[?2004hroot@box:/app# ';
+        await receiveOutput(`${prompt}printf hello\r\n\x1b[?2004l\rhello${prompt}\r\njob done\r\n${typedCommand(400)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['root@box:/app# printf hello', 'helloroot@box:/app#', '']);
     });
 
     // bash 5.2's output at each keystroke, a long command typed a key at a time (test/fixtures/bash-long-commands.json)

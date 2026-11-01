@@ -5,10 +5,11 @@ const IS_MAC = /mac/i.test(navigator.userAgentData?.platform || navigator.platfo
 // Where each terminal's prompt starts (see initTerminal): a marker and the number of rows below it, or no
 // marker for the buffer's first row
 const promptMarkers = new WeakMap();
-// The furthest the cursor gets below that row at a prompt: the tallest prompt plus a little typed input.
-// Further down, the row is an app's that left bracketed paste on and kept printing (Claude Code), unless a long
-// command typed at the prompt runs on that far (see typedOnPromptRow) or the prompt was redrawn below (see
-// redrawnPromptRow)
+// The furthest the cursor gets below that row at a prompt: the tallest prompt plus a little typed input. Further down,
+// the row is an app's that left bracketed paste on and kept printing (Claude Code), unless a long command typed at the
+// prompt runs on that far (see typedOnPromptRow) or the prompt was redrawn below (see redrawnPromptRow). A line that
+// runs on onto a mark put below the cursor from the row above starts the prompt on that row, however far below the
+// mark the cursor is (see saveSessionState)
 const PROMPT_MAX_ROWS_BELOW_MARK = 4;
 // The most rows recorded as wrapped at a prompt (see initTerminal): more than a screen holds, and the cursor moves up
 // no higher than the screen's top
@@ -143,34 +144,45 @@ function redrawnPromptRow(buffer, wrapped, markedRow, cursorRow, tabRow) {
 // row above holds just what it held then, and reaches its last column. That row starts the prompt's first line, as a
 // one-line prompt's command does, or, after a blank first row like Starship's, the line after it, its command's, each
 // line on as many rows as it wraps onto (at 40 columns Starship's top line wraps its last space onto a row of its own).
-// No prompt starts with two blank rows. An app's output starts new lines as it prints, so its last line starts lower.
-// Known limits: a prompt with no blank first row and a line above its command (a two-line plain prompt) stays in the
-// save, as a background job's line printed at a one-line prompt, with the command typed under it, looks the same; so
-// does a prompt with two or more lines above its command after a blank first row, and a command the cursor moved down
-// across before the terminal's columns changed (which drops the record and rewraps the rows the newline unmarked as
-// lines of their own), or after it moved up some other way than CSI A or ESC M (see initTerminal); and so does
-// Starship's prompt after output with no final newline (printf, curl), whose blank first row that output's row takes,
-// as the mark goes on the row below it. And the other way: an app that left bracketed paste on and printed, from its
-// first row, a line running past four rows, or a blank row and one line and then such a line, with the cursor at its
-// end, reads as such a command, so its output from the first row on is left out; so does one that printed a blank row,
-// such a line and then a short line, with the cursor on the short one (the long line reads as the top line of a prompt
-// like Starship's, the short one as its command), as it did before the rows the cursor moved up over were recorded, and
-// so does one that moved the cursor up over such a line and back down with newlines, each row it moved up over still
-// starting like what it held, and the row above each holding just what it held, or, on the row it last moved up onto
-// with the cursor left there, holding just what an erase past the first column left of it, as readline's Backspace
-// across the wrap leaves it. So is a background job's text printed
-// with no final newline at a one-line prompt, which the command typed after it runs on from as one line, and a job's
-// line under a blank marked row that is no Starship prompt's: output with no final newline puts the mark on the row
-// below, which may stay blank. Within four rows of the mark the save leaves all of these out already
-function typedOnPromptRow(buffer, wrapped, markedRow, cursorRow) {
+// A mark on the row below a cursor away from the start of a row (next: output with no final newline, which may fill its
+// row) counts as after a blank first row too, as that output's row takes the blank row's place in Starship's prompt,
+// whose newline ends it. A line starts no higher than the marked row: saveSessionState has already taken one that runs
+// on onto a mark put below the cursor from the row above (see initTerminal), and a prompt printed after output that
+// filled its row starts on the marked row, though the terminal wrapped it there from the output's row. No prompt starts
+// with two blank rows. An app's output starts new lines as it prints, so its last line starts lower. Known limits: a
+// prompt with no blank first row and a line above its command (a two-line plain prompt) stays in the save, as a
+// background job's line printed at a one-line prompt, with the command typed under it, looks the same; so does a prompt
+// with two or more lines above its command after a blank first row, and a command the cursor moved down across before
+// the terminal's columns changed (which drops the record and rewraps the rows the newline unmarked as lines of their
+// own), or after it moved up some other way than CSI A or ESC M (see initTerminal). And the other way: an app that left
+// bracketed paste on and printed, from its first row, a line running past four rows, or a blank row and one line and
+// then such a line, with the cursor at its end, reads as such a command, so its output from the first row on is left
+// out, as does one that turned bracketed paste on away from the start of a row and then printed one line and then such
+// a line (one that ran its row's line on onto the next row is left out from two rows on, see saveSessionState), and one
+// that turned it on with the wrap still pending and then ran a line on onto the next row past four rows (the line reads
+// as starting on the marked row, as a prompt printed after output that filled its row does), or that went back to the
+// start of a row its line had wrapped onto, turned it on there and wrote a line running past four rows (the line reads
+// as starting there, as a prompt printed over a progress line's wrapped row does); so does one that printed a blank
+// row, such a line and then a short line, with the cursor on the short one (the long line reads as the top line of a
+// prompt like Starship's, the short one as its command), as it did before the rows the cursor moved up over were
+// recorded, and so does one that moved the cursor up over such a line and back down with newlines, each row it moved up
+// over still starting like what it held, and the row above each holding just what it held, or, on the row it last moved
+// up onto with the cursor left there, holding just what an erase past the first column left of it, as readline's
+// Backspace across the wrap leaves it. So is a background job's text printed with no final newline at a one-line
+// prompt, which the command typed after it runs on from as one line, and a job's line under a blank marked row that is
+// no Starship prompt's: output with no final newline puts the mark on the row below, which may stay blank. So is a
+// job's output that starts with a newline, printed at a plain prompt after output with no final newline (its first line
+// lands on the marked row), and a notice line that lands on the marked row below a zsh prompt, with a command typed
+// under it. Within four rows of the mark the save leaves all of these out already
+function typedOnPromptRow(buffer, wrapped, markedRow, cursorRow, next) {
     const blank = (row) => (buffer.getLine(row)?.translateToString(true) ?? '') === '';
     const first = blank(markedRow) ? markedRow + 1 : markedRow;
     if (blank(first)) return null;
     let second = first + 1;
     while (wrapped(second)) second++;
     let start = cursorRow;
-    while (wrapped(start)) start--;
-    return start === first || (first > markedRow && start === second) ? markedRow : null;
+    while (start > markedRow && wrapped(start)) start--;
+    return start === first || ((first > markedRow || next) && start === second) ? markedRow : null;
 }
 
 // How to end each terminal's connection to the server (see initTerminal), for when its tab closes
@@ -835,15 +847,22 @@ export default class TerminalManager {
             promptMarkers.set(terminal, { ...mark, claims: [] });
         };
 
-        // Shells turn bracketed paste on (CSI ? 2004 h) as their line editor takes over: bash before it prints
-        // the prompt, zsh after. Mark that row so a saved session can leave the prompt out, or the row below
-        // when the cursor is not at the start of a line: the row holds output with no final newline, and a
-        // prompt that starts with a newline (Starship's) begins below it. Returns false so xterm.js still sets
-        // the mode. In the alternate buffer the mode is an editor's, not the shell's
+        // Shells turn bracketed paste on (CSI ? 2004 h) as their line editor takes over: bash before it prints the
+        // prompt, zsh after. Mark that row so a saved session can leave the prompt out, or the row below when the
+        // cursor is not at the start of a line (next): the row holds output with no final newline, and a prompt that
+        // starts with a newline (Starship's) begins below it, its top line on the marked row. Unless that output filled
+        // its row (the cursor past the last column, the wrap still pending) the mark is below: the row may hold the
+        // prompt too (zsh's, or bash's printed after that output), and a command typed after it runs on onto the marked
+        // row (zsh draws it past the margin itself, so the terminal does not mark that row as wrapped: see
+        // saveSessionState). After output that filled its row, a prompt printed there starts on the marked row, which
+        // the terminal wraps it onto. Returns false so xterm.js still sets the mode. In the alternate buffer the mode
+        // is an editor's, not the shell's
         terminal.parser.registerCsiHandler({ prefix: '?', final: 'h' }, (params) => {
             const buffer = terminal.buffer.active;
             if (params.includes(2004) && buffer.type === 'normal') {
-                setMark({ marker: terminal.registerMarker(buffer.cursorX === 0 ? 0 : 1), rowsBelow: 0 });
+                const next = buffer.cursorX !== 0;
+                const below = next && buffer.cursorX < terminal.cols;
+                setMark({ marker: terminal.registerMarker(next ? 1 : 0), rowsBelow: 0, below, next });
             }
             return false;
         });
@@ -1399,15 +1418,26 @@ export default class TerminalManager {
                         // alternate buffer it is an editor's (vim turns it on)
                         const idleAtPrompt = terminal.modes.bracketedPasteMode && buffer.type === 'normal';
                         if (idleAtPrompt) {
-                            // The prompt starts on the row marked when the shell turned bracketed paste on, or on
-                            // the cursor's row if that is higher (zsh marks after its prompt), the marked row is
-                            // gone (erased by a screen clear, or out of the scrollback) or it is too far up to be
-                            // the prompt's, unless a command typed at the prompt runs on that far down or the prompt
-                            // was redrawn below. A line runs on across the rows the terminal marks as wrapped and
-                            // those the cursor moved up over at the prompt (see initTerminal), and the last Tab typed
-                            // at the prompt marks the row it was typed on. Rows above the prompt are all kept, so no
-                            // prompt patterns here. Known limit: zsh turns it on after the prompt, so the upper lines
-                            // of a multi-line zsh prompt stay in the save
+                            // The prompt starts on the row marked when the shell turned bracketed paste on, or on the
+                            // cursor's row if that is higher (zsh marks after its prompt), the marked row is gone
+                            // (erased by a screen clear, or out of the scrollback) or it is too far up to be the
+                            // prompt's, unless a command typed at the prompt runs on that far down or the prompt was
+                            // redrawn below. A line runs on across the rows the terminal marks as wrapped and those the
+                            // cursor moved up over at the prompt (see initTerminal), and the last Tab typed at the
+                            // prompt marks the row it was typed on. With a below mark (on the row below a cursor away
+                            // from its row's first column and not past its last), a line that runs on onto it from the
+                            // row above or higher up, however far down, is the prompt's from the row above: zsh's with
+                            // the command typed after it, or bash's printed after output with no final newline, which
+                            // goes with it, as a save cuts whole rows (the output's rows above it stay). zsh draws a
+                            // command past the margin itself and erases each row it moves onto first, which unmarks the
+                            // row as wrapped, so from the marked row down a row also counts as run onto when the row
+                            // above reaches its last column. Rows above the prompt are all kept, so no prompt patterns
+                            // here. Known limits: zsh turns it on after the prompt, so the upper lines of a multi-line
+                            // zsh prompt stay in the save, as do the rows of one wider than the terminal above the row
+                            // it ends on. And the other way: an app that turned bracketed paste on
+                            // partway through a row and then ran its line on onto the next row, however few rows it
+                            // runs onto, or printed lines filling their rows, each ending with a newline, reads as such
+                            // a line, so its output from the row it turned the mode on in is left out
                             const cursorRow = buffer.baseY + buffer.cursorY;
                             const mark = promptMarkers.get(terminal);
                             const markedRow = !mark ? cursorRow
@@ -1437,9 +1467,15 @@ export default class TerminalManager {
                             const wrapped = (row) => !!buffer.getLine(row)?.isWrapped
                                 || (claimed.has(row) && holds(row) && reachesEnd(row));
                             const tabRow = mark?.tab && !mark.tab.isDisposed ? mark.tab.line : null;
-                            const promptStart = cursorRow - markedRow <= PROMPT_MAX_ROWS_BELOW_MARK
-                                ? Math.min(markedRow, cursorRow)
-                                : typedOnPromptRow(buffer, wrapped, markedRow, cursorRow)
+                            const below = !!mark?.below && !mark.marker.isDisposed;
+                            const next = !!mark?.next && !mark.marker.isDisposed;
+                            let lineStart = cursorRow;
+                            while (below && lineStart >= markedRow && (wrapped(lineStart) || reachesEnd(lineStart))) {
+                                lineStart--;
+                            }
+                            const promptStart = below && lineStart < markedRow ? lineStart
+                                : cursorRow - markedRow <= PROMPT_MAX_ROWS_BELOW_MARK ? Math.min(markedRow, cursorRow)
+                                : typedOnPromptRow(buffer, wrapped, markedRow, cursorRow, next)
                                     ?? redrawnPromptRow(buffer, wrapped, markedRow, cursorRow, tabRow) ?? cursorRow;
                             serializedContent = promptStart > 0
                                 ? addons.serializeAddon.serialize({ ...serializeOptions, range: { start: 0, end: promptStart - 1 } })
