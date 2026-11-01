@@ -406,7 +406,9 @@ async function installCache(isFirstInstall = false, requestId, { activating = fa
         CACHES_BEING_FILLED.splice(CACHES_BEING_FILLED.indexOf(cacheName), 1);
     }
     // Another worker's cleanup can delete the cache even after this fill checked it: one that can't tell it was
-    // replaced does, when it runs while this fill clears the older caches, and leaves no cache at all
+    // replaced does, when it runs while this fill clears the older caches, and leaves no cache at all. Unlike a fill
+    // whose check found its cache gone, this one has cleared the older caches by then, so if filling it once more
+    // (below) fails too, no offline copy is left until the next fill
     if (outcome === 'filled') {
         try {
             if (!(await holdsAssets(cacheName, assetsToCache))) {
