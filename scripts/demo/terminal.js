@@ -37,6 +37,10 @@ class DemoTerminal extends EventEmitter {
     }
 
     write(data) {
+        // Only typed text: the demo runs no program that turns mouse reports on, which come as bytes
+        if (typeof data !== 'string') {
+            return;
+        }
         // Handle terminal input
         if (data === '\r') {
             // Process command when Enter is pressed

@@ -25,7 +25,6 @@ const APP_VERSION = require('./package.json').version;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const ptyModule = DEMO_MODE ? require('./scripts/demo/terminal') : pty;
 const ASSETS_DIR = path.join(PUBLIC_DIR, 'assets');
-const CACHE_NAME = `DUMBTERM_CACHE_V${APP_VERSION}`;
 
 generatePWAManifest(SITE_TITLE);
 
@@ -235,10 +234,12 @@ app.get(BASE_PATH + '/config.js', (req, res) => {
         siteTitle: SITE_TITLE,
         isPinRequired: isPinRequired,
         isDemoMode: DEMO_MODE,
-        version: APP_VERSION,
-        cacheName: CACHE_NAME
+        version: APP_VERSION
     }
 
+    // An open page asks for this header with a HEAD request to learn whether the server was upgraded under it:
+    // the service worker leaves HEAD requests to the network, so nothing caches the answer
+    res.set('X-DumbTerm-Version', APP_VERSION);
     res.type('application/javascript').send(`
         window.appConfig = ${JSON.stringify(appConfig)};
     `);
@@ -520,6 +521,7 @@ function createTerminal(ws) {
     }
 
     debugLog(`Terminal created with PID: ${term.pid}${DEMO_MODE ? ' (Demo Mode)' : ''}`);
+    const spawnedAt = Date.now();
 
     // Handle incoming data from client
     ws.on('message', (data) => {
@@ -528,6 +530,13 @@ function createTerminal(ws) {
             switch(message.type) {
                 case 'input':
                     term.write(message.data);
+                    break;
+                case 'binary':
+                    // Mouse reports in xterm's default encoding, a character per byte: written as those bytes,
+                    // where a string would go to the shell as UTF-8 (a column past 95 as two bytes)
+                    if (typeof message.data === 'string') {
+                        term.write(Buffer.from(message.data, 'latin1'));
+                    }
                     break;
                 case 'resize':
                     term.resize(message.cols, message.rows);
@@ -555,11 +564,17 @@ function createTerminal(ws) {
         term.kill();
     });
 
-    // Handle terminal exit
-    term.on('exit', (code) => {
-        debugLog('Terminal process exited with code:', code);
+    // Handle terminal exit. A shell that exits non-zero, or is killed by a signal, within a second of its spawn never
+    // started (a bad SHELL or HOME: on Linux node-pty prints why, and the shell exits with 1), which the page tells
+    // from a shell the user ended. node-pty reports a signal as code 0 and the signal
+    term.on('exit', (code, signal) => {
+        debugLog('Terminal process exited with code:', code, 'signal:', signal);
         if (ws.readyState === ws.OPEN) {
-            ws.close();
+            if ((code !== 0 || signal) && Date.now() - spawnedAt < 1000) {
+                ws.close(1011, signal ? `Shell was killed by signal ${signal}` : `Shell exited with code ${code}`);
+            } else {
+                ws.close();
+            }
         }
     });
 }
@@ -583,8 +598,7 @@ server.listen(PORT, () => {
         nodeEnv: NODE_ENV,
         debug: DEBUG,
         demoMode: DEMO_MODE,
-        version: APP_VERSION,
-        cacheName: CACHE_NAME
+        version: APP_VERSION
     });
     console.log(`Server running on: ${BASE_URL}`);
 });
