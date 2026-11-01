@@ -488,6 +488,15 @@ describe('terminal control sequences', () => {
         assert.deepEqual(savedLines(saves.at(-1)).slice(-3), ['line 5098', 'line 5099', '']);
     });
 
+    test('a saved session keeps the first row of a wrapped line once output pushed a mark put below the cursor out of the scrollback', async () => {
+        // The marked row is gone, so the row above it is no prompt's either
+        const saves = recordSavedSessions();
+        await receiveOutput(zshPrompt('host% '));
+        await receiveOutput(`\r\n${Array.from({ length: 5100 }, (_, i) => `line ${i}\r\n`).join('')}${'x'.repeat(100)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)).slice(-3), ['line 5099', 'x'.repeat(80), '']);
+    });
+
     // An app in the normal screen that turns bracketed paste on once and keeps printing below, as Claude Code
     // starts (captured from 2.1.311)
     const APP_START = '\x1b[?2004h$ claude\r\n\x1b[?2004l\r\x1b7\x1b[r\x1b8\x1b[?25h\x1b[?25l\x1b[?2004h\x1b[?2031h\x1b[?1004h'
@@ -1726,6 +1735,17 @@ describe('terminal control sequences', () => {
             assert.deepEqual(savedLines(saves.at(-1)), ['root@box:/app# printf hello', '']);
         });
     }
+
+    test('a saved session leaves out a zsh prompt with a half-typed command six rows long after the cursor moved up over it and back down with newlines', async () => {
+        // The newlines unmark the rows they move to as wrapped; the rows the cursor moved up over still count
+        const saves = recordSavedSessions();
+        await receiveOutput(`${zshPrompt('host% ')}p\bprint out\x1b[?2004l\r\r\nout\r\n`);
+        await receiveOutput(`${zshPrompt('host% ')}${typedCommand(400)}`);
+        await receiveOutput(`${'\x1b[A'.repeat(5)}\r${'\x1b[C'.repeat(6)}`);
+        await receiveOutput(`${'\r\n'.repeat(5)}\r${'\x1b[C'.repeat(11)}`);
+
+        assert.deepEqual(savedLines(saves.at(-1)), ['host% print out', 'out', '']);
+    });
 
     for (const length of [320, 600]) {
         test(`a saved session leaves out a Starship prompt after output with no final newline, with a half-typed command of ${length} characters`, async () => {
