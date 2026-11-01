@@ -1098,6 +1098,47 @@ describe('service worker instances of one install during an upgrade', () => {
         });
     }
 
+    // After the upgrade, a tab still controlled by the old worker and one controlled by the new worker each pick
+    // Update Now; each fill checks its cache, then waits on Cache Storage to clear the older ones
+    async function twoUpdateNows(options, twoWorkersOptions, { holdOld = true } = {}) {
+        const workers = await twoWorkers(options, twoWorkersOptions);
+        const { oldWorker, newWorker, activateNew } = workers;
+        await activateNew();
+        const oldKeys = hold();
+        const newKeys = hold();
+        newWorker.cacheStorage.nextKeysHeld = newKeys.promise;
+        const updateNew = newWorker.listeners.message({ data: { type: 'PERFORM_UPDATE', requestId: 'new-tab' } });
+        for (let i = 0; i < 10; i++) await settle();
+        if (holdOld) oldWorker.cacheStorage.nextKeysHeld = oldKeys.promise;
+        const updateOld = oldWorker.listeners.message({ data: { type: 'PERFORM_UPDATE', requestId: 'old-tab' } });
+        for (let i = 0; i < 10; i++) await settle();
+        oldKeys.release();
+        newKeys.release();
+        await Promise.all([updateOld, updateNew]);
+        await settle();
+        return workers;
+    }
+
+    test(`two Update Nows that each delete the other's cache tell neither tab it succeeded, ${BROWSERS[3][0]}`, async () => {
+        // Neither worker can tell which of them is the active one, so the store ends empty; the answers say so
+        const { oldWorker, newWorker } = await twoUpdateNows(BROWSERS[3][1]);
+        assert.deepEqual(answers(oldWorker), [[false, 'old-tab']]);
+        assert.deepEqual(answers(newWorker), [[false, 'new-tab']]);
+    });
+
+    for (const [label, options] of BROWSERS) {
+        test(`an Update Now whose cache an old worker that never learns it was replaced deletes after the check fills it once more, ${label}`, async () => {
+            // The old worker's Update Now clears the new worker's cache while the new worker's waits on Cache Storage;
+            // the new worker's then clears the old cache and finds its own gone
+            const { store, oldWorker, newWorker } = await twoUpdateNows(options, { staleActive: true }, { holdOld: false });
+            assert.deepEqual(cacheSizes(newWorker), { [NEW_CACHE]: 1 });
+            assert.equal(store.get(NEW_CACHE).get(ORIGIN + 'index.html').body, '1.3.2');
+            assert.deepEqual(answers(newWorker), [[true, 'new-tab']]);
+            assert.equal(manifestRequests(newWorker), 3);
+            assert.deepEqual(answers(oldWorker), [[true, 'old-tab']]);
+        });
+    }
+
     test('an activation fill that fails for the network is not tried again', async () => {
         const worker = loadWorker({ version: '1.3.1', cacheNames: ['DUMBTERM_CACHE_/_V1.3.0'], manifestStatus: 500 });
         await activate(worker);
